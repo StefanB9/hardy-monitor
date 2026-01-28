@@ -1,0 +1,63 @@
+cargo-features = ["panic-immediate-abort"]
+
+[package]
+name = "hardy-monitor"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+default = ["gui"]
+gui = ["dep:iced", "dep:image", "dep:muda", "dep:notify-rust", "dep:tray-icon"]
+
+[dependencies]
+anyhow = "1.0.100"
+chrono = { version = "0.4.43", features = ["serde"] }
+clap = { version = "4", features = ["derive"] }
+config = "0.15.19"
+csv = "1.4.0"
+dirs = "6.0.0"
+dotenvy = "0.15"
+reqwest = { version = "0.13.1", features = ["json", "blocking"] }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.149"
+sqlx = { version = "0.9.0-alpha.1", features = ["runtime-tokio", "postgres", "chrono", "tls-rustls"] }
+thiserror = "2.0.18"
+tokio = { version = "1.49.0", features = ["full"] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
+
+# GUI-only dependencies
+iced = { version = "0.14.0", features = ["advanced", "canvas", "tokio"], optional = true }
+image = { version = "0.25.9", features = ["serde"], optional = true }
+muda = { version = "0.17.1", optional = true }
+notify-rust = { version = "4.11.7", optional = true }
+tray-icon = { version = "0.21.3", optional = true }
+
+[dev-dependencies]
+proptest = "1.9.0"
+tempfile = "3.24.0"
+wiremock = "0.6.5"
+
+[profile.release]
+codegen-units = 1
+debug = false
+debug-assertions = false
+incremental = false
+lto = true
+opt-level = 3
+overflow-checks = false
+panic = "immediate-abort"
+rpath = false
+strip = true
+
+[profile.dev]
+codegen-units = 256
+debug = true
+debug-assertions = true
+incremental = true
+lto = false
+opt-level = 0
+overflow-checks = true
+panic = "unwind"
+rpath = true
+strip = false

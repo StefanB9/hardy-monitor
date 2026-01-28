@@ -1,0 +1,45 @@
+# Hardy's Gym Monitor Configuration
+# Copy this file to ~/.config/hardy-monitor/config.toml to customize settings
+# All settings shown below are defaults - only include settings you want to change
+#
+# NOTE: DATABASE_URL is configured via .env file or environment variable, not here.
+# This keeps database credentials out of version control.
+
+[gym]
+api_url = "https://portal.aidoo-online.de/workload?mandant=202300180_fuerstenfeldbruck&stud_nr=3&jsonResponse=1"
+
+[network]
+request_timeout_secs = 30
+connect_timeout_secs = 10
+
+[window]
+title = "Hardy's Gym Monitor"
+width = 1200.0
+height = 850.0
+sidebar_width = 250.0
+
+[refresh]
+ui_interval_secs = 30
+data_fetch_interval_secs = 60
+tray_poll_interval_ms = 50
+
+[notifications]
+enabled = false
+threshold_percent = 30.0
+# Ntfy.sh topic for phone notifications (install ntfy app and subscribe to this topic)
+ntfy_topic = "hardys-occupancy-1993"
+
+[thresholds]
+low_occupancy_percent = 30.0
+high_occupancy_percent = 60.0
+
+[analytics]
+prediction_window_days = 28
+
+[schedule.weekday]
+open_hour = 6
+close_hour = 23
+
+[schedule.weekend]
+open_hour = 9
+close_hour = 21

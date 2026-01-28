@@ -1,0 +1,31 @@
+# Build artifacts
+target/
+
+# Local data
+data/
+*.db
+
+# Git
+.git/
+.gitignore
+
+# Documentation
+README.md
+IMPLEMENTATION_PLAN.md
+
+# Environment files (secrets!)
+.env
+.env.*
+!.env.example
+
+# Development files
+docker-compose*.yaml
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Claude
+.claude/

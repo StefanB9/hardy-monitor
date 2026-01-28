@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE occupancy_logs SET percentage = $1 WHERE id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Float8",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "8ac2d87773d5a80a68052e02bdae1fd87bb12c27d70a30b7f14ce4f293f70e3c"
+}
