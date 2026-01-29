@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use hardy_monitor::{api, config::AppConfig, db};
+use hardy_monitor::{api, config::AppConfig, db, schedule::GymSchedule};
 use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 
 #[cfg(feature = "gui")]
@@ -108,6 +108,12 @@ fn run_daemon(rt: tokio::runtime::Runtime, config: Arc<AppConfig>) -> Result<()>
         let api_client = api::GymApiClient::new(config.gym.api_url.clone(), &config.network)?;
         tracing::info!("API client initialized");
 
+        // Create schedule for working hours check
+        let schedule = GymSchedule::new(&config.schedule);
+        tracing::info!("Schedule configured: weekday {}-{}, weekend {}-{}",
+            config.schedule.weekday.open_hour, config.schedule.weekday.close_hour,
+            config.schedule.weekend.open_hour, config.schedule.weekend.close_hour);
+
         // Wait until the next full minute before starting
         let now = chrono::Utc::now();
         let seconds_until_next_minute = 60 - (now.timestamp() % 60);
@@ -126,6 +132,13 @@ fn run_daemon(rt: tokio::runtime::Runtime, config: Arc<AppConfig>) -> Result<()>
 
         loop {
             interval.tick().await;
+
+            // Skip fetching when gym is closed
+            let now_local = chrono::Local::now();
+            if !schedule.is_open(&now_local) {
+                tracing::debug!("Gym is closed at {}, skipping fetch", now_local.format("%H:%M"));
+                continue;
+            }
 
             match fetch_and_store(&api_client, &database).await {
                 Ok(percentage) => {

@@ -5,7 +5,7 @@ use hardy_monitor::{
     analytics::{
         self, ComparisonMode, DayAnalysis, Insight, OccupancyStats, TrendDirection, analyze_days,
         calculate_stats, compare_periods, find_peak_hours, find_quiet_hours, generate_insights,
-        midnight_utc,
+        midnight_local_as_utc, midnight_utc,
     },
     config::AppConfig,
     db::{Database, HourlyAverage, OccupancyLog},
@@ -1061,10 +1061,12 @@ impl HardyMonitorApp {
         .spacing(10)
         .align_y(Alignment::Center);
 
+        // Use local time for chart boundaries so "Today" means local today
         let (chart_start, chart_end) = if let Some(days) = self.ui.history_days_preset {
-            let now = Utc::now();
-            let end_aligned = midnight_utc(now.date_naive() + ChronoDuration::days(1));
-            (end_aligned - ChronoDuration::days(days), end_aligned)
+            let local_today = Local::now().date_naive();
+            let end_aligned = midnight_local_as_utc(local_today + ChronoDuration::days(1));
+            let start_aligned = midnight_local_as_utc(local_today + ChronoDuration::days(1 - days));
+            (start_aligned, end_aligned)
         } else {
             match (
                 parse_date(&self.ui.history_start_date),
@@ -1905,5 +1907,5 @@ fn secondary_btn_style(_: &Theme, _: iced::widget::button::Status) -> button::St
 fn parse_date(s: &str) -> Option<DateTime<Utc>> {
     NaiveDate::parse_from_str(s, "%Y-%m-%d")
         .ok()
-        .map(midnight_utc)
+        .map(midnight_local_as_utc)
 }
