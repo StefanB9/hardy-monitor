@@ -1,7 +1,8 @@
 use std::collections::HashMap;
 
 use chrono::{
-    DateTime, Datelike, Duration as ChronoDuration, Local, NaiveDate, Offset, Timelike, Utc,
+    DateTime, Datelike, Duration as ChronoDuration, Local, NaiveDate, Offset, TimeZone, Timelike,
+    Utc,
 };
 
 use crate::{db::HourlyAverage, schedule::GymSchedule, traits::Clock};
@@ -204,6 +205,18 @@ pub fn midnight_utc(date: NaiveDate) -> DateTime<Utc> {
     date.and_hms_opt(0, 0, 0)
         .expect("midnight (0,0,0) is always valid")
         .and_utc()
+}
+
+/// Returns midnight of the given local date as a UTC DateTime.
+///
+/// This is useful for chart boundaries where we want to align to local midnight
+/// rather than UTC midnight, so "today" means the user's local today.
+pub fn midnight_local_as_utc(date: NaiveDate) -> DateTime<Utc> {
+    Local
+        .from_local_datetime(&date.and_hms_opt(0, 0, 0).expect("midnight is always valid"))
+        .single()
+        .expect("midnight should be unambiguous for most dates")
+        .with_timezone(&Utc)
 }
 
 /// Calculate predictions using the system clock.
