@@ -7,6 +7,7 @@ pub mod analytics;
 pub mod api;
 pub mod config;
 pub mod db;
+pub mod error;
 pub mod repair;
 pub mod schedule;
 pub mod traits;
@@ -55,6 +56,8 @@ pub use analytics::{
 pub use api::{GymApiClient, GymResponse};
 pub use config::AppConfig;
 pub use db::{Database, HourlyAverage, OccupancyLog};
+// Error types
+pub use error::{AppError, DatabaseError, NetworkErrorKind};
 pub use repair::{DataRepairer, RepairProgress, RepairSummary};
 pub use schedule::{GymSchedule, is_bavarian_holiday};
 pub use traits::{Clock, MockClock, MockNotifier, Notifier, SystemClock};

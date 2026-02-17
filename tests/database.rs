@@ -3,7 +3,8 @@
 //! These tests require a running PostgreSQL database.
 //! Set DATABASE_URL environment variable to run these tests.
 //!
-//! Example: DATABASE_URL=postgres://hardy:devpassword@localhost:5432/hardy_monitor_test
+//! Example: DATABASE_URL=postgres://hardy:devpassword@localhost:5432/
+//! hardy_monitor_test
 
 use chrono::{Duration, TimeZone, Utc};
 use hardy_monitor::{MockClock, db::Database};
@@ -33,7 +34,11 @@ macro_rules! require_db {
 async fn test_database_creation() {
     let db_url = require_db!();
     let result = Database::new(&db_url).await;
-    assert!(result.is_ok(), "Database creation should succeed: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "Database creation should succeed: {:?}",
+        result.err()
+    );
 }
 
 /// Test inserting a single record.
@@ -99,7 +104,10 @@ async fn test_get_history_range() {
         .expect("Range query should succeed");
 
     // Should get records from hours 0, 1, 2
-    assert!(history.len() >= 2, "Should have at least 2 records in range");
+    assert!(
+        history.len() >= 2,
+        "Should have at least 2 records in range"
+    );
 }
 
 /// Test aggregation of hourly averages.
@@ -109,7 +117,8 @@ async fn test_get_averages_range() {
     let db = Database::new(&db_url).await.expect("DB creation failed");
 
     // Use a fixed timestamp to ensure all records fall in the same hour
-    // Use middle of an hour (e.g., 10:30) so +/-20 minutes stays within the same hour
+    // Use middle of an hour (e.g., 10:30) so +/-20 minutes stays within the same
+    // hour
     let base_time = Utc.with_ymd_and_hms(2024, 6, 15, 10, 30, 0).unwrap();
 
     // Insert multiple records in the same hour: 10:10, 10:20, 10:30
@@ -129,7 +138,10 @@ async fn test_get_averages_range() {
         .expect("Averages query should succeed");
 
     // Should have at least one hourly average (hour 10)
-    assert!(!averages.is_empty(), "Should have at least one hour of data");
+    assert!(
+        !averages.is_empty(),
+        "Should have at least one hour of data"
+    );
 }
 
 /// Test database handles concurrent writes.
@@ -158,7 +170,10 @@ async fn test_concurrent_inserts() {
 
     // Verify records were inserted (may have more in shared db)
     let history = db.get_history(1).await.expect("Query should succeed");
-    assert!(history.len() >= 10, "At least 10 records should be inserted");
+    assert!(
+        history.len() >= 10,
+        "At least 10 records should be inserted"
+    );
 }
 
 /// Test OccupancyLog datetime parsing from database records.

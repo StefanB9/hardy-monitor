@@ -284,6 +284,14 @@ impl Database {
         }
         Ok(())
     }
+
+    pub async fn delete_record(&self, id: i64) -> Result<()> {
+        sqlx::query!("DELETE FROM occupancy_logs WHERE id = $1", id)
+            .execute(&self.pool)
+            .await
+            .context("Failed to delete record")?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
