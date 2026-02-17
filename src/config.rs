@@ -278,7 +278,6 @@ mod tests {
         // This test verifies that config can be loaded with defaults
         // when no config file exists
         let result = AppConfig::load();
-        // Should succeed even without a config file (uses defaults)
         assert!(result.is_ok());
     }
 
@@ -286,7 +285,6 @@ mod tests {
     fn test_loaded_config_has_expected_structure() {
         let config = AppConfig::load().expect("Config should load");
 
-        // Verify all sections exist with reasonable defaults
         assert!(!config.gym.api_url.is_empty());
         assert!(config.network.request_timeout_secs > 0);
         assert!(config.window.width > 0.0);
@@ -303,7 +301,7 @@ mod tests {
             open_hour: 8,
             close_hour: 20,
         };
-        let copy = hours; // Should work because it implements Copy
+        let copy = hours;
         assert_eq!(copy.open_hour, 8);
         assert_eq!(copy.close_hour, 20);
     }
@@ -332,147 +330,85 @@ mod tests {
 
     // ==================== Environment Variable Override Tests ====================
 
-    /// Helper to safely set and remove environment variables in tests.
-    /// SAFETY: These tests run sequentially and clean up after themselves.
-    fn with_env_var<F, R>(key: &str, value: &str, f: F) -> R
-    where
-        F: FnOnce() -> R,
-    {
-        // SAFETY: Test environment, single-threaded access
-        unsafe {
-            std::env::set_var(key, value);
-        }
-        let result = f();
-        unsafe {
-            std::env::remove_var(key);
-        }
-        result
-    }
-
-    /// Helper to safely set multiple environment variables in tests.
-    fn with_env_vars<F, R>(vars: &[(&str, &str)], f: F) -> R
-    where
-        F: FnOnce() -> R,
-    {
-        // SAFETY: Test environment, single-threaded access
-        for (key, value) in vars {
-            unsafe {
-                std::env::set_var(key, value);
-            }
-        }
-        let result = f();
-        for (key, _) in vars {
-            unsafe {
-                std::env::remove_var(key);
-            }
-        }
-        result
-    }
-
     #[test]
     fn test_env_var_overrides_gym_api_url() {
         let env_key = "HARDY__GYM__API_URL";
         let test_url = "https://test.example.com/api";
 
-        let config = with_env_var(env_key, test_url, || {
-            AppConfig::load().expect("Config should load")
+        // SAFETY: temp_env handles the unsafe environment manipulation and thread locking
+        temp_env::with_var(env_key, Some(test_url), || {
+            let config = AppConfig::load().expect("Config should load");
+            assert_eq!(
+                config.gym.api_url, test_url,
+                "Environment variable should override gym.api_url"
+            );
         });
-
-        assert_eq!(
-            config.gym.api_url, test_url,
-            "Environment variable should override gym.api_url"
-        );
     }
 
     #[test]
     fn test_env_var_overrides_network_timeout() {
         let env_key = "HARDY__NETWORK__REQUEST_TIMEOUT_SECS";
 
-        let config = with_env_var(env_key, "120", || {
-            AppConfig::load().expect("Config should load")
+        temp_env::with_var(env_key, Some("120"), || {
+            let config = AppConfig::load().expect("Config should load");
+            assert_eq!(
+                config.network.request_timeout_secs, 120,
+                "Environment variable should override network.request_timeout_secs"
+            );
         });
-
-        assert_eq!(
-            config.network.request_timeout_secs, 120,
-            "Environment variable should override network.request_timeout_secs"
-        );
     }
 
     #[test]
     fn test_env_var_overrides_thresholds() {
-        let vars = [
-            ("HARDY__THRESHOLDS__LOW_OCCUPANCY_PERCENT", "25.0"),
-            ("HARDY__THRESHOLDS__HIGH_OCCUPANCY_PERCENT", "85.0"),
-        ];
-
-        let config = with_env_vars(&vars, || AppConfig::load().expect("Config should load"));
-
-        assert_eq!(config.thresholds.low_occupancy_percent, 25.0);
-        assert_eq!(config.thresholds.high_occupancy_percent, 85.0);
+        temp_env::with_vars(
+            vec![
+                ("HARDY__THRESHOLDS__LOW_OCCUPANCY_PERCENT", Some("25.0")),
+                ("HARDY__THRESHOLDS__HIGH_OCCUPANCY_PERCENT", Some("85.0")),
+            ],
+            || {
+                let config = AppConfig::load().expect("Config should load");
+                assert_eq!(config.thresholds.low_occupancy_percent, 25.0);
+                assert_eq!(config.thresholds.high_occupancy_percent, 85.0);
+            },
+        );
     }
 
     #[test]
     fn test_env_var_overrides_notifications() {
-        let vars = [
-            ("HARDY__NOTIFICATIONS__ENABLED", "true"),
-            ("HARDY__NOTIFICATIONS__THRESHOLD_PERCENT", "15.5"),
-        ];
-
-        let config = with_env_vars(&vars, || AppConfig::load().expect("Config should load"));
-
-        assert!(config.notifications.enabled);
-        assert_eq!(config.notifications.threshold_percent, 15.5);
+        temp_env::with_vars(
+            vec![
+                ("HARDY__NOTIFICATIONS__ENABLED", Some("true")),
+                ("HARDY__NOTIFICATIONS__THRESHOLD_PERCENT", Some("15.5")),
+            ],
+            || {
+                let config = AppConfig::load().expect("Config should load");
+                assert!(config.notifications.enabled);
+                assert_eq!(config.notifications.threshold_percent, 15.5);
+            },
+        );
     }
 
     // ==================== Config Value Validation Tests ====================
-    // Note: Tests that set invalid env var values are avoided because they
-    // can pollute other tests running in parallel.
 
     #[test]
     fn test_config_default_values_are_reasonable() {
-        // Test that default values make sense
         let network = NetworkConfig::default();
-        assert!(
-            network.request_timeout_secs > 0,
-            "Timeout should be positive"
-        );
-        assert!(
-            network.connect_timeout_secs > 0,
-            "Connect timeout should be positive"
-        );
-        assert!(
-            network.request_timeout_secs >= network.connect_timeout_secs,
-            "Request timeout should be >= connect timeout"
-        );
+        assert!(network.request_timeout_secs > 0);
+        assert!(network.connect_timeout_secs > 0);
+        assert!(network.request_timeout_secs >= network.connect_timeout_secs);
 
         let thresholds = ThresholdsConfig::default();
-        assert!(
-            thresholds.low_occupancy_percent < thresholds.high_occupancy_percent,
-            "Low threshold should be less than high threshold"
-        );
-        assert!(
-            thresholds.low_occupancy_percent >= 0.0,
-            "Low threshold should be non-negative"
-        );
-        assert!(
-            thresholds.high_occupancy_percent <= 100.0,
-            "High threshold should be at most 100"
-        );
+        assert!(thresholds.low_occupancy_percent < thresholds.high_occupancy_percent);
+        assert!(thresholds.low_occupancy_percent >= 0.0);
+        assert!(thresholds.high_occupancy_percent <= 100.0);
 
         let schedule = ScheduleConfig::default();
-        assert!(
-            schedule.weekday.open_hour < schedule.weekday.close_hour,
-            "Weekday open should be before close"
-        );
-        assert!(
-            schedule.weekend.open_hour < schedule.weekend.close_hour,
-            "Weekend open should be before close"
-        );
+        assert!(schedule.weekday.open_hour < schedule.weekday.close_hour);
+        assert!(schedule.weekend.open_hour < schedule.weekend.close_hour);
     }
 
     #[test]
     fn test_config_threshold_relationship() {
-        // Verify thresholds maintain expected relationship
         let config = AppConfig::load().expect("Config should load");
 
         assert!(
@@ -505,10 +441,6 @@ mod tests {
     #[test]
     fn test_config_prediction_window_is_positive() {
         let config = AppConfig::load().expect("Config should load");
-
-        assert!(
-            config.analytics.prediction_window_days > 0,
-            "Prediction window should be positive"
-        );
+        assert!(config.analytics.prediction_window_days > 0);
     }
 }

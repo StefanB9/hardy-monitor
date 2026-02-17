@@ -7,6 +7,7 @@ pub mod analytics;
 pub mod api;
 pub mod config;
 pub mod db;
+pub mod error;
 pub mod repair;
 pub mod schedule;
 pub mod traits;
@@ -60,3 +61,6 @@ pub use schedule::{GymSchedule, is_bavarian_holiday};
 pub use traits::{Clock, MockClock, MockNotifier, Notifier, SystemClock};
 #[cfg(feature = "gui")]
 pub use traits::{CombinedNotifier, SystemNotifier};
+
+// Error types
+pub use error::{AppError, DatabaseError, NetworkErrorKind};

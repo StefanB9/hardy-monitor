@@ -10,6 +10,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Duration, Local, NaiveDate, NaiveTime, TimeZone, Timelike, Utc};
+use futures::{stream, StreamExt};
 use tokio::sync::mpsc;
 
 use crate::{
@@ -19,6 +20,9 @@ use crate::{
 
 /// Maximum gap in minutes that will be filled with interpolation.
 const MAX_GAP_MINUTES: i64 = 5;
+
+/// Number of days to process concurrently during repair.
+const CONCURRENT_DAYS: usize = 4;
 
 /// Progress update for a repair job.
 #[derive(Debug, Clone)]
@@ -63,12 +67,39 @@ impl DataRepairer {
     /// 1. Zero out records outside opening hours
     /// 2. Fill gaps up to 5 minutes with linear interpolation
     /// 3. Add end-of-day entries at close_hour:01 if missing
+    ///
+    /// Days are processed concurrently (up to CONCURRENT_DAYS at a time)
+    /// to improve performance on large date ranges.
     pub async fn repair_date_range(
         &self,
         start: NaiveDate,
         end: NaiveDate,
         progress_tx: Option<mpsc::UnboundedSender<RepairProgress>>,
     ) -> Result<RepairSummary> {
+        // Collect all dates to process
+        let dates: Vec<NaiveDate> = {
+            let mut dates = Vec::new();
+            let mut current = start;
+            while current <= end {
+                dates.push(current);
+                current += Duration::days(1);
+            }
+            dates
+        };
+
+        let total_days = dates.len() as u32;
+
+        // Process days concurrently using buffer_unordered
+        let results: Vec<Result<(NaiveDate, DayRepairResult)>> = stream::iter(dates)
+            .map(|date| async move {
+                let result = self.repair_day(date).await?;
+                Ok((date, result))
+            })
+            .buffer_unordered(CONCURRENT_DAYS)
+            .collect()
+            .await;
+
+        // Aggregate results
         let mut summary = RepairSummary {
             days_processed: 0,
             gaps_filled: 0,
@@ -76,29 +107,24 @@ impl DataRepairer {
             end_entries_added: 0,
         };
 
-        let total_days = (end - start).num_days() as u32 + 1;
-        let mut current = start;
+        for result in results {
+            let (date, day_result) = result?;
 
-        while current <= end {
-            // Send progress update
+            summary.days_processed += 1;
+            summary.gaps_filled += day_result.gaps_filled;
+            summary.records_zeroed += day_result.records_zeroed;
+            if day_result.end_entry_added {
+                summary.end_entries_added += 1;
+            }
+
+            // Send progress update after each completed day
             if let Some(ref tx) = progress_tx {
                 let _ = tx.send(RepairProgress {
-                    current_day: current,
+                    current_day: date,
                     total_days,
                     processed_days: summary.days_processed,
                 });
             }
-
-            let result = self.repair_day(current).await?;
-
-            summary.days_processed += 1;
-            summary.gaps_filled += result.gaps_filled;
-            summary.records_zeroed += result.records_zeroed;
-            if result.end_entry_added {
-                summary.end_entries_added += 1;
-            }
-
-            current += Duration::days(1);
         }
 
         Ok(summary)
