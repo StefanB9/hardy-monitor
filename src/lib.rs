@@ -56,13 +56,9 @@ pub use analytics::{
 pub use api::{GymApiClient, GymResponse};
 pub use config::AppConfig;
 pub use db::{Database, HourlyAverage, OccupancyLog};
-// Error types
 pub use error::{AppError, DatabaseError, NetworkErrorKind};
 pub use repair::{DataRepairer, RepairProgress, RepairSummary};
 pub use schedule::{GymSchedule, is_bavarian_holiday};
 pub use traits::{Clock, MockClock, MockNotifier, Notifier, SystemClock};
 #[cfg(feature = "gui")]
 pub use traits::{CombinedNotifier, SystemNotifier};
-
-// Error types
-pub use error::{AppError, DatabaseError, NetworkErrorKind};

@@ -154,7 +154,9 @@ pub fn view(props: DataRepairProps<'_>) -> Element<'_, Message> {
                 ],
                 Space::new().height(5),
                 row![
-                    text("Bound entries added:").size(14).color(style::TEXT_MUTED),
+                    text("Bound entries added:")
+                        .size(14)
+                        .color(style::TEXT_MUTED),
                     Space::new().width(10),
                     text(summary.boundary_entries_added.to_string())
                         .size(14)
@@ -174,42 +176,42 @@ pub fn view(props: DataRepairProps<'_>) -> Element<'_, Message> {
     };
 
     let description = column![
-    text("Repair occupancy data by:")
-        .size(14)
-        .color(style::TEXT_MUTED),
-    Space::new().height(8),
-    row![
-        text("*").color(style::ACCENT_CYAN),
-        Space::new().width(8),
-        text("Removing data outside opening hours")
-            .size(13)
+        text("Repair occupancy data by:")
+            .size(14)
             .color(style::TEXT_MUTED),
-    ],
-    Space::new().height(4),
-    row![
-        text("*").color(style::ACCENT_CYAN),
-        Space::new().width(8),
-        text("Anchoring start and end times to 0%")
-            .size(13)
-            .color(style::TEXT_MUTED),
-    ],
-    Space::new().height(4),
-    row![
-        text("*").color(style::ACCENT_CYAN),
-        Space::new().width(8),
-        text("Filling gaps up to 5 minutes")
-            .size(13)
-            .color(style::TEXT_MUTED),
-    ],
-    Space::new().height(4),
-    row![
-        text("*").color(style::ACCENT_CYAN),
-        Space::new().width(8),
-        text("Smoothing outliers and spikes")
-            .size(13)
-            .color(style::TEXT_MUTED),
-    ],
-];
+        Space::new().height(8),
+        row![
+            text("*").color(style::ACCENT_CYAN),
+            Space::new().width(8),
+            text("Removing data outside opening hours")
+                .size(13)
+                .color(style::TEXT_MUTED),
+        ],
+        Space::new().height(4),
+        row![
+            text("*").color(style::ACCENT_CYAN),
+            Space::new().width(8),
+            text("Anchoring start and end times to 0%")
+                .size(13)
+                .color(style::TEXT_MUTED),
+        ],
+        Space::new().height(4),
+        row![
+            text("*").color(style::ACCENT_CYAN),
+            Space::new().width(8),
+            text("Filling gaps up to 5 minutes")
+                .size(13)
+                .color(style::TEXT_MUTED),
+        ],
+        Space::new().height(4),
+        row![
+            text("*").color(style::ACCENT_CYAN),
+            Space::new().width(8),
+            text("Smoothing outliers and spikes")
+                .size(13)
+                .color(style::TEXT_MUTED),
+        ],
+    ];
 
     card_container(column![
         text("Select Date Range").size(16).color(style::TEXT_BRIGHT),
