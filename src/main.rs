@@ -1,20 +1,20 @@
 #[cfg(feature = "gui")]
 mod app;
+#[cfg(feature = "gui")]
+mod views;
 
-use std::sync::Arc;
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use hardy_monitor::{api, config::AppConfig, db, schedule::GymSchedule};
-use tracing_subscriber::{EnvFilter, fmt, prelude::*};
-
 #[cfg(feature = "gui")]
 use hardy_monitor::{CombinedNotifier, SystemClock};
+use hardy_monitor::{api, config::AppConfig, db, schedule::GymSchedule};
 #[cfg(feature = "gui")]
 use image::GenericImageView;
 #[cfg(feature = "gui")]
 use muda::{Menu, MenuItem, PredefinedMenuItem};
+use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 #[cfg(feature = "gui")]
 use tray_icon::{Icon, TrayIconBuilder};
 
@@ -31,23 +31,31 @@ struct Args {
 }
 
 #[cfg(feature = "gui")]
-fn load_icon() -> Option<iced::window::Icon> {
-    let bytes = include_bytes!("../assets/icon.png");
-
-    let img = image::load_from_memory(bytes).ok()?;
-    let (width, height) = img.dimensions();
-    let rgba = img.into_rgba8().into_raw();
-
-    iced::window::icon::from_rgba(rgba, width, height).ok()
+async fn load_icon_async() -> Option<iced::window::Icon> {
+    tokio::task::spawn_blocking(|| {
+        let bytes = include_bytes!("../assets/icon.png");
+        let img = image::load_from_memory(bytes).ok()?;
+        let (width, height) = img.dimensions();
+        let rgba = img.into_rgba8().into_raw();
+        iced::window::icon::from_rgba(rgba, width, height).ok()
+    })
+    .await
+    .ok()
+    .flatten()
 }
 
 #[cfg(feature = "gui")]
-fn load_tray_icon() -> Option<Icon> {
-    let bytes = include_bytes!("../assets/icon.png");
-    let img = image::load_from_memory(bytes).ok()?;
-    let (width, height) = img.dimensions();
-    let rgba = img.into_rgba8().into_raw();
-    Icon::from_rgba(rgba, width, height).ok()
+async fn load_tray_icon_async() -> Option<Icon> {
+    tokio::task::spawn_blocking(|| {
+        let bytes = include_bytes!("../assets/icon.png");
+        let img = image::load_from_memory(bytes).ok()?;
+        let (width, height) = img.dimensions();
+        let rgba = img.into_rgba8().into_raw();
+        Icon::from_rgba(rgba, width, height).ok()
+    })
+    .await
+    .ok()
+    .flatten()
 }
 
 fn main() -> Result<()> {
@@ -94,6 +102,12 @@ fn main() -> Result<()> {
     }
 }
 
+/// Maximum allowed drift in seconds before re-syncing
+const DRIFT_THRESHOLD_SECS: i64 = 5;
+
+/// Re-check alignment every N iterations (e.g., every hour if interval is 60s)
+const ALIGNMENT_CHECK_ITERATIONS: u64 = 60;
+
 /// Run in daemon mode - headless data collection
 fn run_daemon(rt: tokio::runtime::Runtime, config: Arc<AppConfig>) -> Result<()> {
     rt.block_on(async {
@@ -110,33 +124,70 @@ fn run_daemon(rt: tokio::runtime::Runtime, config: Arc<AppConfig>) -> Result<()>
 
         // Create schedule for working hours check
         let schedule = GymSchedule::new(&config.schedule);
-        tracing::info!("Schedule configured: weekday {}-{}, weekend {}-{}",
-            config.schedule.weekday.open_hour, config.schedule.weekday.close_hour,
-            config.schedule.weekend.open_hour, config.schedule.weekend.close_hour);
+        tracing::info!(
+            "Schedule configured: weekday {}-{}, weekend {}-{}",
+            config.schedule.weekday.open_hour,
+            config.schedule.weekday.close_hour,
+            config.schedule.weekend.open_hour,
+            config.schedule.weekend.close_hour
+        );
 
         // Wait until the next full minute before starting
-        let now = chrono::Utc::now();
-        let seconds_until_next_minute = 60 - (now.timestamp() % 60);
-        tracing::info!(
-            "Waiting {} seconds until next full minute...",
-            seconds_until_next_minute
-        );
-        tokio::time::sleep(Duration::from_secs(seconds_until_next_minute as u64)).await;
+        wait_for_minute_alignment().await;
 
         // Main fetch loop - fetch exactly at each full minute
         let interval_secs = config.refresh.data_fetch_interval_secs;
-        tracing::info!("Starting fetch loop with interval: {} seconds", interval_secs);
+        tracing::info!(
+            "Starting fetch loop with interval: {} seconds",
+            interval_secs
+        );
 
         let mut interval = tokio::time::interval(Duration::from_secs(interval_secs));
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
+        let mut iteration_count: u64 = 0;
+
         loop {
             interval.tick().await;
+            iteration_count += 1;
+
+            // Periodically re-verify time alignment to prevent drift
+            if iteration_count % ALIGNMENT_CHECK_ITERATIONS == 0 {
+                let now = chrono::Utc::now();
+                let seconds_into_minute = now.timestamp() % 60;
+                let drift = if seconds_into_minute <= 30 {
+                    seconds_into_minute
+                } else {
+                    60 - seconds_into_minute
+                };
+
+                if drift > DRIFT_THRESHOLD_SECS {
+                    tracing::warn!(
+                        "Timer drift detected: {}s off from minute boundary, re-syncing",
+                        drift
+                    );
+                    wait_for_minute_alignment().await;
+                    // Reset the interval after re-alignment
+                    interval = tokio::time::interval(Duration::from_secs(interval_secs));
+                    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                    // Tick once immediately to consume the first instant tick
+                    interval.tick().await;
+                } else {
+                    tracing::debug!(
+                        "Alignment check passed: {}s drift (threshold: {}s)",
+                        drift,
+                        DRIFT_THRESHOLD_SECS
+                    );
+                }
+            }
 
             // Skip fetching when gym is closed
             let now_local = chrono::Local::now();
             if !schedule.is_open(&now_local) {
-                tracing::debug!("Gym is closed at {}, skipping fetch", now_local.format("%H:%M"));
+                tracing::debug!(
+                    "Gym is closed at {}, skipping fetch",
+                    now_local.format("%H:%M")
+                );
                 continue;
             }
 
@@ -152,11 +203,21 @@ fn run_daemon(rt: tokio::runtime::Runtime, config: Arc<AppConfig>) -> Result<()>
     })
 }
 
+/// Wait until the next full minute boundary
+async fn wait_for_minute_alignment() {
+    let now = chrono::Utc::now();
+    let seconds_until_next_minute = 60 - (now.timestamp() % 60);
+    if seconds_until_next_minute > 0 && seconds_until_next_minute < 60 {
+        tracing::info!(
+            "Waiting {} seconds until next full minute...",
+            seconds_until_next_minute
+        );
+        tokio::time::sleep(Duration::from_secs(seconds_until_next_minute as u64)).await;
+    }
+}
+
 /// Fetch current occupancy and store in database
-async fn fetch_and_store(
-    api_client: &api::GymApiClient,
-    database: &db::Database,
-) -> Result<f64> {
+async fn fetch_and_store(api_client: &api::GymApiClient, database: &db::Database) -> Result<f64> {
     let response = api_client.fetch_occupancy().await?;
     let percentage = response.occupancy_percentage()?;
     let timestamp = chrono::Utc::now();
@@ -167,15 +228,19 @@ async fn fetch_and_store(
 /// Run in GUI mode - desktop application (read-only, no API fetching)
 #[cfg(feature = "gui")]
 fn run_gui(rt: tokio::runtime::Runtime, config: Arc<AppConfig>) -> Result<()> {
-    let database = rt.block_on(async {
+    // Load database and icons asynchronously (non-blocking)
+    let (database, icon, tray_icon_data) = rt.block_on(async {
         tracing::info!("Connecting to database...");
         let database = db::Database::new(&config.database.url).await?;
         tracing::info!("Database connected successfully");
-        Ok::<_, anyhow::Error>(database)
+
+        // Load icons in parallel using spawn_blocking for non-blocking decode
+        let (icon, tray_icon_data) = tokio::join!(load_icon_async(), load_tray_icon_async());
+
+        Ok::<_, anyhow::Error>((database, icon, tray_icon_data))
     })?;
 
-    let icon = load_icon();
-
+    let tray_icon_data = tray_icon_data.context("Failed to load tray icon")?;
     let window_width = config.window.width;
     let window_height = config.window.height;
 
@@ -197,7 +262,7 @@ fn run_gui(rt: tokio::runtime::Runtime, config: Arc<AppConfig>) -> Result<()> {
             let tray_icon = TrayIconBuilder::new()
                 .with_menu(Box::new(tray_menu))
                 .with_tooltip("Hardy's Gym Monitor")
-                .with_icon(load_tray_icon().expect("Failed to load tray icon"))
+                .with_icon(tray_icon_data.clone())
                 .build()
                 .expect("Failed to build tray icon");
 
