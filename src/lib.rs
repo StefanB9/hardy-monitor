@@ -63,3 +63,6 @@ pub use schedule::{GymSchedule, is_bavarian_holiday};
 pub use traits::{Clock, MockClock, MockNotifier, Notifier, SystemClock};
 #[cfg(feature = "gui")]
 pub use traits::{CombinedNotifier, SystemNotifier};
+
+// Error types
+pub use error::{AppError, DatabaseError, NetworkErrorKind};
