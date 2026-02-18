@@ -3,6 +3,8 @@
 /target
 /data
 
+Cargo.lock
+
 # Environment files with secrets
 .env
 .env.local
