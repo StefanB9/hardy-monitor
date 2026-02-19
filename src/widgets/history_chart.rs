@@ -141,7 +141,7 @@ impl<'a> canvas::Program<Interaction> for HistoryChart<'a> {
             let points: Vec<_> = self
                 .history
                 .iter()
-                .filter_map(|l| l.datetime().map(|d| (d, l.percentage)))
+                .map(|l| (l.timestamp, l.percentage))
                 .filter(|(d, _)| *d >= self.range_start && *d <= self.range_end)
                 .collect();
 
@@ -238,7 +238,7 @@ impl<'a> canvas::Program<Interaction> for HistoryChart<'a> {
                     let closest = self
                         .history
                         .iter()
-                        .filter_map(|l| l.datetime().map(|d| (d, l.percentage)))
+                        .map(|l| (l.timestamp, l.percentage))
                         .min_by_key(|(d, _)| (*d - hover_time).num_seconds().abs());
 
                     if let Some((d, val)) = closest {

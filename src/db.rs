@@ -13,16 +13,8 @@ pub struct OccupancyLog {
     /// Populated by SQLx.
     #[allow(dead_code)]
     pub id: i64,
-    pub timestamp: String,
+    pub timestamp: DateTime<Utc>,
     pub percentage: f64,
-}
-
-impl OccupancyLog {
-    pub fn datetime(&self) -> Option<DateTime<Utc>> {
-        DateTime::parse_from_rfc3339(&self.timestamp)
-            .ok()
-            .map(|dt| dt.with_timezone(&Utc))
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -81,7 +73,7 @@ impl Database {
             r#"
             SELECT
                 id as "id!",
-                timestamp as "timestamp!",
+                timestamp::timestamptz as "timestamp!",
                 percentage as "percentage!"
             FROM occupancy_logs
             ORDER BY timestamp DESC
@@ -108,7 +100,7 @@ impl Database {
             r#"
             SELECT
                 id as "id!",
-                timestamp as "timestamp!",
+                timestamp::timestamptz as "timestamp!",
                 percentage as "percentage!"
             FROM occupancy_logs
             WHERE timestamp >= $1 AND timestamp <= $2
@@ -132,7 +124,7 @@ impl Database {
             r#"
             SELECT
                 id as "id!",
-                timestamp as "timestamp!",
+                timestamp::timestamptz as "timestamp!",
                 percentage as "percentage!"
             FROM occupancy_logs
             WHERE timestamp >= $1
@@ -199,7 +191,7 @@ impl Database {
     ///
     /// # Returns
     /// The path to the created CSV file on success.
-    pub async fn export_to_csv<C: Clock>(&self, output_dir: &Path, clock: &C) -> Result<PathBuf> {
+    pub async fn export_to_csv(&self, output_dir: &Path, clock: &dyn Clock) -> Result<PathBuf> {
         let logs = self
             .get_history(365 * 10)
             .await
@@ -242,12 +234,20 @@ impl Database {
         // Convert local date boundaries to UTC
         let local_tz = chrono::Local;
         let start_of_day = local_tz
-            .from_local_datetime(&date.and_hms_opt(0, 0, 0).unwrap())
+            .from_local_datetime(
+                &date
+                    .and_hms_opt(0, 0, 0)
+                    .context("failed to construct start-of-day time (possible DST gap)")?,
+            )
             .single()
             .context("Invalid local datetime for start of day")?
             .with_timezone(&Utc);
         let end_of_day = local_tz
-            .from_local_datetime(&date.and_hms_opt(23, 59, 59).unwrap())
+            .from_local_datetime(
+                &date
+                    .and_hms_opt(23, 59, 59)
+                    .context("failed to construct end-of-day time (possible DST gap)")?,
+            )
             .single()
             .context("Invalid local datetime for end of day")?
             .with_timezone(&Utc);
@@ -277,12 +277,30 @@ impl Database {
         self.insert_record(timestamp, percentage).await
     }
 
-    /// Batch insert multiple records.
+    /// Batch insert multiple records atomically.
+    ///
+    /// All inserts succeed together or none are committed. A failure mid-way
+    /// does not leave a partial write.
     pub async fn batch_insert(&self, records: Vec<(DateTime<Utc>, f64)>) -> Result<()> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .context("failed to begin transaction")?;
+
         for (timestamp, percentage) in records {
-            self.insert_record(timestamp, percentage).await?;
+            let ts = timestamp.to_rfc3339();
+            sqlx::query!(
+                "INSERT INTO occupancy_logs (timestamp, percentage) VALUES ($1, $2)",
+                ts,
+                percentage
+            )
+            .execute(&mut *tx)
+            .await
+            .context("failed to insert record in batch")?;
         }
-        Ok(())
+
+        tx.commit().await.context("failed to commit batch insert")
     }
 
     pub async fn delete_record(&self, id: i64) -> Result<()> {
@@ -292,110 +310,76 @@ impl Database {
             .context("Failed to delete record")?;
         Ok(())
     }
+
+    /// Gracefully close the connection pool.
+    ///
+    /// Waits for all in-flight queries to finish and all connections to be
+    /// returned to the pool before returning. Call this before issuing
+    /// `DROP DATABASE` (e.g., in test teardown) to ensure PostgreSQL does not
+    /// refuse the drop due to active connections.
+    ///
+    /// Unlike simply dropping the `Database` value — which schedules pool
+    /// shutdown but does not await it — this method guarantees the pool is
+    /// fully drained before the caller proceeds.
+    pub async fn close(self) {
+        self.pool.close().await;
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use chrono::{Datelike, Timelike};
+    use chrono::{Datelike, TimeZone, Timelike};
 
     use super::*;
 
-    // ==================== OccupancyLog::datetime() Tests ====================
+    // ==================== OccupancyLog timestamp Tests ====================
 
-    fn make_log(timestamp: &str) -> OccupancyLog {
+    fn make_log(timestamp: DateTime<Utc>) -> OccupancyLog {
         OccupancyLog {
             id: 1,
-            timestamp: timestamp.to_string(),
+            timestamp,
             percentage: 50.0,
         }
     }
 
     #[test]
-    fn test_datetime_valid_rfc3339() {
-        let log = make_log("2024-06-15T14:30:00+00:00");
-        let result = log.datetime();
-        assert!(result.is_some());
-        let dt = result.unwrap();
-        assert_eq!(dt.year(), 2024);
-        assert_eq!(dt.month(), 6);
-        assert_eq!(dt.day(), 15);
-        assert_eq!(dt.hour(), 14);
-        assert_eq!(dt.minute(), 30);
+    fn test_timestamp_utc_fields() {
+        let ts = Utc.with_ymd_and_hms(2024, 6, 15, 14, 30, 0).unwrap();
+        let log = make_log(ts);
+        assert_eq!(log.timestamp.year(), 2024);
+        assert_eq!(log.timestamp.month(), 6);
+        assert_eq!(log.timestamp.day(), 15);
+        assert_eq!(log.timestamp.hour(), 14);
+        assert_eq!(log.timestamp.minute(), 30);
     }
 
     #[test]
-    fn test_datetime_utc_timezone() {
-        let log = make_log("2024-01-01T00:00:00Z");
-        let result = log.datetime();
-        assert!(result.is_some());
-        let dt = result.unwrap();
-        assert_eq!(dt.year(), 2024);
-        assert_eq!(dt.month(), 1);
-        assert_eq!(dt.day(), 1);
+    fn test_timestamp_year_boundary() {
+        let ts = Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap();
+        let log = make_log(ts);
+        assert_eq!(log.timestamp.year(), 2024);
+        assert_eq!(log.timestamp.month(), 1);
+        assert_eq!(log.timestamp.day(), 1);
     }
 
     #[test]
-    fn test_datetime_with_offset() {
-        let log = make_log("2024-06-15T16:30:00+02:00");
-        let result = log.datetime();
-        assert!(result.is_some());
-        // Should be converted to UTC (14:30 UTC)
-        let dt = result.unwrap();
-        assert_eq!(dt.hour(), 14);
+    fn test_timestamp_roundtrips_via_rfc3339() {
+        let ts = Utc.with_ymd_and_hms(2024, 6, 15, 14, 30, 0).unwrap();
+        let log = make_log(ts);
+        // The stored DateTime<Utc> should survive an RFC3339 round-trip identically.
+        let reparsed = DateTime::parse_from_rfc3339(&log.timestamp.to_rfc3339())
+            .unwrap()
+            .with_timezone(&Utc);
+        assert_eq!(log.timestamp, reparsed);
     }
 
     #[test]
-    fn test_datetime_with_negative_offset() {
-        let log = make_log("2024-06-15T10:30:00-04:00");
-        let result = log.datetime();
-        assert!(result.is_some());
-        // Should be converted to UTC (14:30 UTC)
-        let dt = result.unwrap();
-        assert_eq!(dt.hour(), 14);
-    }
-
-    #[test]
-    fn test_datetime_invalid_format() {
-        let log = make_log("not-a-date");
-        let result = log.datetime();
-        assert!(result.is_none());
-    }
-
-    #[test]
-    fn test_datetime_empty_string() {
-        let log = make_log("");
-        let result = log.datetime();
-        assert!(result.is_none());
-    }
-
-    #[test]
-    fn test_datetime_partial_date() {
-        let log = make_log("2024-06-15");
-        let result = log.datetime();
-        assert!(result.is_none()); // RFC3339 requires time component
-    }
-
-    #[test]
-    fn test_datetime_leap_second() {
-        // Some systems handle leap seconds
-        let log = make_log("2024-06-30T23:59:60Z");
-        // This may or may not parse depending on chrono version
-        let _result = log.datetime();
-        // Just ensure it doesn't panic
-    }
-
-    #[test]
-    fn test_datetime_milliseconds() {
-        let log = make_log("2024-06-15T14:30:00.123Z");
-        let result = log.datetime();
-        assert!(result.is_some());
-    }
-
-    #[test]
-    fn test_datetime_nanoseconds() {
-        let log = make_log("2024-06-15T14:30:00.123456789Z");
-        let result = log.datetime();
-        assert!(result.is_some());
+    fn test_timestamp_subsecond_precision() {
+        use chrono::NaiveDateTime;
+        let ndt = NaiveDateTime::parse_from_str("2024-06-15T14:30:00.123456789", "%Y-%m-%dT%H:%M:%S%.f").unwrap();
+        let ts = Utc.from_utc_datetime(&ndt);
+        let log = make_log(ts);
+        assert_eq!(log.timestamp.nanosecond(), 123_456_789);
     }
 
     // ==================== HourlyAverage Struct Tests ====================

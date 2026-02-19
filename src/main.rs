@@ -125,11 +125,11 @@ fn run_daemon(rt: tokio::runtime::Runtime, config: Arc<AppConfig>) -> Result<()>
         // Create schedule for working hours check
         let schedule = GymSchedule::new(&config.schedule);
         tracing::info!(
-            "Schedule configured: weekday {}-{}, weekend {}-{}",
-            config.schedule.weekday.open_hour,
-            config.schedule.weekday.close_hour,
-            config.schedule.weekend.open_hour,
-            config.schedule.weekend.close_hour
+            weekday_open  = config.schedule.weekday.open_hour,
+            weekday_close = config.schedule.weekday.close_hour,
+            weekend_open  = config.schedule.weekend.open_hour,
+            weekend_close = config.schedule.weekend.close_hour,
+            "schedule configured"
         );
 
         // Wait until the next full minute before starting
@@ -137,10 +137,7 @@ fn run_daemon(rt: tokio::runtime::Runtime, config: Arc<AppConfig>) -> Result<()>
 
         // Main fetch loop - fetch exactly at each full minute
         let interval_secs = config.refresh.data_fetch_interval_secs;
-        tracing::info!(
-            "Starting fetch loop with interval: {} seconds",
-            interval_secs
-        );
+        tracing::info!(interval_secs, "starting fetch loop");
 
         let mut interval = tokio::time::interval(Duration::from_secs(interval_secs));
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -163,8 +160,9 @@ fn run_daemon(rt: tokio::runtime::Runtime, config: Arc<AppConfig>) -> Result<()>
 
                 if drift > DRIFT_THRESHOLD_SECS {
                     tracing::warn!(
-                        "Timer drift detected: {}s off from minute boundary, re-syncing",
-                        drift
+                        drift_secs = drift,
+                        threshold_secs = DRIFT_THRESHOLD_SECS,
+                        "timer drift detected, re-syncing"
                     );
                     wait_for_minute_alignment().await;
                     // Reset the interval after re-alignment
@@ -174,9 +172,9 @@ fn run_daemon(rt: tokio::runtime::Runtime, config: Arc<AppConfig>) -> Result<()>
                     interval.tick().await;
                 } else {
                     tracing::debug!(
-                        "Alignment check passed: {}s drift (threshold: {}s)",
-                        drift,
-                        DRIFT_THRESHOLD_SECS
+                        drift_secs = drift,
+                        threshold_secs = DRIFT_THRESHOLD_SECS,
+                        "alignment check passed"
                     );
                 }
             }
@@ -185,18 +183,18 @@ fn run_daemon(rt: tokio::runtime::Runtime, config: Arc<AppConfig>) -> Result<()>
             let now_local = chrono::Local::now();
             if !schedule.is_open(&now_local) {
                 tracing::debug!(
-                    "Gym is closed at {}, skipping fetch",
-                    now_local.format("%H:%M")
+                    time = %now_local.format("%H:%M"),
+                    "gym is closed, skipping fetch"
                 );
                 continue;
             }
 
             match fetch_and_store(&api_client, &database).await {
                 Ok(percentage) => {
-                    tracing::info!("Recorded occupancy: {:.1}%", percentage);
+                    tracing::info!(occupancy_pct = percentage, "recorded occupancy");
                 }
                 Err(e) => {
-                    tracing::error!("Failed to fetch/store data: {}", e);
+                    tracing::error!(error = %e, "failed to fetch/store data");
                 }
             }
         }
@@ -208,10 +206,7 @@ async fn wait_for_minute_alignment() {
     let now = chrono::Utc::now();
     let seconds_until_next_minute = 60 - (now.timestamp() % 60);
     if seconds_until_next_minute > 0 && seconds_until_next_minute < 60 {
-        tracing::info!(
-            "Waiting {} seconds until next full minute...",
-            seconds_until_next_minute
-        );
+        tracing::info!(wait_secs = seconds_until_next_minute, "waiting for next full minute");
         tokio::time::sleep(Duration::from_secs(seconds_until_next_minute as u64)).await;
     }
 }
@@ -266,7 +261,10 @@ fn run_gui(rt: tokio::runtime::Runtime, config: Arc<AppConfig>) -> Result<()> {
                 .build()
                 .expect("Failed to build tray icon");
 
-            let notifier = CombinedNotifier::new(config.notifications.ntfy_topic.clone());
+            let notifier = CombinedNotifier::new(
+                config.notifications.ntfy_topic.clone(),
+                config.notifications.ntfy_server.clone(),
+            );
 
             HardyMonitorApp::new(
                 database.clone(),

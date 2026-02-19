@@ -35,8 +35,8 @@ fn create_test_schedule(
 // ==================== Notification Debouncing Tests ====================
 
 /// Test that notifications are only sent once when crossing threshold.
-#[test]
-fn test_notification_debounce_only_fires_once() {
+#[tokio::test]
+async fn test_notification_debounce_only_fires_once() {
     let notifier = MockNotifier::new();
 
     // Simulate the debouncing logic from HardyMonitorApp::update
@@ -50,6 +50,7 @@ fn test_notification_debounce_only_fires_once() {
     if notifications_enabled && is_below1 && !was_below_threshold {
         notifier
             .notify("Test", &format!("Gym at {:.0}%", percentage1))
+            .await
             .unwrap();
     }
     was_below_threshold = is_below1;
@@ -62,6 +63,7 @@ fn test_notification_debounce_only_fires_once() {
     if notifications_enabled && is_below2 && !was_below_threshold {
         notifier
             .notify("Test", &format!("Gym at {:.0}%", percentage2))
+            .await
             .unwrap();
     }
     was_below_threshold = is_below2;
@@ -78,6 +80,7 @@ fn test_notification_debounce_only_fires_once() {
     if notifications_enabled && is_below3 && !was_below_threshold {
         notifier
             .notify("Test", &format!("Gym at {:.0}%", percentage3))
+            .await
             .unwrap();
     }
     was_below_threshold = is_below3;
@@ -98,6 +101,7 @@ fn test_notification_debounce_only_fires_once() {
     if notifications_enabled && is_below4 && !was_below_threshold {
         notifier
             .notify("Test", &format!("Gym at {:.0}%", percentage4))
+            .await
             .unwrap();
     }
     // was_below_threshold = is_below4;
@@ -110,8 +114,8 @@ fn test_notification_debounce_only_fires_once() {
 }
 
 /// Test that notifications are not sent when disabled.
-#[test]
-fn test_notification_disabled_no_notification() {
+#[tokio::test]
+async fn test_notification_disabled_no_notification() {
     let notifier = MockNotifier::new();
 
     let threshold = 30.0;
@@ -123,6 +127,7 @@ fn test_notification_disabled_no_notification() {
     if notifications_enabled && is_below && !was_below_threshold {
         notifier
             .notify("Test", &format!("Gym at {:.0}%", percentage))
+            .await
             .unwrap();
     }
     was_below_threshold = is_below;
@@ -136,8 +141,8 @@ fn test_notification_disabled_no_notification() {
 }
 
 /// Test notification at exact threshold boundary.
-#[test]
-fn test_notification_at_exact_threshold() {
+#[tokio::test]
+async fn test_notification_at_exact_threshold() {
     let notifier = MockNotifier::new();
 
     let threshold = 30.0;
@@ -148,7 +153,7 @@ fn test_notification_at_exact_threshold() {
     let percentage = 30.0;
     let is_below = percentage < threshold;
     if notifications_enabled && is_below && !was_below_threshold {
-        notifier.notify("Test", "At threshold").unwrap();
+        notifier.notify("Test", "At threshold").await.unwrap();
     }
     was_below_threshold = is_below;
 
@@ -164,12 +169,13 @@ fn test_notification_at_exact_threshold() {
 }
 
 /// Test notification message content.
-#[test]
-fn test_notification_message_format() {
+#[tokio::test]
+async fn test_notification_message_format() {
     let notifier = MockNotifier::new();
 
     notifier
         .notify("Hardy's Gym Monitor", "Gym is empty! 25%")
+        .await
         .unwrap();
 
     let notifications = notifier.get_notifications();
@@ -406,19 +412,19 @@ fn test_schedule_open_close_transitions() {
 // ==================== Mock Notifier Edge Cases ====================
 
 /// Test mock notifier clear functionality.
-#[test]
-fn test_notifier_clear_and_reuse() {
+#[tokio::test]
+async fn test_notifier_clear_and_reuse() {
     let notifier = MockNotifier::new();
 
-    notifier.notify("Title1", "Body1").unwrap();
-    notifier.notify("Title2", "Body2").unwrap();
+    notifier.notify("Title1", "Body1").await.unwrap();
+    notifier.notify("Title2", "Body2").await.unwrap();
     assert_eq!(notifier.notification_count(), 2);
 
     notifier.clear();
     assert_eq!(notifier.notification_count(), 0);
     assert!(!notifier.was_called());
 
-    notifier.notify("Title3", "Body3").unwrap();
+    notifier.notify("Title3", "Body3").await.unwrap();
     assert_eq!(notifier.notification_count(), 1);
 
     let notifications = notifier.get_notifications();
@@ -426,11 +432,11 @@ fn test_notifier_clear_and_reuse() {
 }
 
 /// Test mock notifier with empty messages.
-#[test]
-fn test_notifier_empty_messages() {
+#[tokio::test]
+async fn test_notifier_empty_messages() {
     let notifier = MockNotifier::new();
 
-    notifier.notify("", "").unwrap();
+    notifier.notify("", "").await.unwrap();
     assert!(notifier.was_called());
 
     let notifications = notifier.get_notifications();
@@ -438,12 +444,13 @@ fn test_notifier_empty_messages() {
 }
 
 /// Test mock notifier with unicode content.
-#[test]
-fn test_notifier_unicode_content() {
+#[tokio::test]
+async fn test_notifier_unicode_content() {
     let notifier = MockNotifier::new();
 
     notifier
         .notify("🏋️ Gym Alert", "空いています！ (Empty!)")
+        .await
         .unwrap();
 
     let notifications = notifier.get_notifications();

@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
+use tracing::warn;
 use config::{Config, Environment, File};
 use serde::Deserialize;
 
@@ -85,6 +86,10 @@ pub struct NotificationConfig {
     pub threshold_percent: f64,
     /// Ntfy.sh topic for phone notifications (e.g., "hardys-occupancy-1993")
     pub ntfy_topic: Option<String>,
+    /// Ntfy server base URL. Override to point at a self-hosted instance.
+    pub ntfy_server: String,
+    /// Minimum seconds between consecutive notifications (prevents spam).
+    pub cooldown_secs: u64,
 }
 
 impl Default for NotificationConfig {
@@ -93,6 +98,8 @@ impl Default for NotificationConfig {
             enabled: false,
             threshold_percent: 30.0,
             ntfy_topic: None,
+            ntfy_server: "https://ntfy.sh".to_string(),
+            cooldown_secs: 300,
         }
     }
 }
@@ -153,6 +160,74 @@ pub struct ScheduleHours {
 }
 
 impl AppConfig {
+    /// Validate all configuration values, returning a descriptive error on the
+    /// first constraint violation.
+    ///
+    /// Called automatically by [`load`](Self::load) after deserialisation.
+    pub fn validate(&self) -> Result<()> {
+        for (label, hours) in [
+            ("schedule.weekday", self.schedule.weekday),
+            ("schedule.weekend", self.schedule.weekend),
+        ] {
+            if hours.open_hour > 24 {
+                bail!("{label}.open_hour must be <= 24, got {}", hours.open_hour);
+            }
+            if hours.close_hour > 24 {
+                bail!("{label}.close_hour must be <= 24, got {}", hours.close_hour);
+            }
+            if hours.open_hour >= hours.close_hour {
+                bail!(
+                    "{label}.open_hour ({}) must be < close_hour ({})",
+                    hours.open_hour,
+                    hours.close_hour
+                );
+            }
+        }
+
+        if !(0.0..=100.0).contains(&self.thresholds.low_occupancy_percent) {
+            bail!(
+                "thresholds.low_occupancy_percent must be in [0.0, 100.0], got {}",
+                self.thresholds.low_occupancy_percent
+            );
+        }
+        if !(0.0..=100.0).contains(&self.thresholds.high_occupancy_percent) {
+            bail!(
+                "thresholds.high_occupancy_percent must be in [0.0, 100.0], got {}",
+                self.thresholds.high_occupancy_percent
+            );
+        }
+        if self.thresholds.low_occupancy_percent >= self.thresholds.high_occupancy_percent {
+            bail!(
+                "thresholds.low_occupancy_percent ({}) must be < high_occupancy_percent ({})",
+                self.thresholds.low_occupancy_percent,
+                self.thresholds.high_occupancy_percent
+            );
+        }
+
+        if !(0.0..=100.0).contains(&self.notifications.threshold_percent) {
+            bail!(
+                "notifications.threshold_percent must be in [0.0, 100.0], got {}",
+                self.notifications.threshold_percent
+            );
+        }
+
+        if self.refresh.data_fetch_interval_secs == 0 {
+            bail!("refresh.data_fetch_interval_secs must be > 0");
+        }
+        if self.refresh.ui_interval_secs == 0 {
+            bail!("refresh.ui_interval_secs must be > 0");
+        }
+
+        if self.analytics.prediction_window_days <= 0 {
+            bail!(
+                "analytics.prediction_window_days must be > 0, got {}",
+                self.analytics.prediction_window_days
+            );
+        }
+
+        Ok(())
+    }
+
     pub fn load() -> Result<Self> {
         // Load .env file (silently ignore if not present - production uses env vars
         // directly)
@@ -163,7 +238,10 @@ impl AppConfig {
             .context("DATABASE_URL must be set (via .env file or environment variable)")?;
 
         let config_dir = dirs::config_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
+            .unwrap_or_else(|| {
+                warn!("could not determine OS config directory, skipping user config file");
+                PathBuf::from(".")
+            })
             .join("hardy-monitor");
 
         let builder = Config::builder()
@@ -188,6 +266,8 @@ impl AppConfig {
             .set_default("notifications.enabled", false)?
             .set_default("notifications.threshold_percent", 30.0)?
             .set_default("notifications.ntfy_topic", None::<String>)?
+            .set_default("notifications.ntfy_server", "https://ntfy.sh")?
+            .set_default("notifications.cooldown_secs", 300)?
             // Thresholds
             .set_default("thresholds.low_occupancy_percent", 40.0)?
             .set_default("thresholds.high_occupancy_percent", 75.0)?
@@ -199,7 +279,8 @@ impl AppConfig {
             .set_default("schedule.weekend.open_hour", 9)?
             .set_default("schedule.weekend.close_hour", 21)?
 
-            // 2. Load from local config file (optional, lowest priority)
+            // 2. Load from local config file (optional; overrides defaults,
+            //    but is itself overridden by the user config dir and HARDY__* env vars)
             .add_source(File::from(PathBuf::from("config.toml")).required(false))
 
             // 3. Load from user config directory (optional, overrides local)
@@ -209,7 +290,9 @@ impl AppConfig {
             .add_source(Environment::with_prefix("HARDY").separator("__"));
 
         let s = builder.build()?;
-        Ok(s.try_deserialize()?)
+        let config: Self = s.try_deserialize()?;
+        config.validate()?;
+        Ok(config)
     }
 }
 
@@ -388,6 +471,107 @@ mod tests {
                 assert_eq!(config.notifications.threshold_percent, 15.5);
             },
         );
+    }
+
+    // ==================== AppConfig::validate() Tests ====================
+
+    /// Construct a fully-valid `AppConfig` using safe defaults for all fields.
+    /// Individual tests mutate the one field they want to test.
+    fn valid_app_config() -> AppConfig {
+        AppConfig {
+            database: DatabaseConfig {
+                url: "postgres://localhost/test".to_string(),
+            },
+            gym: GymConfig {
+                api_url: "https://example.com".to_string(),
+            },
+            network: NetworkConfig::default(),
+            window: WindowConfig::default(),
+            refresh: RefreshConfig::default(),
+            notifications: NotificationConfig::default(),
+            thresholds: ThresholdsConfig::default(),
+            analytics: AnalyticsConfig::default(),
+            schedule: ScheduleConfig::default(),
+        }
+    }
+
+    #[test]
+    fn test_validate_defaults_pass() {
+        assert!(valid_app_config().validate().is_ok());
+    }
+
+    #[test]
+    fn test_validate_schedule_open_ge_close_fails() {
+        let mut cfg = valid_app_config();
+        cfg.schedule.weekday.open_hour = 10;
+        cfg.schedule.weekday.close_hour = 10;
+        assert!(cfg.validate().is_err());
+
+        cfg.schedule.weekday.open_hour = 12;
+        cfg.schedule.weekday.close_hour = 10;
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_schedule_hour_exceeds_24_fails() {
+        let mut cfg = valid_app_config();
+        cfg.schedule.weekend.close_hour = 25;
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_thresholds_low_ge_high_fails() {
+        let mut cfg = valid_app_config();
+        cfg.thresholds.low_occupancy_percent = 75.0;
+        cfg.thresholds.high_occupancy_percent = 40.0;
+        assert!(cfg.validate().is_err());
+
+        cfg.thresholds.low_occupancy_percent = 50.0;
+        cfg.thresholds.high_occupancy_percent = 50.0;
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_thresholds_out_of_range_fails() {
+        let mut cfg = valid_app_config();
+        cfg.thresholds.low_occupancy_percent = -1.0;
+        assert!(cfg.validate().is_err());
+
+        let mut cfg = valid_app_config();
+        cfg.thresholds.high_occupancy_percent = 101.0;
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_notifications_threshold_out_of_range_fails() {
+        let mut cfg = valid_app_config();
+        cfg.notifications.threshold_percent = -0.1;
+        assert!(cfg.validate().is_err());
+
+        let mut cfg = valid_app_config();
+        cfg.notifications.threshold_percent = 100.1;
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_zero_intervals_fail() {
+        let mut cfg = valid_app_config();
+        cfg.refresh.data_fetch_interval_secs = 0;
+        assert!(cfg.validate().is_err());
+
+        let mut cfg = valid_app_config();
+        cfg.refresh.ui_interval_secs = 0;
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_nonpositive_prediction_window_fails() {
+        let mut cfg = valid_app_config();
+        cfg.analytics.prediction_window_days = 0;
+        assert!(cfg.validate().is_err());
+
+        cfg.analytics.prediction_window_days = -1;
+        assert!(cfg.validate().is_err());
     }
 
     // ==================== Config Value Validation Tests ====================

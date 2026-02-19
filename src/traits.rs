@@ -4,10 +4,15 @@
 //! - `Clock`: Abstracting time access for deterministic testing
 //! - `Notifier`: Abstracting system notifications for testing
 
-use std::sync::{Arc, Mutex};
+use std::{
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
 use anyhow::Result;
 use chrono::{DateTime, Local, Utc};
+use futures::future::BoxFuture;
+use tracing::warn;
 
 // ==================== Clock Trait ====================
 
@@ -53,19 +58,19 @@ impl MockClock {
 
     /// Set the mock clock to a new time.
     pub fn set_time(&self, time: DateTime<Utc>) {
-        *self.utc_time.lock().unwrap() = time;
+        *self.utc_time.lock().unwrap_or_else(|p| p.into_inner()) = time;
     }
 
     /// Advance the clock by a duration.
     pub fn advance(&self, duration: chrono::Duration) {
-        let mut time = self.utc_time.lock().unwrap();
+        let mut time = self.utc_time.lock().unwrap_or_else(|p| p.into_inner());
         *time = *time + duration;
     }
 }
 
 impl Clock for MockClock {
     fn now_utc(&self) -> DateTime<Utc> {
-        *self.utc_time.lock().unwrap()
+        *self.utc_time.lock().unwrap_or_else(|p| p.into_inner())
     }
 
     fn now_local(&self) -> DateTime<Local> {
@@ -81,7 +86,11 @@ impl Clock for MockClock {
 /// sending system notifications.
 pub trait Notifier: Send + Sync {
     /// Send a notification with the given title and body.
-    fn notify(&self, title: &str, body: &str) -> Result<()>;
+    ///
+    /// The returned future is tied to the lifetime of `self` but **not** to
+    /// the string arguments — implementors must clone any strings they need
+    /// before returning the future.
+    fn notify<'s>(&'s self, title: &str, body: &str) -> BoxFuture<'s, Result<()>>;
 }
 
 /// System notifier implementation using notify-rust.
@@ -91,13 +100,21 @@ pub struct SystemNotifier;
 
 #[cfg(feature = "gui")]
 impl Notifier for SystemNotifier {
-    fn notify(&self, title: &str, body: &str) -> Result<()> {
-        notify_rust::Notification::new()
-            .summary(title)
-            .body(body)
-            .appname("Hardy Monitor")
-            .show()?;
-        Ok(())
+    fn notify<'s>(&'s self, title: &str, body: &str) -> BoxFuture<'s, Result<()>> {
+        let title = title.to_string();
+        let body = body.to_string();
+        Box::pin(async move {
+            tokio::task::spawn_blocking(move || {
+                notify_rust::Notification::new()
+                    .summary(&title)
+                    .body(&body)
+                    .appname("Hardy Monitor")
+                    .show()
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("desktop notification task panicked: {e}"))??;
+            Ok(())
+        })
     }
 }
 
@@ -106,6 +123,7 @@ impl Notifier for SystemNotifier {
 #[derive(Debug, Clone)]
 pub struct CombinedNotifier {
     ntfy_topic: Option<String>,
+    ntfy_server: String,
 }
 
 #[cfg(feature = "gui")]
@@ -114,41 +132,54 @@ impl CombinedNotifier {
     ///
     /// # Arguments
     /// * `ntfy_topic` - Optional ntfy.sh topic name for phone notifications
-    pub fn new(ntfy_topic: Option<String>) -> Self {
-        Self { ntfy_topic }
+    /// * `ntfy_server` - Base URL of the ntfy server (e.g. `"https://ntfy.sh"`)
+    pub fn new(ntfy_topic: Option<String>, ntfy_server: String) -> Self {
+        Self {
+            ntfy_topic,
+            ntfy_server,
+        }
     }
 }
 
 #[cfg(feature = "gui")]
 impl Notifier for CombinedNotifier {
-    fn notify(&self, title: &str, body: &str) -> Result<()> {
-        // Send desktop notification
-        notify_rust::Notification::new()
-            .summary(title)
-            .body(body)
-            .appname("Hardy Monitor")
-            .show()?;
+    fn notify<'s>(&'s self, title: &str, body: &str) -> BoxFuture<'s, Result<()>> {
+        let title = title.to_string();
+        let body = body.to_string();
+        let ntfy_topic = self.ntfy_topic.clone();
+        let ntfy_server = self.ntfy_server.clone();
+        Box::pin(async move {
+            // Desktop notification via spawn_blocking (notify_rust::show() is blocking).
+            // Log failures; a broken desktop notifier should not suppress the ntfy push.
+            let t = title.clone();
+            let b = body.clone();
+            let desktop_result = tokio::task::spawn_blocking(move || {
+                notify_rust::Notification::new()
+                    .summary(&t)
+                    .body(&b)
+                    .appname("Hardy Monitor")
+                    .show()
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("desktop notification task panicked: {e}"))?;
+            if let Err(e) = desktop_result {
+                warn!(error = %e, "desktop notification failed");
+            }
 
-        // Send ntfy.sh notification if configured
-        if let Some(ref topic) = self.ntfy_topic {
-            let url = format!("https://ntfy.sh/{}", topic);
-            let message = format!("{}\n{}", title, body);
-
-            // Spawn async task to send ntfy notification (fire and forget)
-            let url_clone = url.clone();
-            let message_clone = message.clone();
-            std::thread::spawn(move || {
-                // Use blocking reqwest to avoid async complexity
-                if let Ok(client) = reqwest::blocking::Client::builder()
-                    .timeout(std::time::Duration::from_secs(10))
-                    .build()
-                {
-                    let _ = client.post(&url_clone).body(message_clone).send();
+            // ntfy push (async, best-effort — failures are logged, not propagated).
+            if let Some(ref topic) = ntfy_topic {
+                let url = format!("{}/{}", ntfy_server, topic);
+                let message = format!("{}\n{}", title, body);
+                let client = reqwest::Client::builder()
+                    .timeout(Duration::from_secs(10))
+                    .build()?;
+                if let Err(e) = client.post(&url).body(message).send().await {
+                    warn!(error = %e, %url, "ntfy notification failed");
                 }
-            });
-        }
+            }
 
-        Ok(())
+            Ok(())
+        })
     }
 }
 
@@ -166,32 +197,49 @@ impl MockNotifier {
 
     /// Get all notifications that have been sent.
     pub fn get_notifications(&self) -> Vec<(String, String)> {
-        self.notifications.lock().unwrap().clone()
+        self.notifications
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone()
     }
 
     /// Get the count of notifications sent.
     pub fn notification_count(&self) -> usize {
-        self.notifications.lock().unwrap().len()
+        self.notifications
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .len()
     }
 
     /// Clear all recorded notifications.
     pub fn clear(&self) {
-        self.notifications.lock().unwrap().clear();
+        self.notifications
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clear();
     }
 
     /// Check if any notification was sent.
     pub fn was_called(&self) -> bool {
-        !self.notifications.lock().unwrap().is_empty()
+        !self.notifications
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .is_empty()
     }
 }
 
 impl Notifier for MockNotifier {
-    fn notify(&self, title: &str, body: &str) -> Result<()> {
-        self.notifications
-            .lock()
-            .unwrap()
-            .push((title.to_string(), body.to_string()));
-        Ok(())
+    fn notify<'s>(&'s self, title: &str, body: &str) -> BoxFuture<'s, Result<()>> {
+        let title = title.to_string();
+        let body = body.to_string();
+        let notifications = self.notifications.clone();
+        Box::pin(async move {
+            notifications
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .push((title, body));
+            Ok(())
+        })
     }
 }
 
@@ -243,18 +291,18 @@ mod tests {
         assert_eq!(clock.now_utc(), expected);
     }
 
-    #[test]
-    fn test_mock_notifier_records_notifications() {
+    #[tokio::test]
+    async fn test_mock_notifier_records_notifications() {
         let notifier = MockNotifier::new();
 
         assert!(!notifier.was_called());
         assert_eq!(notifier.notification_count(), 0);
 
-        notifier.notify("Title 1", "Body 1").unwrap();
+        notifier.notify("Title 1", "Body 1").await.unwrap();
         assert!(notifier.was_called());
         assert_eq!(notifier.notification_count(), 1);
 
-        notifier.notify("Title 2", "Body 2").unwrap();
+        notifier.notify("Title 2", "Body 2").await.unwrap();
         assert_eq!(notifier.notification_count(), 2);
 
         let notifications = notifier.get_notifications();
@@ -268,11 +316,11 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_mock_notifier_clear() {
+    #[tokio::test]
+    async fn test_mock_notifier_clear() {
         let notifier = MockNotifier::new();
 
-        notifier.notify("Test", "Test").unwrap();
+        notifier.notify("Test", "Test").await.unwrap();
         assert!(notifier.was_called());
 
         notifier.clear();

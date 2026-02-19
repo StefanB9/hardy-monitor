@@ -56,9 +56,7 @@ impl TrainingDataPreparer {
         let mut recent_window: VecDeque<(DateTime<Utc>, f64)> = VecDeque::with_capacity(180);
 
         for log in logs {
-            let Some(timestamp) = log.datetime() else {
-                continue;
-            };
+            let timestamp = log.timestamp;
 
             // Update recent window
             while recent_window.len() >= 180 {

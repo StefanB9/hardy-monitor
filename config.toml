@@ -24,10 +24,14 @@ data_fetch_interval_secs = 60
 tray_poll_interval_ms = 50
 
 [notifications]
-enabled = false
+enabled = true
 threshold_percent = 30.0
 # Ntfy.sh topic for phone notifications (install ntfy app and subscribe to this topic)
 ntfy_topic = "hardys-occupancy-1993"
+# Override to point at a self-hosted ntfy instance
+ntfy_server = "https://ntfy.sh"
+# Minimum seconds between consecutive notifications (prevents rapid threshold crossing spam)
+cooldown_secs = 300
 
 [thresholds]
 low_occupancy_percent = 30.0

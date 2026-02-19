@@ -188,25 +188,23 @@ impl DataRepairer {
         let close_time = NaiveTime::from_hms_opt(close_hour, 0, 0).unwrap();
 
         for record in records {
-            if let Some(utc_dt) = record.datetime() {
-                let local_dt = utc_dt.with_timezone(&local_tz);
-                let local_date = local_dt.date_naive();
-                let local_time = local_dt.time();
+            let local_dt = record.timestamp.with_timezone(&local_tz);
+            let local_date = local_dt.date_naive();
+            let local_time = local_dt.time();
 
-                if local_date != date {
-                    continue;
-                }
+            if local_date != date {
+                continue;
+            }
 
-                if local_time < open_time || local_time > close_time {
-                    // Delete strictly outside
-                    self.db.delete_record(record.id).await?;
-                    deleted_count += 1;
-                } else if local_time == open_time || local_time == close_time {
-                    // Exact opening or closing time: ensure 0
-                    if record.percentage != 0.0 {
-                        self.db.update_percentage(record.id, 0.0).await?;
-                        zeroed_count += 1;
-                    }
+            if local_time < open_time || local_time > close_time {
+                // Delete strictly outside
+                self.db.delete_record(record.id).await?;
+                deleted_count += 1;
+            } else if local_time == open_time || local_time == close_time {
+                // Exact opening or closing time: ensure 0
+                if record.percentage != 0.0 {
+                    self.db.update_percentage(record.id, 0.0).await?;
+                    zeroed_count += 1;
                 }
             }
         }
@@ -285,14 +283,12 @@ impl DataRepairer {
         let mut data_points: Vec<(i64, f64)> = Vec::new();
 
         for record in records {
-            if let Some(utc_dt) = record.datetime() {
-                let local_dt = utc_dt.with_timezone(&local_tz);
-                let local_date = local_dt.date_naive();
+            let local_dt = record.timestamp.with_timezone(&local_tz);
+            let local_date = local_dt.date_naive();
 
-                if local_date == date {
-                    let minute_of_day = local_dt.hour() as i64 * 60 + local_dt.minute() as i64;
-                    data_points.push((minute_of_day, record.percentage));
-                }
+            if local_date == date {
+                let minute_of_day = local_dt.hour() as i64 * 60 + local_dt.minute() as i64;
+                data_points.push((minute_of_day, record.percentage));
             }
         }
 
@@ -357,12 +353,8 @@ impl DataRepairer {
         let records = self.db.get_records_for_date(date).await?;
 
         let exists = records.iter().any(|r| {
-            if let Some(dt) = r.datetime() {
-                let local = dt.with_timezone(&local_tz);
-                local.date_naive() == date && local.hour() == open_hour && local.minute() == 0
-            } else {
-                false
-            }
+            let local = r.timestamp.with_timezone(&local_tz);
+            local.date_naive() == date && local.hour() == open_hour && local.minute() == 0
         });
 
         if !exists {
@@ -389,12 +381,8 @@ impl DataRepairer {
         let records = self.db.get_records_for_date(date).await?;
 
         let exists = records.iter().any(|r| {
-            if let Some(dt) = r.datetime() {
-                let local = dt.with_timezone(&local_tz);
-                local.date_naive() == date && local.hour() == close_hour && local.minute() == 0
-            } else {
-                false
-            }
+            let local = r.timestamp.with_timezone(&local_tz);
+            local.date_naive() == date && local.hour() == close_hour && local.minute() == 0
         });
 
         if !exists {

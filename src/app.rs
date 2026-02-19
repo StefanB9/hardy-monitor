@@ -107,6 +107,7 @@ struct NotificationState {
     threshold: f64,
     enabled: bool,
     was_below_threshold: bool,
+    last_notified_at: Option<Instant>,
 }
 
 struct ExportState {
@@ -139,7 +140,7 @@ pub enum Message {
     ChartInteraction, // Mapped from widget interaction
 
     // Data Results
-    FetchCompleted(Result<f64, AppError>),
+    FetchCompleted(Result<Option<f64>, AppError>),
     HistoryLoaded(Result<Vec<OccupancyLog>, AppError>),
     AnalyticsLoaded(Result<Vec<HourlyAverage>, AppError>),
     PredictionBaselineLoaded(Result<Vec<HourlyAverage>, AppError>),
@@ -238,6 +239,7 @@ impl HardyMonitorApp {
                 threshold: config.notifications.threshold_percent,
                 enabled: config.notifications.enabled,
                 was_below_threshold: false,
+                last_notified_at: None,
             },
             export: ExportState { status: None },
             repair: RepairState {
@@ -454,32 +456,13 @@ impl HardyMonitorApp {
                 self.export.status = Some("Exporting...".to_string());
                 let db = self.db.clone();
                 let clock = self.clock.clone();
+                let output_dir = dirs::download_dir().unwrap_or_else(|| PathBuf::from("."));
                 Task::perform(
                     async move {
-                        let logs = db
-                            .get_history(365 * 10)
+                        let path = db
+                            .export_to_csv(&output_dir, &*clock)
                             .await
-                            .map_err(|e| AppError::from_anyhow_db(e, "get_history"))?;
-                        let export_time = clock.now_utc();
-                        let path =
-                            tokio::task::spawn_blocking(move || -> Result<PathBuf, AppError> {
-                                let mut path =
-                                    dirs::download_dir().unwrap_or_else(|| PathBuf::from("."));
-                                path.push(format!(
-                                    "hardy_monitor_export_{}.csv",
-                                    export_time.format("%Y%m%d_%H%M%S")
-                                ));
-                                let mut wtr = csv::Writer::from_path(&path)
-                                    .map_err(|e| AppError::io(e.to_string()))?;
-                                for log in logs {
-                                    wtr.serialize(log)
-                                        .map_err(|e| AppError::io(e.to_string()))?;
-                                }
-                                wtr.flush().map_err(|e| AppError::io(e.to_string()))?;
-                                Ok(path)
-                            })
-                            .await
-                            .map_err(|e| AppError::Unknown(e.to_string()))??;
+                            .map_err(|e| AppError::from_anyhow_db(e, "export_to_csv"))?;
                         Ok(path.to_string_lossy().to_string())
                     },
                     Message::ExportCompleted,
@@ -875,10 +858,16 @@ impl HardyMonitorApp {
     // --- MESSAGE HANDLERS ---
 
     /// Handle successful or failed fetch completion
-    fn handle_fetch_completed(&mut self, result: Result<f64, AppError>) -> Task<Message> {
+    fn handle_fetch_completed(&mut self, result: Result<Option<f64>, AppError>) -> Task<Message> {
         self.stop_loading();
         match result {
-            Ok(percentage) => {
+            Ok(None) => {
+                // Database is empty — leave occupancy as None so the UI shows
+                // "Waiting for data…" rather than a misleading 0% reading.
+                self.error = None;
+                Task::none()
+            }
+            Ok(Some(percentage)) => {
                 self.data.occupancy = Some(percentage);
                 self.data.last_update = Some(self.clock.now_utc());
                 self.error = None;
@@ -902,15 +891,32 @@ impl HardyMonitorApp {
                     ),
                 ];
 
-                if self.notifications.enabled && is_below && !self.notifications.was_below_threshold
+                let cooldown_elapsed = self
+                    .notifications
+                    .last_notified_at
+                    .map(|t| {
+                        t.elapsed().as_secs() >= self.config.notifications.cooldown_secs
+                    })
+                    .unwrap_or(true);
+
+                if self.notifications.enabled
+                    && is_below
+                    && !self.notifications.was_below_threshold
+                    && cooldown_elapsed
                 {
+                    self.notifications.last_notified_at = Some(Instant::now());
                     let notifier = self.notifier.clone();
                     tasks.push(Task::perform(
                         async move {
-                            let _ = notifier.notify(
-                                "Hardy's Gym Monitor",
-                                &format!("Gym is empty! {:.0}%", percentage),
-                            );
+                            if let Err(e) = notifier
+                                .notify(
+                                    "Hardy's Gym Monitor",
+                                    &format!("Gym is empty! {:.0}%", percentage),
+                                )
+                                .await
+                            {
+                                tracing::warn!(error = %e, "occupancy notification failed");
+                            }
                         },
                         |_| Message::NotificationSent,
                     ));
@@ -967,8 +973,7 @@ impl HardyMonitorApp {
                 Ok(record.map(|r| r.percentage))
             },
             |r: Result<Option<f64>, anyhow::Error>| match r {
-                Ok(Some(v)) => Message::FetchCompleted(Ok(v)),
-                Ok(None) => Message::FetchCompleted(Ok(0.0)), // No data yet
+                Ok(v) => Message::FetchCompleted(Ok(v)),
                 Err(e) => {
                     Message::FetchCompleted(Err(AppError::from_anyhow_db(e, "get_latest_record")))
                 }
