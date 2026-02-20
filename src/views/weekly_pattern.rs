@@ -22,6 +22,7 @@ pub struct WeeklyPatternProps<'a> {
 }
 
 /// Render the weekly pattern view
+#[allow(clippy::needless_pass_by_value)]
 pub fn view(props: WeeklyPatternProps<'_>) -> Element<'_, Message> {
     let range_btn = |label: &str, range: AnalyticsRange| {
         let active = props.analytics_range == range;
@@ -53,7 +54,7 @@ pub fn view(props: WeeklyPatternProps<'_>) -> Element<'_, Message> {
     .width(Length::Fill)
     .height(Length::Fill);
 
-    let heatmap_element = Element::from(heatmap).map(|_: ()| Message::ChartInteraction);
+    let heatmap_element = Element::from(heatmap).map(|()| Message::ChartInteraction);
 
     let legend_item = |color: Color, label: &str| {
         row![
@@ -86,7 +87,7 @@ pub fn view(props: WeeklyPatternProps<'_>) -> Element<'_, Message> {
         if let Some(b) = props
             .analytics_data
             .iter()
-            .filter(|d| d.weekday == idx as i32)
+            .filter(|d| d.weekday == i32::try_from(idx).unwrap_or(0))
             .min_by(|a, b| {
                 a.avg_percentage
                     .partial_cmp(&b.avg_percentage)

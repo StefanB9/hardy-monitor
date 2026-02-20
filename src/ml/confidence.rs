@@ -130,10 +130,10 @@ mod tests {
         let timestamp = Utc.with_ymd_and_hms(2024, 6, 17, 10, 0, 0).unwrap();
         let pred = PredictionWithConfidence::new(
             timestamp,
-            150.0, // Over 100
-            -10.0, // Under 0
-            200.0, // Over 100
-            1.5,   // Over 1
+            150.0, 
+            -10.0, 
+            200.0, 
+            1.5,   
             PredictionMethod::HistoricalAverage,
         );
 
@@ -179,7 +179,6 @@ mod tests {
     fn test_is_valid() {
         let timestamp = Utc.with_ymd_and_hms(2024, 6, 17, 10, 0, 0).unwrap();
 
-        // Valid prediction
         let valid = PredictionWithConfidence {
             timestamp,
             predicted_value: 50.0,
@@ -190,11 +189,10 @@ mod tests {
         };
         assert!(valid.is_valid());
 
-        // Invalid: low > predicted
         let invalid = PredictionWithConfidence {
             timestamp,
             predicted_value: 50.0,
-            confidence_low: 60.0, // Invalid
+            confidence_low: 60.0, 
             confidence_high: 70.0,
             confidence_score: 0.8,
             method: PredictionMethod::HistoricalAverage,

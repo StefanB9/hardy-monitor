@@ -14,6 +14,7 @@ use hardy_monitor::{
     config::AppConfig,
     db::{Database, HourlyAverage, OccupancyLog},
     error::AppError,
+    ml::{MlConfig, OccupancyPredictor, PredictionWithConfidence, TrainingResult},
     repair::DataRepairer,
     schedule::GymSchedule,
     style,
@@ -29,7 +30,6 @@ use tray_icon::{TrayIcon, TrayIconEvent};
 
 use crate::views::{self, DashboardProps, DataRepairProps, InsightsProps, WeeklyPatternProps};
 
-// --- STATE STRUCTS ---
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ViewMode {
@@ -74,7 +74,6 @@ struct MonitorState {
     best_time_today: Option<(i32, f64)>,
     prediction_baseline: Vec<HourlyAverage>,
     predictions: Vec<(DateTime<Utc>, f64)>,
-    // Insights data
     insights: Vec<Insight>,
     stats: Option<OccupancyStats>,
     day_analysis: Vec<DayAnalysis>,
@@ -82,6 +81,9 @@ struct MonitorState {
     quiet_hours: Vec<(i32, i32, f64)>,
     trend: Option<TrendDirection>,
     baseline_for_comparison: Vec<HourlyAverage>,
+    predictor: OccupancyPredictor,
+    ml_predictions: Vec<PredictionWithConfidence>,
+    ml_training_in_progress: bool,
 }
 
 /// Threshold before showing "Updating..." indicator (prevents flickering)
@@ -123,7 +125,6 @@ pub struct HardyMonitorApp {
     _tray_icon: TrayIcon,
     error: Option<AppError>,
 
-    // Grouped State
     data: MonitorState,
     ui: UiState,
     notifications: NotificationState,
@@ -137,9 +138,8 @@ pub enum Message {
     FetchTick,
     FetchAlignmentComplete,
     RefreshNow,
-    ChartInteraction, // Mapped from widget interaction
+    ChartInteraction, 
 
-    // Data Results
     FetchCompleted(Result<Option<f64>, AppError>),
     HistoryLoaded(Result<Vec<OccupancyLog>, AppError>),
     AnalyticsLoaded(Result<Vec<HourlyAverage>, AppError>),
@@ -149,12 +149,10 @@ pub enum Message {
         baseline: Result<Vec<HourlyAverage>, AppError>,
     },
 
-    // Notifications
     NotificationThresholdChanged(f64),
     NotificationToggled(bool),
     NotificationSent,
 
-    // Navigation & View
     SwitchView(ViewMode),
     SwitchAnalyticsRange(AnalyticsRange),
     HistoryStartDateChanged(String),
@@ -162,14 +160,12 @@ pub enum Message {
     HistoryPresetSelected(i64),
     ApplyDateRange,
 
-    // Export & System
     ExportCsv,
     ExportCompleted(Result<String, AppError>),
     ClearExportStatus,
     TrayCheck,
     WindowCloseRequested,
 
-    // Data Repair Page
     RepairStartDateChanged(String),
     RepairEndDateChanged(String),
     RepairPresetSelected(RepairPreset),
@@ -177,9 +173,12 @@ pub enum Message {
     #[allow(dead_code)]
     RepairProgress(RepairProgress),
     RepairCompleted(Result<RepairSummary, AppError>),
+
+    MlTrainingCompleted(Result<Box<TrainingResult>, String>),
 }
 
 impl HardyMonitorApp {
+    #[allow(clippy::needless_pass_by_value)] 
     pub fn new(
         db: Database,
         tray_icon: TrayIcon,
@@ -219,6 +218,9 @@ impl HardyMonitorApp {
                 quiet_hours: Vec::new(),
                 trend: None,
                 baseline_for_comparison: Vec::new(),
+                predictor: OccupancyPredictor::new(config.ml.clone()),
+                ml_predictions: Vec::new(),
+                ml_training_in_progress: false,
             },
             ui: UiState {
                 is_loading: false,
@@ -266,9 +268,10 @@ impl HardyMonitorApp {
         let seconds_to_next_minute = 60 - now.timestamp() % 60;
         let alignment_task = Task::perform(
             async move {
+                #[allow(clippy::cast_sign_loss)]
                 tokio::time::sleep(Duration::from_secs(seconds_to_next_minute as u64)).await;
             },
-            |_| Message::FetchAlignmentComplete,
+            |()| Message::FetchAlignmentComplete,
         );
 
         (
@@ -277,11 +280,18 @@ impl HardyMonitorApp {
         )
     }
 
+    #[allow(clippy::too_many_lines)] 
+    #[allow(clippy::match_same_arms)] 
     pub fn update(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::Tick => {
                 self.data.predictions =
                     analytics::calculate_predictions(&self.data.prediction_baseline);
+                self.data.ml_predictions = self.data.predictor.predict(
+                    &self.data.prediction_baseline,
+                    &self.schedule,
+                    self.clock.as_ref(),
+                );
                 Task::none()
             }
             Message::ChartInteraction => Task::none(),
@@ -373,7 +383,6 @@ impl HardyMonitorApp {
             Message::SwitchView(mode) => {
                 self.ui.current_view = mode;
                 if mode == ViewMode::Insights {
-                    // Load data for insights when switching to that view
                     Self::load_insights_data(self.db.clone(), self.clock.clone())
                 } else {
                     Task::none()
@@ -471,7 +480,7 @@ impl HardyMonitorApp {
             Message::ExportCompleted(result) => {
                 self.stop_loading();
                 match result {
-                    Ok(path) => self.export.status = Some(format!("Saved to {}", path)),
+                    Ok(path) => self.export.status = Some(format!("Saved to {path}")),
                     Err(e) => {
                         self.error = Some(e);
                         self.export.status = Some("Export failed".to_string());
@@ -481,7 +490,7 @@ impl HardyMonitorApp {
                     async {
                         tokio::time::sleep(Duration::from_secs(4)).await;
                     },
-                    |_| Message::ClearExportStatus,
+                    |()| Message::ClearExportStatus,
                 )
             }
             Message::ClearExportStatus => {
@@ -511,7 +520,6 @@ impl HardyMonitorApp {
                         self.repair.end_date = today.format("%Y-%m-%d").to_string();
                     }
                     RepairPreset::AllData => {
-                        // Set to a very early date
                         self.repair.start_date = "2020-01-01".to_string();
                         self.repair.end_date = today.format("%Y-%m-%d").to_string();
                     }
@@ -523,19 +531,17 @@ impl HardyMonitorApp {
                     return Task::none();
                 }
 
-                let start = match parse_date(&self.repair.start_date) {
-                    Some(d) => d.date_naive(),
-                    None => {
-                        self.error = Some(AppError::validation("Invalid start date"));
-                        return Task::none();
-                    }
+                let start = if let Some(d) = parse_date(&self.repair.start_date) {
+                    d.date_naive()
+                } else {
+                    self.error = Some(AppError::validation("Invalid start date"));
+                    return Task::none();
                 };
-                let end = match parse_date(&self.repair.end_date) {
-                    Some(d) => d.date_naive(),
-                    None => {
-                        self.error = Some(AppError::validation("Invalid end date"));
-                        return Task::none();
-                    }
+                let end = if let Some(d) = parse_date(&self.repair.end_date) {
+                    d.date_naive()
+                } else {
+                    self.error = Some(AppError::validation("Invalid end date"));
+                    return Task::none();
                 };
 
                 if start > end {
@@ -573,6 +579,31 @@ impl HardyMonitorApp {
                 self.repair.last_result = Some(result);
                 Task::none()
             }
+            Message::MlTrainingCompleted(result) => {
+                self.data.ml_training_in_progress = false;
+                match result {
+                    Ok(training) => {
+                        let trained_at = training.persisted.created_at;
+                        self.data.predictor.set_model(training.model, trained_at);
+                        self.data.predictor.update_baseline(&self.data.prediction_baseline);
+                        self.data.ml_predictions = self.data.predictor.predict(
+                            &self.data.prediction_baseline,
+                            &self.schedule,
+                            self.clock.as_ref(),
+                        );
+                        tracing::info!(
+                            trained_at = %trained_at,
+                            training_mse = training.persisted.training_mse,
+                            validation_mse = ?training.persisted.validation_mse,
+                            "ML model training completed"
+                        );
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "ML model training failed");
+                    }
+                }
+                Task::none()
+            }
         }
     }
 
@@ -608,6 +639,9 @@ impl HardyMonitorApp {
                 quiet_hours: &self.data.quiet_hours,
                 day_analysis: &self.data.day_analysis,
                 insights: &self.data.insights,
+                ml_has_model: self.data.predictor.has_model(),
+                ml_training_in_progress: self.data.ml_training_in_progress,
+                ml_last_trained: self.data.predictor.last_training(),
             }),
             ViewMode::DataRepair => views::data_repair::view(DataRepairProps {
                 start_date: &self.repair.start_date,
@@ -682,11 +716,11 @@ impl HardyMonitorApp {
         Subscription::batch(subs)
     }
 
+    #[allow(clippy::unused_self)] 
     pub fn theme(&self) -> Theme {
         Theme::Dark
     }
 
-    // --- VIEW COMPONENTS ---
 
     fn view_sidebar(&self) -> Element<'_, Message> {
         let sidebar_width = self.config.window.sidebar_width;
@@ -753,11 +787,10 @@ impl HardyMonitorApp {
     }
 
     fn view_header(&self) -> Element<'_, Message> {
-        let last_update = self
-            .data
-            .last_update
-            .map(|t| t.with_timezone(&Local).format("%H:%M:%S").to_string())
-            .unwrap_or_else(|| "--:--:--".to_string());
+        let last_update = self.data.last_update.map_or_else(
+            || "--:--:--".to_string(),
+            |t| t.with_timezone(&Local).format("%H:%M:%S").to_string(),
+        );
 
         let status = if self.should_show_loading() {
             row![
@@ -791,7 +824,7 @@ impl HardyMonitorApp {
                     },
                     ..Default::default()
                 }),
-                text(format!("Last Update: {}", last_update))
+                text(format!("Last Update: {last_update}"))
                     .size(14)
                     .color(style::TEXT_MUTED)
             ]
@@ -828,7 +861,6 @@ impl HardyMonitorApp {
         .into()
     }
 
-    // --- LOADING STATE HELPERS ---
 
     /// Start loading state with debounce tracking
     fn start_loading(&mut self) {
@@ -850,38 +882,39 @@ impl HardyMonitorApp {
             return false;
         }
         match self.ui.loading_started_at {
-            Some(started) => started.elapsed().as_millis() >= LOADING_DEBOUNCE_MS as u128,
-            None => true, // Show if no timestamp (shouldn't happen, but safe default)
+            Some(started) => started.elapsed().as_millis() >= u128::from(LOADING_DEBOUNCE_MS),
+            None => true, 
         }
     }
 
-    // --- MESSAGE HANDLERS ---
 
     /// Handle successful or failed fetch completion
     fn handle_fetch_completed(&mut self, result: Result<Option<f64>, AppError>) -> Task<Message> {
         self.stop_loading();
         match result {
             Ok(None) => {
-                // Database is empty — leave occupancy as None so the UI shows
-                // "Waiting for data…" rather than a misleading 0% reading.
                 self.error = None;
                 Task::none()
             }
             Ok(Some(percentage)) => {
                 self.data.occupancy = Some(percentage);
-                self.data.last_update = Some(self.clock.now_utc());
+                let now = self.clock.now_utc();
+                self.data.last_update = Some(now);
                 self.error = None;
                 self.ui.gauge_cache.clear();
 
-                // Update predictions
+                // Feed observation into predictor and refresh ML predictions
+                self.data.predictor.add_observation(now, percentage);
                 self.data.predictions =
                     analytics::calculate_predictions(&self.data.prediction_baseline);
+                self.data.ml_predictions = self.data.predictor.predict(
+                    &self.data.prediction_baseline,
+                    &self.schedule,
+                    self.clock.as_ref(),
+                );
 
-                // Notifications
                 let is_below = percentage < self.notifications.threshold;
 
-                // Always refresh history AND analytics on new data
-                // This ensures the view is always up to date, including at hour marks
                 let mut tasks = vec![
                     Self::load_history(self.db.clone()),
                     Self::load_analytics(
@@ -891,13 +924,23 @@ impl HardyMonitorApp {
                     ),
                 ];
 
-                let cooldown_elapsed = self
-                    .notifications
-                    .last_notified_at
-                    .map(|t| {
-                        t.elapsed().as_secs() >= self.config.notifications.cooldown_secs
-                    })
-                    .unwrap_or(true);
+                // Trigger ML retraining when due and not already running
+                if !self.data.ml_training_in_progress
+                    && self.data.predictor.needs_retraining(self.clock.as_ref())
+                {
+                    self.data.ml_training_in_progress = true;
+                    tasks.push(Self::train_ml_model(
+                        self.db.clone(),
+                        self.clock.clone(),
+                        self.schedule.clone(),
+                        self.config.ml.clone(),
+                    ));
+                    tracing::debug!("ML model retraining triggered");
+                }
+
+                let cooldown_elapsed = self.notifications.last_notified_at.is_none_or(|t| {
+                    t.elapsed().as_secs() >= self.config.notifications.cooldown_secs
+                });
 
                 if self.notifications.enabled
                     && is_below
@@ -911,14 +954,14 @@ impl HardyMonitorApp {
                             if let Err(e) = notifier
                                 .notify(
                                     "Hardy's Gym Monitor",
-                                    &format!("Gym is empty! {:.0}%", percentage),
+                                    &format!("Gym is empty! {percentage:.0}%"),
                                 )
                                 .await
                             {
                                 tracing::warn!(error = %e, "occupancy notification failed");
                             }
                         },
-                        |_| Message::NotificationSent,
+                        |()| Message::NotificationSent,
                     ));
                 }
                 self.notifications.was_below_threshold = is_below;
@@ -938,20 +981,16 @@ impl HardyMonitorApp {
         baseline: Result<Vec<HourlyAverage>, AppError>,
     ) -> Task<Message> {
         if let Ok(current_data) = current {
-            // Calculate statistics
             self.data.stats = calculate_stats(&current_data);
 
-            // Analyze days
             self.data.day_analysis = analyze_days(&current_data);
 
-            // Find peak and quiet hours
             self.data.peak_hours = find_peak_hours(&current_data, 5);
             self.data.quiet_hours = find_quiet_hours(&current_data, 5);
 
-            // Generate insights with optional baseline comparison
             let baseline_opt = baseline.ok();
             if let Some(ref bl) = baseline_opt {
-                self.data.baseline_for_comparison = bl.clone();
+                self.data.baseline_for_comparison.clone_from(bl);
                 let comparison = compare_periods(bl, &current_data, ComparisonMode::WeekOverWeek);
                 self.data.trend = Some(comparison.overall_trend);
                 self.data.insights = generate_insights(&current_data, Some(bl));
@@ -963,7 +1002,6 @@ impl HardyMonitorApp {
         Task::none()
     }
 
-    // --- LOGIC HELPERS ---
     /// Fetch the latest occupancy record from the database (read-only, no API
     /// calls).
     fn fetch_latest_from_db(db: Arc<Database>) -> Task<Message> {
@@ -1001,13 +1039,14 @@ impl HardyMonitorApp {
         )
     }
 
+    #[allow(clippy::needless_pass_by_value)] 
     fn load_analytics(
         db: Arc<Database>,
         range: AnalyticsRange,
         clock: Arc<dyn Clock>,
     ) -> Task<Message> {
         let now = clock.now_utc();
-        let days_since_monday = now.weekday().num_days_from_monday() as i64;
+        let days_since_monday = i64::from(now.weekday().num_days_from_monday());
         let this_week_start =
             midnight_utc(now.date_naive() - ChronoDuration::days(days_since_monday));
         let start = match range {
@@ -1026,6 +1065,7 @@ impl HardyMonitorApp {
         )
     }
 
+    #[allow(clippy::needless_pass_by_value)] 
     fn load_prediction_baseline(
         db: Arc<Database>,
         days: i64,
@@ -1045,15 +1085,40 @@ impl HardyMonitorApp {
         )
     }
 
+    /// Spawn an async ML training task and return a `Task` that resolves to
+    /// `Message::MlTrainingCompleted`.
+    // Time complexity: O(n) DB fetch + O(n · f) training, where n = samples and f = features (16)
+    // Allocations: two Vecs from DB (logs + averages) plus ndarray matrices; freed on task exit
+    fn train_ml_model(
+        db: Arc<Database>,
+        clock: Arc<dyn Clock>,
+        schedule: GymSchedule,
+        config: MlConfig,
+    ) -> Task<Message> {
+        Task::perform(
+            async move {
+                hardy_monitor::ml::training::train_model(
+                    db.as_ref(),
+                    clock.as_ref(),
+                    &schedule,
+                    &config,
+                )
+                .await
+                .map(Box::new)
+                .map_err(|e| e.to_string())
+            },
+            Message::MlTrainingCompleted,
+        )
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
     fn load_insights_data(db: Arc<Database>, clock: Arc<dyn Clock>) -> Task<Message> {
         let now = clock.now_utc();
-        let days_since_monday = now.weekday().num_days_from_monday() as i64;
+        let days_since_monday = i64::from(now.weekday().num_days_from_monday());
         let this_week_start =
             midnight_utc(now.date_naive() - ChronoDuration::days(days_since_monday));
 
-        // Current period: last 4 weeks
         let current_start = this_week_start - ChronoDuration::weeks(3);
-        // Baseline: 4 weeks before the current period (for comparison)
         let baseline_start = current_start - ChronoDuration::weeks(4);
         let baseline_end = current_start;
 
@@ -1081,7 +1146,6 @@ impl HardyMonitorApp {
     }
 }
 
-// --- HELPER FUNCTIONS ---
 fn parse_date(s: &str) -> Option<DateTime<Utc>> {
     NaiveDate::parse_from_str(s, "%Y-%m-%d")
         .ok()

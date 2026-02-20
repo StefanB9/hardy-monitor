@@ -14,7 +14,6 @@ use chrono::{DateTime, Local, Utc};
 use futures::future::BoxFuture;
 use tracing::warn;
 
-// ==================== Clock Trait ====================
 
 /// Trait for abstracting time access.
 ///
@@ -58,19 +57,28 @@ impl MockClock {
 
     /// Set the mock clock to a new time.
     pub fn set_time(&self, time: DateTime<Utc>) {
-        *self.utc_time.lock().unwrap_or_else(|p| p.into_inner()) = time;
+        *self
+            .utc_time
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = time;
     }
 
     /// Advance the clock by a duration.
     pub fn advance(&self, duration: chrono::Duration) {
-        let mut time = self.utc_time.lock().unwrap_or_else(|p| p.into_inner());
-        *time = *time + duration;
+        let mut time = self
+            .utc_time
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *time += duration;
     }
 }
 
 impl Clock for MockClock {
     fn now_utc(&self) -> DateTime<Utc> {
-        *self.utc_time.lock().unwrap_or_else(|p| p.into_inner())
+        *self
+            .utc_time
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     fn now_local(&self) -> DateTime<Local> {
@@ -78,7 +86,6 @@ impl Clock for MockClock {
     }
 }
 
-// ==================== Notifier Trait ====================
 
 /// Trait for abstracting system notifications.
 ///
@@ -124,6 +131,9 @@ impl Notifier for SystemNotifier {
 pub struct CombinedNotifier {
     ntfy_topic: Option<String>,
     ntfy_server: String,
+    /// Pre-built HTTP client shared across all notification calls.
+    /// `reqwest::Client` is backed by an `Arc`; cloning it is a pointer copy.
+    http_client: reqwest::Client,
 }
 
 #[cfg(feature = "gui")]
@@ -134,9 +144,17 @@ impl CombinedNotifier {
     /// * `ntfy_topic` - Optional ntfy.sh topic name for phone notifications
     /// * `ntfy_server` - Base URL of the ntfy server (e.g. `"https://ntfy.sh"`)
     pub fn new(ntfy_topic: Option<String>, ntfy_server: String) -> Self {
+        let http_client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(10))
+            .build()
+            .unwrap_or_else(|e| {
+                warn!(error = %e, "failed to build HTTP client with custom timeout; using default");
+                reqwest::Client::new()
+            });
         Self {
             ntfy_topic,
             ntfy_server,
+            http_client,
         }
     }
 }
@@ -146,14 +164,10 @@ impl Notifier for CombinedNotifier {
     fn notify<'s>(&'s self, title: &str, body: &str) -> BoxFuture<'s, Result<()>> {
         let title = title.to_string();
         let body = body.to_string();
-        let ntfy_topic = self.ntfy_topic.clone();
-        let ntfy_server = self.ntfy_server.clone();
         Box::pin(async move {
-            // Desktop notification via spawn_blocking (notify_rust::show() is blocking).
-            // Log failures; a broken desktop notifier should not suppress the ntfy push.
             let t = title.clone();
             let b = body.clone();
-            let desktop_result = tokio::task::spawn_blocking(move || {
+            match tokio::task::spawn_blocking(move || {
                 notify_rust::Notification::new()
                     .summary(&t)
                     .body(&b)
@@ -161,20 +175,21 @@ impl Notifier for CombinedNotifier {
                     .show()
             })
             .await
-            .map_err(|e| anyhow::anyhow!("desktop notification task panicked: {e}"))?;
-            if let Err(e) = desktop_result {
-                warn!(error = %e, "desktop notification failed");
+            {
+                Err(e) => warn!(error = %e, "desktop notification task panicked"),
+                Ok(Err(e)) => warn!(error = %e, "desktop notification failed"),
+                Ok(Ok(())) => {}
             }
 
-            // ntfy push (async, best-effort — failures are logged, not propagated).
-            if let Some(ref topic) = ntfy_topic {
-                let url = format!("{}/{}", ntfy_server, topic);
-                let message = format!("{}\n{}", title, body);
-                let client = reqwest::Client::builder()
-                    .timeout(Duration::from_secs(10))
-                    .build()?;
-                if let Err(e) = client.post(&url).body(message).send().await {
-                    warn!(error = %e, %url, "ntfy notification failed");
+            if let Some(ref topic) = self.ntfy_topic {
+                let url = format!("{}/{topic}", self.ntfy_server);
+                let message = format!("{title}\n{body}");
+                match self.http_client.post(&url).body(message).send().await {
+                    Err(e) => warn!(error = %e, %url, "ntfy send failed"),
+                    Ok(resp) if !resp.status().is_success() => {
+                        warn!(status = %resp.status(), %url, "ntfy returned error status");
+                    }
+                    Ok(_) => {}
                 }
             }
 
@@ -199,7 +214,7 @@ impl MockNotifier {
     pub fn get_notifications(&self) -> Vec<(String, String)> {
         self.notifications
             .lock()
-            .unwrap_or_else(|p| p.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone()
     }
 
@@ -207,7 +222,7 @@ impl MockNotifier {
     pub fn notification_count(&self) -> usize {
         self.notifications
             .lock()
-            .unwrap_or_else(|p| p.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .len()
     }
 
@@ -215,15 +230,16 @@ impl MockNotifier {
     pub fn clear(&self) {
         self.notifications
             .lock()
-            .unwrap_or_else(|p| p.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clear();
     }
 
     /// Check if any notification was sent.
     pub fn was_called(&self) -> bool {
-        !self.notifications
+        !self
+            .notifications
             .lock()
-            .unwrap_or_else(|p| p.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .is_empty()
     }
 }
@@ -236,7 +252,7 @@ impl Notifier for MockNotifier {
         Box::pin(async move {
             notifications
                 .lock()
-                .unwrap_or_else(|p| p.into_inner())
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .push((title, body));
             Ok(())
         })
@@ -244,6 +260,7 @@ impl Notifier for MockNotifier {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)] 
 mod tests {
     use chrono::TimeZone;
 

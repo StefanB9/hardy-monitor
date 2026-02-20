@@ -45,6 +45,7 @@ pub struct DashboardProps<'a> {
 }
 
 /// Render the dashboard view
+#[allow(clippy::too_many_lines, clippy::needless_pass_by_value)]
 pub fn view(props: DashboardProps<'_>) -> Element<'_, Message> {
     let gauge = Canvas::new(GaugeWidget {
         percentage: props.occupancy.unwrap_or(0.0),
@@ -153,12 +154,12 @@ pub fn view(props: DashboardProps<'_>) -> Element<'_, Message> {
                 .size(16)
                 .color(style::TEXT_MUTED),
             Space::new().height(20),
-            text(format!("{:02}:00", hour))
+            text(format!("{hour:02}:00"))
                 .size(36)
                 .color(style::ACCENT_CYAN),
             Space::new().height(10),
             container(
-                text(format!("~{:.0}% load", avg))
+                text(format!("~{avg:.0}% load"))
                     .size(14)
                     .color(style::BG_DARK)
             )
@@ -207,7 +208,6 @@ pub fn view(props: DashboardProps<'_>) -> Element<'_, Message> {
     .spacing(10)
     .align_y(Alignment::Center);
 
-    // Use local time for chart boundaries so "Today" means local today
     let (chart_start, chart_end) = if let Some(days) = props.history_days_preset {
         let local_today = Local::now().date_naive();
         let end_aligned = midnight_local_as_utc(local_today + ChronoDuration::days(1));

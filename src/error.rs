@@ -31,6 +31,10 @@ pub enum AppError {
 
     #[error("Unexpected error: {0}")]
     Unknown(String),
+
+    #[cfg(feature = "gui")]
+    #[error("ML training error: {0}")]
+    MlTraining(String),
 }
 
 /// Network-specific error kinds for better error handling
@@ -78,15 +82,16 @@ impl AppError {
                 kind,
                 NetworkErrorKind::Timeout | NetworkErrorKind::ConnectionRefused
             ),
-            AppError::Database(DatabaseError::PoolExhausted) => true,
-            AppError::Database(DatabaseError::ConnectionFailed(_)) => true,
+            AppError::Database(
+                DatabaseError::PoolExhausted | DatabaseError::ConnectionFailed(_),
+            ) => true,
             _ => false,
         }
     }
 
     /// Create a database error from sqlx error with context
-    pub fn from_sqlx(err: sqlx::Error, context: &str) -> Self {
-        let db_error = match &err {
+    pub fn from_sqlx(err: &sqlx::Error, context: &str) -> Self {
+        let db_error = match err {
             sqlx::Error::PoolTimedOut => DatabaseError::PoolExhausted,
             sqlx::Error::RowNotFound => DatabaseError::NotFound,
             sqlx::Error::Database(db_err) => {
@@ -111,6 +116,7 @@ impl AppError {
     }
 
     /// Create a database error from anyhow error with context
+    #[allow(clippy::needless_pass_by_value)] 
     pub fn from_anyhow_db(err: anyhow::Error, context: &str) -> Self {
         AppError::Database(DatabaseError::QueryFailed {
             query_context: context.to_string(),
@@ -119,6 +125,7 @@ impl AppError {
     }
 
     /// Create a network error from reqwest error
+    #[allow(clippy::needless_pass_by_value)] 
     pub fn from_reqwest(err: reqwest::Error) -> Self {
         let kind = if err.is_timeout() {
             NetworkErrorKind::Timeout
@@ -162,11 +169,15 @@ impl AppError {
             AppError::Config(_) => "config",
             AppError::Api { .. } => "api",
             AppError::Unknown(_) => "unknown",
+            #[cfg(feature = "gui")]
+            AppError::MlTraining(_) => "ml_training",
         }
     }
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)] 
+#[allow(clippy::panic)] 
 mod tests {
     use super::*;
 

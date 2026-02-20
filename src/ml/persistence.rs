@@ -91,13 +91,12 @@ impl PersistedModel {
 
     /// Save to a file using bincode
     pub fn save(&self, path: &Path) -> Result<(), PersistenceError> {
-        // Create parent directories if needed
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).map_err(|e| PersistenceError::IoError(e.to_string()))?;
         }
 
-        let bytes =
-            bincode::serialize(self).map_err(|e| PersistenceError::SerializeError(e.to_string()))?;
+        let bytes = bincode::serde::encode_to_vec(self, bincode::config::standard())
+            .map_err(|e| PersistenceError::SerializeError(e.to_string()))?;
 
         fs::write(path, bytes).map_err(|e| PersistenceError::IoError(e.to_string()))?;
 
@@ -114,10 +113,10 @@ impl PersistedModel {
 
         let bytes = fs::read(path).map_err(|e| PersistenceError::IoError(e.to_string()))?;
 
-        let model: Self = bincode::deserialize(&bytes)
-            .map_err(|e| PersistenceError::DeserializeError(e.to_string()))?;
+        let (model, _): (Self, usize) =
+            bincode::serde::decode_from_slice(&bytes, bincode::config::standard())
+                .map_err(|e| PersistenceError::DeserializeError(e.to_string()))?;
 
-        // Version check
         if model.version > Self::CURRENT_VERSION {
             return Err(PersistenceError::VersionMismatch {
                 expected: Self::CURRENT_VERSION,
@@ -258,13 +257,8 @@ mod tests {
     fn test_is_stale() {
         let model = create_test_model();
 
-        // Just created, should not be stale
         assert!(!model.is_stale(24));
 
-        // With very short max age, should be stale
-        // Note: This might be flaky if the test takes > 0 hours
-        // but in practice a just-created model won't be stale even with max_age=0
-        // because the age calculation is in hours
     }
 
     #[test]

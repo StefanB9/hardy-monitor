@@ -35,12 +35,13 @@ pub fn get_status_color(percentage: f64, low_threshold: f64, high_threshold: f64
     }
 }
 
-impl<'a, Message> canvas::Program<Message> for GaugeWidget<'a> {
+impl<Message> canvas::Program<Message> for GaugeWidget<'_> {
     type State = ();
 
+    #[allow(clippy::cast_possible_truncation)] 
     fn draw(
         &self,
-        _: &Self::State,
+        (): &Self::State,
         renderer: &Renderer,
         _: &Theme,
         bounds: Rectangle,
@@ -51,14 +52,13 @@ impl<'a, Message> canvas::Program<Message> for GaugeWidget<'a> {
             let radius = bounds.width.min(bounds.height) / 2.0 - 10.0;
             let width = 15.0;
 
-            // Background Arc
             let bg_arc = Path::new(|b| {
                 b.arc(canvas::path::Arc {
                     center,
                     radius,
                     start_angle: 0.0.into(),
                     end_angle: 360.0f32.to_radians().into(),
-                })
+                });
             });
             frame.stroke(
                 &bg_arc,
@@ -67,21 +67,10 @@ impl<'a, Message> canvas::Program<Message> for GaugeWidget<'a> {
                     .with_width(width),
             );
 
-            if !self.is_open {
-                frame.fill_text(Text {
-                    content: "CLOSED".to_string(),
-                    position: center,
-                    color: style::TEXT_MUTED,
-                    size: 32.0.into(),
-                    align_x: iced::alignment::Horizontal::Center.into(),
-                    align_y: iced::alignment::Vertical::Center,
-                    ..Default::default()
-                });
-            } else {
+            if self.is_open {
                 let color =
                     get_status_color(self.percentage, self.low_threshold, self.high_threshold);
 
-                // Foreground Arc
                 let angle = (self.percentage / 100.0 * 360.0).max(1.0);
                 let fg_arc = Path::new(|b| {
                     b.arc(canvas::path::Arc {
@@ -89,7 +78,7 @@ impl<'a, Message> canvas::Program<Message> for GaugeWidget<'a> {
                         radius,
                         start_angle: (-90.0f32).to_radians().into(),
                         end_angle: (angle as f32 - 90.0).to_radians().into(),
-                    })
+                    });
                 });
                 frame.stroke(
                     &fg_arc,
@@ -99,7 +88,6 @@ impl<'a, Message> canvas::Program<Message> for GaugeWidget<'a> {
                         .with_line_cap(canvas::LineCap::Round),
                 );
 
-                // Text
                 frame.fill_text(Text {
                     content: format!("{:.0}%", self.percentage),
                     position: center + Vector::new(0.0, -5.0),
@@ -122,6 +110,16 @@ impl<'a, Message> canvas::Program<Message> for GaugeWidget<'a> {
                     align_y: iced::alignment::Vertical::Center,
                     ..Default::default()
                 });
+            } else {
+                frame.fill_text(Text {
+                    content: "CLOSED".to_string(),
+                    position: center,
+                    color: style::TEXT_MUTED,
+                    size: 32.0.into(),
+                    align_x: iced::alignment::Horizontal::Center.into(),
+                    align_y: iced::alignment::Vertical::Center,
+                    ..Default::default()
+                });
             }
         });
         vec![geo]
@@ -129,14 +127,15 @@ impl<'a, Message> canvas::Program<Message> for GaugeWidget<'a> {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)] 
+#[allow(clippy::panic)] 
+#[allow(clippy::uninlined_format_args)] 
 mod tests {
     use super::*;
 
-    // Default thresholds for testing (matching typical config values)
     const LOW: f64 = 40.0;
     const HIGH: f64 = 75.0;
 
-    // ==================== get_status_text Tests ====================
 
     #[test]
     fn test_status_text_below_low_threshold() {
@@ -147,7 +146,6 @@ mod tests {
 
     #[test]
     fn test_status_text_at_low_threshold() {
-        // At exactly the threshold, should be "Moderate" (not below)
         assert_eq!(get_status_text(40.0, LOW, HIGH), "Moderate");
     }
 
@@ -160,7 +158,6 @@ mod tests {
 
     #[test]
     fn test_status_text_at_high_threshold() {
-        // At exactly the high threshold, should be "Crowded" (not below)
         assert_eq!(get_status_text(75.0, LOW, HIGH), "Crowded");
     }
 
@@ -173,13 +170,11 @@ mod tests {
 
     #[test]
     fn test_status_text_with_custom_thresholds() {
-        // Test with different threshold values
         assert_eq!(get_status_text(25.0, 30.0, 60.0), "Not Busy");
         assert_eq!(get_status_text(45.0, 30.0, 60.0), "Moderate");
         assert_eq!(get_status_text(80.0, 30.0, 60.0), "Crowded");
     }
 
-    // ==================== get_status_color Tests ====================
 
     #[test]
     fn test_color_below_low_threshold() {
@@ -213,7 +208,6 @@ mod tests {
 
     #[test]
     fn test_color_consistency_with_status_text() {
-        // Ensure color and text are consistent
         let test_values = [0.0, 20.0, 39.9, 40.0, 50.0, 74.9, 75.0, 100.0];
 
         for &val in &test_values {

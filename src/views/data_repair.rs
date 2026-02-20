@@ -27,6 +27,13 @@ pub struct DataRepairProps<'a> {
 }
 
 /// Render the data repair view
+#[allow(
+    clippy::too_many_lines,
+    clippy::needless_pass_by_value,
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss
+)]
 pub fn view(props: DataRepairProps<'_>) -> Element<'_, Message> {
     let preset_btn = |label: &str, preset: RepairPreset| {
         button(text(label.to_string()).size(12))

@@ -1,8 +1,12 @@
 //! Integration tests for database operations.
 //!
-//! Each test creates and drops its own isolated PostgreSQL database via
+//! Each test creates and drops its own isolated `PostgreSQL` database via
 //! `common::TestDatabase`, ensuring tests never read or write production data
 //! and run deterministically regardless of pre-existing state.
+#![allow(clippy::unwrap_used)] 
+#![allow(clippy::expect_used)] 
+#![allow(clippy::float_cmp)] 
+#![allow(clippy::cast_precision_loss)] 
 
 mod common;
 
@@ -12,8 +16,6 @@ use hardy_monitor::MockClock;
 /// Test that database creation and migration complete without error.
 #[tokio::test]
 async fn test_database_creation() {
-    // `TestDatabase::new()` panics on failure, so reaching the cleanup line
-    // is the assertion.
     let tdb = common::TestDatabase::new().await;
     tdb.cleanup().await;
 }
@@ -53,7 +55,11 @@ async fn test_insert_and_get_history() {
         .await
         .expect("get_history should succeed");
 
-    assert_eq!(history.len(), 5, "clean DB should contain exactly 5 records");
+    assert_eq!(
+        history.len(),
+        5,
+        "clean DB should contain exactly 5 records"
+    );
 
     tdb.cleanup().await;
 }
@@ -101,7 +107,6 @@ async fn test_get_history_range() {
 async fn test_get_averages_range() {
     let tdb = common::TestDatabase::new().await;
 
-    // Mid-hour anchor keeps all three records inside the same hourly bucket.
     let base_time = Utc.with_ymd_and_hms(2024, 6, 15, 10, 30, 0).unwrap();
 
     for i in 0..3i64 {
@@ -116,7 +121,10 @@ async fn test_get_averages_range() {
 
     let averages = tdb
         .db
-        .get_averages_range(base_time - Duration::hours(1), base_time + Duration::hours(1))
+        .get_averages_range(
+            base_time - Duration::hours(1),
+            base_time + Duration::hours(1),
+        )
         .await
         .expect("averages query should succeed");
 
@@ -189,7 +197,6 @@ async fn test_occupancy_log_datetime_parsing() {
         .expect("get_history should succeed");
 
     assert_eq!(history.len(), 1, "clean DB should contain exactly 1 record");
-    // timestamp is now DateTime<Utc> directly — just verify it round-trips via RFC3339
     let stored = history[0].timestamp;
     assert!(
         DateTime::parse_from_rfc3339(&stored.to_rfc3339()).is_ok(),
@@ -236,12 +243,16 @@ async fn test_csv_export_with_mock_clock() {
         "filename should embed the mock clock timestamp; got: {filename}"
     );
     assert!(filename.starts_with("hardy_monitor_export_"));
-    assert!(filename.ends_with(".csv"));
+    assert!(
+        std::path::Path::new(filename)
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("csv")),
+        "filename should end with .csv (case-insensitive)"
+    );
 
     let content = std::fs::read_to_string(&csv_path).expect("should be able to read the CSV");
     let lines: Vec<&str> = content.lines().collect();
 
-    // Clean DB has exactly 3 records → 1 header + 3 data rows = 4 lines.
     assert_eq!(
         lines.len(),
         4,

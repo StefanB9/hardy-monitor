@@ -1,9 +1,11 @@
 use std::time::Duration;
 
-use anyhow::{Context, Result};
 use serde::Deserialize;
 
-use crate::config::NetworkConfig;
+use crate::{
+    config::NetworkConfig,
+    error::{AppError, NetworkErrorKind},
+};
 
 /// Response structure from the gym API.
 /// Fields preserved for API contract completeness even if not currently used.
@@ -20,15 +22,17 @@ pub struct GymResponse {
 impl GymResponse {
     /// Parse the numeric occupancy value from the response.
     /// Uses the `numval` field which has a dot separator.
-    pub fn occupancy_percentage(&self) -> Result<f64> {
-        self.num_val
-            .parse::<f64>()
-            .context("Failed to parse occupancy percentage from numval")
+    pub fn occupancy_percentage(&self) -> Result<f64, AppError> {
+        self.num_val.parse::<f64>().map_err(|e| {
+            AppError::Validation(format!(
+                "Failed to parse occupancy percentage from numval: {e}"
+            ))
+        })
     }
 }
 
 /// API client for fetching gym data.
-#[derive(Clone, Debug)] // Added Debug
+#[derive(Clone, Debug)] 
 pub struct GymApiClient {
     client: reqwest::Client,
     url: String,
@@ -36,44 +40,54 @@ pub struct GymApiClient {
 
 impl GymApiClient {
     /// Create a new API client with configurable timeouts.
-    pub fn new(url: String, network_config: &NetworkConfig) -> Result<Self> {
+    #[tracing::instrument(skip_all)]
+    pub fn new(url: String, network_config: &NetworkConfig) -> Result<Self, AppError> {
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(network_config.request_timeout_secs))
             .connect_timeout(Duration::from_secs(network_config.connect_timeout_secs))
             .build()
-            .context("Failed to create HTTP client")?;
+            .map_err(|e| AppError::Network {
+                message: format!("Failed to create HTTP client: {e}"),
+                kind: NetworkErrorKind::Unknown,
+            })?;
 
         Ok(Self { client, url })
     }
 
     /// Fetch the current gym occupancy data.
-    pub async fn fetch_occupancy(&self) -> Result<GymResponse> {
+    #[tracing::instrument(skip_all, fields(url = %self.url, http.status_code = tracing::field::Empty))]
+    pub async fn fetch_occupancy(&self) -> Result<GymResponse, AppError> {
         let response = self
             .client
             .get(&self.url)
             .send()
             .await
-            .context("Failed to send request to gym API")?;
+            .map_err(AppError::from_reqwest)?;
 
         let status = response.status();
+        tracing::Span::current().record("http.status_code", status.as_u16());
         if !status.is_success() {
-            anyhow::bail!("API returned error status: {}", status);
+            return Err(AppError::api_error(
+                status.as_u16(),
+                format!("API returned error status: {status}"),
+            ));
         }
 
         let data = response
             .json::<GymResponse>()
             .await
-            .context("Failed to parse gym API response")?;
+            .map_err(AppError::from_reqwest)?;
 
         Ok(data)
     }
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)] 
+#[allow(clippy::float_cmp)] 
 mod tests {
     use super::*;
 
-    // ==================== GymResponse Parsing Tests ====================
 
     fn make_response(num_val: &str) -> GymResponse {
         GymResponse {
@@ -118,7 +132,6 @@ mod tests {
 
     #[test]
     fn test_occupancy_percentage_over_hundred() {
-        // API might return >100% in edge cases
         let response = make_response("120.5");
         let result = response.occupancy_percentage();
         assert!(result.is_ok());
@@ -148,7 +161,6 @@ mod tests {
 
     #[test]
     fn test_occupancy_percentage_negative() {
-        // Edge case: negative values
         let response = make_response("-5.0");
         let result = response.occupancy_percentage();
         assert!(result.is_ok());
@@ -163,7 +175,6 @@ mod tests {
         assert_eq!(result.unwrap(), 100.0);
     }
 
-    // ==================== GymApiClient Construction Tests ====================
 
     #[test]
     fn test_api_client_creation() {

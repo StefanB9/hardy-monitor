@@ -1,9 +1,11 @@
 use std::path::PathBuf;
 
-use anyhow::{bail, Context, Result};
-use tracing::warn;
+use anyhow::{Context, Result};
 use config::{Config, Environment, File};
 use serde::Deserialize;
+use tracing::warn;
+
+use crate::error::AppError;
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct AppConfig {
@@ -16,6 +18,8 @@ pub struct AppConfig {
     pub thresholds: ThresholdsConfig,
     pub analytics: AnalyticsConfig,
     pub schedule: ScheduleConfig,
+    #[cfg(feature = "gui")]
+    pub ml: crate::ml::MlConfig,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -164,76 +168,81 @@ impl AppConfig {
     /// first constraint violation.
     ///
     /// Called automatically by [`load`](Self::load) after deserialisation.
-    pub fn validate(&self) -> Result<()> {
+    pub fn validate(&self) -> Result<(), AppError> {
         for (label, hours) in [
             ("schedule.weekday", self.schedule.weekday),
             ("schedule.weekend", self.schedule.weekend),
         ] {
             if hours.open_hour > 24 {
-                bail!("{label}.open_hour must be <= 24, got {}", hours.open_hour);
+                return Err(AppError::Config(format!(
+                    "{label}.open_hour must be <= 24, got {}",
+                    hours.open_hour
+                )));
             }
             if hours.close_hour > 24 {
-                bail!("{label}.close_hour must be <= 24, got {}", hours.close_hour);
+                return Err(AppError::Config(format!(
+                    "{label}.close_hour must be <= 24, got {}",
+                    hours.close_hour
+                )));
             }
             if hours.open_hour >= hours.close_hour {
-                bail!(
+                return Err(AppError::Config(format!(
                     "{label}.open_hour ({}) must be < close_hour ({})",
-                    hours.open_hour,
-                    hours.close_hour
-                );
+                    hours.open_hour, hours.close_hour
+                )));
             }
         }
 
         if !(0.0..=100.0).contains(&self.thresholds.low_occupancy_percent) {
-            bail!(
+            return Err(AppError::Config(format!(
                 "thresholds.low_occupancy_percent must be in [0.0, 100.0], got {}",
                 self.thresholds.low_occupancy_percent
-            );
+            )));
         }
         if !(0.0..=100.0).contains(&self.thresholds.high_occupancy_percent) {
-            bail!(
+            return Err(AppError::Config(format!(
                 "thresholds.high_occupancy_percent must be in [0.0, 100.0], got {}",
                 self.thresholds.high_occupancy_percent
-            );
+            )));
         }
         if self.thresholds.low_occupancy_percent >= self.thresholds.high_occupancy_percent {
-            bail!(
+            return Err(AppError::Config(format!(
                 "thresholds.low_occupancy_percent ({}) must be < high_occupancy_percent ({})",
-                self.thresholds.low_occupancy_percent,
-                self.thresholds.high_occupancy_percent
-            );
+                self.thresholds.low_occupancy_percent, self.thresholds.high_occupancy_percent
+            )));
         }
 
         if !(0.0..=100.0).contains(&self.notifications.threshold_percent) {
-            bail!(
+            return Err(AppError::Config(format!(
                 "notifications.threshold_percent must be in [0.0, 100.0], got {}",
                 self.notifications.threshold_percent
-            );
+            )));
         }
 
         if self.refresh.data_fetch_interval_secs == 0 {
-            bail!("refresh.data_fetch_interval_secs must be > 0");
+            return Err(AppError::Config(
+                "refresh.data_fetch_interval_secs must be > 0".to_string(),
+            ));
         }
         if self.refresh.ui_interval_secs == 0 {
-            bail!("refresh.ui_interval_secs must be > 0");
+            return Err(AppError::Config(
+                "refresh.ui_interval_secs must be > 0".to_string(),
+            ));
         }
 
         if self.analytics.prediction_window_days <= 0 {
-            bail!(
+            return Err(AppError::Config(format!(
                 "analytics.prediction_window_days must be > 0, got {}",
                 self.analytics.prediction_window_days
-            );
+            )));
         }
 
         Ok(())
     }
 
     pub fn load() -> Result<Self> {
-        // Load .env file (silently ignore if not present - production uses env vars
-        // directly)
         let _ = dotenvy::dotenv();
 
-        // Read DATABASE_URL from environment (required)
         let database_url = std::env::var("DATABASE_URL")
             .context("DATABASE_URL must be set (via .env file or environment variable)")?;
 
@@ -245,48 +254,43 @@ impl AppConfig {
             .join("hardy-monitor");
 
         let builder = Config::builder()
-            // 1. Load default values
-            // Database (loaded from environment above)
             .set_default("database.url", database_url)?
-            // Gym
             .set_default("gym.api_url", "https://portal.aidoo-online.de/workload?mandant=202300180_fuerstenfeldbruck&stud_nr=3&jsonResponse=1")?
-            // Network
             .set_default("network.request_timeout_secs", 30)?
             .set_default("network.connect_timeout_secs", 10)?
-            // Window
             .set_default("window.title", "Hardy's Gym Monitor")?
             .set_default("window.width", 1200.0)?
             .set_default("window.height", 850.0)?
             .set_default("window.sidebar_width", 250.0)?
-            // Refresh
             .set_default("refresh.ui_interval_secs", 30)?
             .set_default("refresh.data_fetch_interval_secs", 60)?
             .set_default("refresh.tray_poll_interval_ms", 50)?
-            // Notifications
             .set_default("notifications.enabled", false)?
             .set_default("notifications.threshold_percent", 30.0)?
             .set_default("notifications.ntfy_topic", None::<String>)?
             .set_default("notifications.ntfy_server", "https://ntfy.sh")?
             .set_default("notifications.cooldown_secs", 300)?
-            // Thresholds
             .set_default("thresholds.low_occupancy_percent", 40.0)?
             .set_default("thresholds.high_occupancy_percent", 75.0)?
-            // Analytics
             .set_default("analytics.prediction_window_days", 28)?
-            // Schedule
             .set_default("schedule.weekday.open_hour", 6)?
             .set_default("schedule.weekday.close_hour", 23)?
             .set_default("schedule.weekend.open_hour", 9)?
             .set_default("schedule.weekend.close_hour", 21)?
 
-            // 2. Load from local config file (optional; overrides defaults,
-            //    but is itself overridden by the user config dir and HARDY__* env vars)
+            // ML configuration — only meaningful in GUI builds; ignored in daemon
+            .set_default("ml.enabled", true)?
+            .set_default("ml.training_window_days", 56_i64)?
+            .set_default("ml.retrain_interval_hours", 24_i64)?
+            .set_default("ml.prediction_horizon_hours", 6_i64)?
+            .set_default("ml.min_samples_for_training", 500_i64)?
+            .set_default("ml.model_path", None::<String>)?
+            .set_default("ml.fallback_on_error", true)?
+
             .add_source(File::from(PathBuf::from("config.toml")).required(false))
 
-            // 3. Load from user config directory (optional, overrides local)
             .add_source(File::from(config_dir.join("config.toml")).required(false))
 
-            // 4. Load from Environment variables (HARDY_DATABASE__PATH=...)
             .add_source(Environment::with_prefix("HARDY").separator("__"));
 
         let s = builder.build()?;
@@ -297,10 +301,13 @@ impl AppConfig {
 }
 
 #[cfg(test)]
+#[allow(clippy::float_cmp)] 
+#[allow(clippy::unwrap_used)] 
+#[allow(clippy::expect_used)] 
+#[allow(clippy::uninlined_format_args)] 
 mod tests {
     use super::*;
 
-    // ==================== Default Value Tests ====================
 
     #[test]
     fn test_network_config_defaults() {
@@ -355,12 +362,9 @@ mod tests {
         assert_eq!(config.weekend.close_hour, 21);
     }
 
-    // ==================== Config Loading Tests ====================
 
     #[test]
     fn test_config_load_with_defaults() {
-        // This test verifies that config can be loaded with defaults
-        // when no config file exists
         let result = AppConfig::load();
         assert!(result.is_ok());
     }
@@ -377,7 +381,6 @@ mod tests {
         assert!(config.analytics.prediction_window_days > 0);
     }
 
-    // ==================== Struct Field Tests ====================
 
     #[test]
     fn test_schedule_hours_copy() {
@@ -412,15 +415,12 @@ mod tests {
         assert!(debug_str.contains("request_timeout_secs"));
     }
 
-    // ==================== Environment Variable Override Tests ====================
 
     #[test]
     fn test_env_var_overrides_gym_api_url() {
         let env_key = "HARDY__GYM__API_URL";
         let test_url = "https://test.example.com/api";
 
-        // SAFETY: temp_env handles the unsafe environment manipulation and thread
-        // locking
         temp_env::with_var(env_key, Some(test_url), || {
             let config = AppConfig::load().expect("Config should load");
             assert_eq!(
@@ -473,7 +473,6 @@ mod tests {
         );
     }
 
-    // ==================== AppConfig::validate() Tests ====================
 
     /// Construct a fully-valid `AppConfig` using safe defaults for all fields.
     /// Individual tests mutate the one field they want to test.
@@ -492,6 +491,8 @@ mod tests {
             thresholds: ThresholdsConfig::default(),
             analytics: AnalyticsConfig::default(),
             schedule: ScheduleConfig::default(),
+            #[cfg(feature = "gui")]
+            ml: crate::ml::MlConfig::default(),
         }
     }
 
@@ -574,7 +575,6 @@ mod tests {
         assert!(cfg.validate().is_err());
     }
 
-    // ==================== Config Value Validation Tests ====================
 
     #[test]
     fn test_config_default_values_are_reasonable() {

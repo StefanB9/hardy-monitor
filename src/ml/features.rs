@@ -13,32 +13,26 @@ use crate::schedule::{is_bavarian_holiday, GymSchedule};
 /// Features extracted for a single prediction
 #[derive(Debug, Clone, PartialEq)]
 pub struct PredictionFeatures {
-    // Cyclical time encoding (prevents hour 23→0 discontinuity)
     pub hour_sin: f64,
     pub hour_cos: f64,
     pub weekday_sin: f64,
     pub weekday_cos: f64,
 
-    // Historical baselines
     pub historical_avg: f64,
     pub historical_std: f64,
 
-    // Recent momentum
     pub recent_avg_1h: f64,
     pub recent_avg_3h: f64,
     pub recent_trend: f64,
 
-    // Day-level features
     pub day_avg_so_far: f64,
     pub prev_day_avg: f64,
 
-    // Categorical/seasonal
     pub is_weekend: f64,
     pub is_holiday: f64,
     pub week_of_year_sin: f64,
     pub week_of_year_cos: f64,
 
-    // Prediction horizon
     pub hours_ahead: f64,
 }
 
@@ -102,8 +96,8 @@ pub struct SlotStats {
 /// Extracts features from raw occupancy data
 #[derive(Debug, Clone)]
 pub struct FeatureExtractor {
-    /// Historical statistics by (weekday, hour)
-    historical_stats: HashMap<(u32, u32), SlotStats>,
+    /// Historical statistics by (weekday, hour) — both i32 to match DB types
+    historical_stats: HashMap<(i32, i32), SlotStats>,
 }
 
 impl FeatureExtractor {
@@ -118,8 +112,7 @@ impl FeatureExtractor {
     pub fn update_historical_stats(&mut self, baseline: &[HourlyAverage]) {
         self.historical_stats.clear();
 
-        // Group by (weekday, hour) to calculate variance
-        let mut groups: HashMap<(u32, u32), Vec<f64>> = HashMap::new();
+        let mut groups: HashMap<(i32, i32), Vec<f64>> = HashMap::new();
 
         for avg in baseline {
             let key = (avg.weekday, avg.hour);
@@ -146,14 +139,14 @@ impl FeatureExtractor {
     }
 
     /// Get the standard deviation for a specific slot
-    pub fn get_slot_std(&self, weekday: u32, hour: u32) -> Option<f64> {
+    pub fn get_slot_std(&self, weekday: i32, hour: i32) -> Option<f64> {
         self.historical_stats
             .get(&(weekday, hour))
             .map(|s| s.std_dev)
     }
 
     /// Get statistics for a specific slot
-    pub fn get_slot_stats(&self, weekday: u32, hour: u32) -> Option<&SlotStats> {
+    pub fn get_slot_stats(&self, weekday: i32, hour: i32) -> Option<&SlotStats> {
         self.historical_stats.get(&(weekday, hour))
     }
 
@@ -167,36 +160,31 @@ impl FeatureExtractor {
         _schedule: &GymSchedule,
     ) -> PredictionFeatures {
         let local_time = target_time.with_timezone(&Local);
-        let hour = local_time.hour();
-        let weekday = local_time.weekday().num_days_from_monday();
+        // Cast to i32 to match HourlyAverage DB types while keeping chrono u32 return values safe
+        let hour = local_time.hour() as i32;
+        let weekday = local_time.weekday().num_days_from_monday() as i32;
         let week_of_year = local_time.iso_week().week();
 
-        // Cyclical encoding for time
         let (hour_sin, hour_cos) = cyclical_encode(hour as f64, 24.0);
         let (weekday_sin, weekday_cos) = cyclical_encode(weekday as f64, 7.0);
         let (week_of_year_sin, week_of_year_cos) = cyclical_encode(week_of_year as f64, 52.0);
 
-        // Historical baseline for this slot
         let (historical_avg, historical_std) = self
             .historical_stats
             .get(&(weekday, hour))
             .map(|s| (s.mean, s.std_dev))
             .or_else(|| {
-                // Fallback to baseline if stats not computed
                 baseline
                     .iter()
                     .find(|b| b.weekday == weekday && b.hour == hour)
-                    .map(|b| (b.avg_percentage, 10.0)) // Default std
+                    .map(|b| (b.avg_percentage, 10.0))
             })
-            .unwrap_or((50.0, 15.0)); // Global default
+            .unwrap_or((50.0, 15.0));
 
-        // Recent momentum features
         let (recent_avg_1h, recent_avg_3h, recent_trend) = self.extract_momentum(recent_data);
 
-        // Day-level features
         let (day_avg_so_far, prev_day_avg) = self.extract_day_features(recent_data, &local_time);
 
-        // Categorical features
         let is_weekend = if weekday >= 5 { 1.0 } else { 0.0 };
         let is_holiday = if is_bavarian_holiday(local_time.date_naive()) {
             1.0
@@ -234,7 +222,6 @@ impl FeatureExtractor {
         let one_hour_ago = now - chrono::Duration::hours(1);
         let three_hours_ago = now - chrono::Duration::hours(3);
 
-        // Recent 1-hour average
         let recent_1h: Vec<f64> = recent_data
             .iter()
             .filter(|(t, _)| *t >= one_hour_ago)
@@ -246,7 +233,6 @@ impl FeatureExtractor {
             recent_1h.iter().sum::<f64>() / recent_1h.len() as f64
         };
 
-        // Recent 3-hour average
         let recent_3h: Vec<f64> = recent_data
             .iter()
             .filter(|(t, _)| *t >= three_hours_ago)
@@ -258,7 +244,6 @@ impl FeatureExtractor {
             recent_3h.iter().sum::<f64>() / recent_3h.len() as f64
         };
 
-        // Trend: simple linear regression slope over last 3 hours
         let recent_trend = self.calculate_trend(&recent_3h);
 
         (recent_avg_1h, recent_avg_3h, recent_trend)
@@ -286,7 +271,6 @@ impl FeatureExtractor {
         if denominator.abs() < f64::EPSILON {
             0.0
         } else {
-            // Normalize to percentage change per hour (assuming ~1 sample per minute)
             (numerator / denominator) * 60.0
         }
     }
@@ -350,29 +334,24 @@ mod tests {
 
     #[test]
     fn test_cyclical_encoding_continuity() {
-        // Hour 23 and hour 0 should be close in encoded space
         let (sin_23, cos_23) = cyclical_encode(23.0, 24.0);
         let (sin_0, cos_0) = cyclical_encode(0.0, 24.0);
 
         let distance = ((sin_23 - sin_0).powi(2) + (cos_23 - cos_0).powi(2)).sqrt();
 
-        // Should be much smaller than the raw difference of 23
         assert!(distance < 0.5, "Distance was {}", distance);
     }
 
     #[test]
     fn test_cyclical_encoding_opposite() {
-        // Hour 0 and hour 12 should be opposite
         let (_sin_0, cos_0) = cyclical_encode(0.0, 24.0);
         let (_sin_12, cos_12) = cyclical_encode(12.0, 24.0);
 
-        // cos should be opposite
         assert_relative_eq!(cos_0, -cos_12, epsilon = 1e-10);
     }
 
     #[test]
     fn test_cyclical_encoding_quarter() {
-        // Hour 6 should be at 90 degrees
         let (sin_6, cos_6) = cyclical_encode(6.0, 24.0);
 
         assert_relative_eq!(sin_6, 1.0, epsilon = 1e-10);
@@ -492,9 +471,8 @@ mod tests {
 
     #[test]
     fn test_weekend_detection() {
-        // Saturday is weekday 5 (Mon=0, Sat=5, Sun=6)
-        assert!(5 >= 5); // Saturday
-        assert!(6 >= 5); // Sunday
-        assert!(!(4 >= 5)); // Friday
+        assert!(5 >= 5); 
+        assert!(6 >= 5); 
+        assert!(!(4 >= 5)); 
     }
 }

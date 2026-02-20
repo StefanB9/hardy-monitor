@@ -14,7 +14,7 @@ use super::persistence::{ModelSummary, PersistedModel, SerializedSlotStats};
 use super::MlConfig;
 
 /// Result of a training run
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct TrainingResult {
     /// The trained model
     pub model: TrainedModel,
@@ -52,20 +52,16 @@ impl TrainingDataPreparer {
         let mut features = Vec::with_capacity(logs.len());
         let mut targets = Vec::with_capacity(logs.len());
 
-        // Build a sliding window of recent data for momentum features
         let mut recent_window: VecDeque<(DateTime<Utc>, f64)> = VecDeque::with_capacity(180);
 
         for log in logs {
             let timestamp = log.timestamp;
 
-            // Update recent window
             while recent_window.len() >= 180 {
                 recent_window.pop_front();
             }
             recent_window.push_back((timestamp, log.percentage));
 
-            // Extract features for this record
-            // We use hours_ahead=0 for training data (actual observation)
             let feature = feature_extractor.extract(timestamp, 0, &recent_window, baseline, schedule);
 
             features.push(feature);
@@ -81,17 +77,15 @@ impl TrainingDataPreparer {
 }
 
 /// Train a model using the complete pipeline
-pub async fn train_model<C: Clock>(
+pub async fn train_model(
     db: &Database,
-    clock: &C,
+    clock: &dyn Clock,
     schedule: &GymSchedule,
     config: &MlConfig,
 ) -> Result<TrainingResult, TrainingError> {
-    // Calculate date range for training data
     let end = clock.now_utc();
     let start = end - Duration::days(config.training_window_days);
 
-    // Fetch training data
     let logs = db
         .get_history_range(start, end)
         .await
@@ -101,33 +95,35 @@ pub async fn train_model<C: Clock>(
         return Err(TrainingError::InsufficientData(logs.len()));
     }
 
-    // Fetch baseline averages
     let baseline = db
         .get_averages_range(start, end)
         .await
         .map_err(|e| TrainingError::FitError(format!("Database error: {}", e)))?;
 
-    // Prepare training data
     let preparer = TrainingDataPreparer::new(config.clone());
     let (features, targets) = preparer.prepare(&logs, &baseline, schedule)?;
 
-    // Train model with validation
-    let builder = ModelBuilder::new().max_depth(10).min_samples_split(5).min_samples_leaf(2);
+    let builder = ModelBuilder::new()
+        .max_depth(10)
+        .min_samples_split(5)
+        .min_samples_leaf(2)
+        // Ridge λ = 1e-3: prevents "Matrix is non-invertible" when training samples
+        // all share hours_ahead = 0 (zero-variance column → singular Gram matrix).
+        .ridge_lambda(1e-3);
 
     let model = builder.train_with_validation(&features, &targets, 0.2)?;
 
-    // Create feature extractor with stats
     let mut feature_extractor = FeatureExtractor::new();
     feature_extractor.update_historical_stats(&baseline);
 
-    // Create persisted model metadata
     let slot_stats: Vec<SerializedSlotStats> = baseline
         .iter()
         .map(|avg| SerializedSlotStats {
-            weekday: avg.weekday,
-            hour: avg.hour,
+            // HourlyAverage uses i32 (DB type); SerializedSlotStats uses u32 — safe cast (0-6, 0-23)
+            weekday: avg.weekday as u32,
+            hour: avg.hour as u32,
             mean: avg.avg_percentage,
-            std_dev: 10.0, // Default, could be computed
+            std_dev: 10.0,
             sample_count: avg.sample_count,
         })
         .collect();
@@ -163,25 +159,28 @@ pub fn train_model_sync(
         return Err(TrainingError::InsufficientData(logs.len()));
     }
 
-    // Prepare training data
     let preparer = TrainingDataPreparer::new(config.clone());
     let (features, targets) = preparer.prepare(logs, baseline, schedule)?;
 
-    // Train model
-    let builder = ModelBuilder::new().max_depth(10).min_samples_split(5).min_samples_leaf(2);
+    let builder = ModelBuilder::new()
+        .max_depth(10)
+        .min_samples_split(5)
+        .min_samples_leaf(2)
+        // Ridge λ = 1e-3: prevents "Matrix is non-invertible" when training samples
+        // all share hours_ahead = 0 (zero-variance column → singular Gram matrix).
+        .ridge_lambda(1e-3);
 
     let model = builder.train_with_validation(&features, &targets, 0.2)?;
 
-    // Create feature extractor
     let mut feature_extractor = FeatureExtractor::new();
     feature_extractor.update_historical_stats(baseline);
 
-    // Create persisted model metadata
     let slot_stats: Vec<SerializedSlotStats> = baseline
         .iter()
         .map(|avg| SerializedSlotStats {
-            weekday: avg.weekday,
-            hour: avg.hour,
+            // HourlyAverage uses i32 (DB type); SerializedSlotStats uses u32 — safe cast (0-6, 0-23)
+            weekday: avg.weekday as u32,
+            hour: avg.hour as u32,
             mean: avg.avg_percentage,
             std_dev: 10.0,
             sample_count: avg.sample_count,
@@ -218,15 +217,13 @@ mod tests {
 
         (0..n)
             .map(|i| {
-                // Space records across hours to get varied features
                 let timestamp = base_time + Duration::hours(i as i64);
                 let hour = (6 + i) % 24;
                 let weekday = ((i / 24) % 7) as f64;
-                // Create realistic varying percentages based on time
                 let percentage = 30.0 + (hour as f64 * 2.0) + (weekday * 3.0) + ((i % 10) as f64);
                 OccupancyLog {
                     id: i as i64,
-                    timestamp: timestamp.to_rfc3339(),
+                    timestamp,
                     percentage: percentage.min(95.0),
                 }
             })
@@ -256,7 +253,7 @@ mod tests {
         };
 
         let preparer = TrainingDataPreparer::new(config);
-        let logs = create_test_logs(50); // Less than minimum
+        let logs = create_test_logs(50); 
         let baseline = create_test_baseline();
         let schedule = GymSchedule::default();
 
@@ -293,24 +290,18 @@ mod tests {
             ..Default::default()
         };
 
-        // Create logs with more varied data spanning multiple weeks
         let logs = create_test_logs(1000);
         let baseline = create_test_baseline();
         let schedule = GymSchedule::default();
 
         let result = train_model_sync(&logs, &baseline, &schedule, &config);
 
-        // Note: With synthetic test data, the matrix may become singular due to
-        // perfect collinearity in cyclical features. In real-world usage with
-        // actual gym occupancy data, this is unlikely to occur.
         match result {
             Ok(training_result) => {
                 assert!(training_result.model.training_samples >= 100);
                 assert!(training_result.persisted.training_mse >= 0.0);
             }
             Err(TrainingError::FitError(msg)) if msg.contains("non-invertible") => {
-                // This can happen with synthetic data due to feature collinearity
-                // The test verifies the pipeline runs, even if the matrix is singular
                 eprintln!("Note: Training failed due to matrix singularity (expected with synthetic data)");
             }
             Err(e) => panic!("Unexpected training error: {:?}", e),

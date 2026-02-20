@@ -2,6 +2,9 @@
 //!
 //! These tests use wiremock to simulate the gym API responses
 //! and verify correct parsing and error handling.
+#![allow(clippy::unwrap_used)] 
+#![allow(clippy::expect_used)] 
+#![allow(clippy::float_cmp)] 
 
 use hardy_monitor::{api::GymApiClient, config::NetworkConfig};
 use wiremock::{
@@ -14,7 +17,6 @@ use wiremock::{
 async fn test_fetch_occupancy_success() {
     let mock_server = MockServer::start().await;
 
-    // Setup mock response matching the real API structure
     let body = r#"{
         "gym": 1,
         "name": "Test Gym",
@@ -182,7 +184,6 @@ async fn test_fetch_occupancy_invalid_json() {
 async fn test_fetch_occupancy_missing_fields() {
     let mock_server = MockServer::start().await;
 
-    // Missing 'numval' field
     let body = r#"{
         "gym": 1,
         "name": "Test"
@@ -210,7 +211,6 @@ async fn test_fetch_occupancy_missing_fields() {
 async fn test_fetch_occupancy_timeout() {
     let mock_server = MockServer::start().await;
 
-    // Respond with a 2 second delay
     Mock::given(method("GET"))
         .and(path("/"))
         .respond_with(
@@ -221,7 +221,6 @@ async fn test_fetch_occupancy_timeout() {
         .mount(&mock_server)
         .await;
 
-    // Set timeout to 1 second
     let config = NetworkConfig {
         request_timeout_secs: 1,
         connect_timeout_secs: 1,
@@ -243,7 +242,7 @@ async fn test_api_client_clone_and_concurrent_use() {
     Mock::given(method("GET"))
         .and(path("/"))
         .respond_with(ResponseTemplate::new(200).set_body_string(body))
-        .expect(3) // Expect 3 requests
+        .expect(3) 
         .mount(&mock_server)
         .await;
 
@@ -254,7 +253,6 @@ async fn test_api_client_clone_and_concurrent_use() {
 
     let client = GymApiClient::new(mock_server.uri(), &config).unwrap();
 
-    // Clone and use concurrently
     let client1 = client.clone();
     let client2 = client.clone();
 
@@ -269,7 +267,6 @@ async fn test_api_client_clone_and_concurrent_use() {
     assert!(r3.is_ok());
 }
 
-// ==================== Edge Case Tests ====================
 
 /// Test API response with very large percentage value.
 #[tokio::test]
@@ -297,7 +294,6 @@ async fn test_fetch_occupancy_very_large_percentage() {
     let client = GymApiClient::new(mock_server.uri(), &config).unwrap();
     let response = client.fetch_occupancy().await.unwrap();
 
-    // Should parse the value even if it's over 100%
     assert_eq!(response.occupancy_percentage().unwrap(), 9999.99);
 }
 
@@ -327,7 +323,6 @@ async fn test_fetch_occupancy_negative_percentage() {
     let client = GymApiClient::new(mock_server.uri(), &config).unwrap();
     let response = client.fetch_occupancy().await.unwrap();
 
-    // Should parse negative value
     assert_eq!(response.occupancy_percentage().unwrap(), -10.5);
 }
 
@@ -387,7 +382,6 @@ async fn test_fetch_occupancy_decimal_as_integer() {
     let client = GymApiClient::new(mock_server.uri(), &config).unwrap();
     let response = client.fetch_occupancy().await.unwrap();
 
-    // numval is "45", so should parse as 45.0
     assert_eq!(response.occupancy_percentage().unwrap(), 45.0);
 }
 
@@ -448,7 +442,6 @@ async fn test_fetch_occupancy_whitespace_numval_fails() {
     let client = GymApiClient::new(mock_server.uri(), &config).unwrap();
     let response = client.fetch_occupancy().await.unwrap();
 
-    // Whitespace in numval causes parse failure
     let result = response.occupancy_percentage();
     assert!(
         result.is_err(),
