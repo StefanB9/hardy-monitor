@@ -7,9 +7,6 @@ use crate::{
     error::{AppError, NetworkErrorKind},
 };
 
-/// Response structure from the gym API.
-/// Fields preserved for API contract completeness even if not currently used.
-#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 pub struct GymResponse {
     pub gym: i32,
@@ -20,8 +17,6 @@ pub struct GymResponse {
 }
 
 impl GymResponse {
-    /// Parse the numeric occupancy value from the response.
-    /// Uses the `numval` field which has a dot separator.
     pub fn occupancy_percentage(&self) -> Result<f64, AppError> {
         self.num_val.parse::<f64>().map_err(|e| {
             AppError::Validation(format!(
@@ -31,15 +26,13 @@ impl GymResponse {
     }
 }
 
-/// API client for fetching gym data.
-#[derive(Clone, Debug)] 
+#[derive(Clone, Debug)]
 pub struct GymApiClient {
     client: reqwest::Client,
     url: String,
 }
 
 impl GymApiClient {
-    /// Create a new API client with configurable timeouts.
     #[tracing::instrument(skip_all)]
     pub fn new(url: String, network_config: &NetworkConfig) -> Result<Self, AppError> {
         let client = reqwest::Client::builder()
@@ -54,7 +47,6 @@ impl GymApiClient {
         Ok(Self { client, url })
     }
 
-    /// Fetch the current gym occupancy data.
     #[tracing::instrument(skip_all, fields(url = %self.url, http.status_code = tracing::field::Empty))]
     pub async fn fetch_occupancy(&self) -> Result<GymResponse, AppError> {
         let response = self
@@ -83,11 +75,8 @@ impl GymApiClient {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)] 
-#[allow(clippy::float_cmp)] 
 mod tests {
     use super::*;
-
 
     fn make_response(num_val: &str) -> GymResponse {
         GymResponse {
@@ -174,7 +163,6 @@ mod tests {
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), 100.0);
     }
-
 
     #[test]
     fn test_api_client_creation() {

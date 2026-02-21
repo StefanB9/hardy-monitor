@@ -1,11 +1,5 @@
-//! Structured Error Types for Hardy Monitor
-//!
-//! This module provides type-safe error handling with proper error chains
-//! and recovery information.
-
 use thiserror::Error;
 
-/// Primary application error type with structured variants
 #[derive(Error, Debug, Clone)]
 pub enum AppError {
     #[error("Network error: {message}")]
@@ -37,7 +31,6 @@ pub enum AppError {
     MlTraining(String),
 }
 
-/// Network-specific error kinds for better error handling
 #[derive(Error, Debug, Clone, PartialEq, Eq)]
 pub enum NetworkErrorKind {
     #[error("Connection timeout")]
@@ -52,7 +45,6 @@ pub enum NetworkErrorKind {
     Unknown,
 }
 
-/// Database-specific error types
 #[derive(Error, Debug, Clone)]
 pub enum DatabaseError {
     #[error("Query failed ({query_context}): {message}")]
@@ -75,7 +67,6 @@ pub enum DatabaseError {
 }
 
 impl AppError {
-    /// Returns true if this error is likely transient and retrying may succeed
     pub fn is_retryable(&self) -> bool {
         match self {
             AppError::Network { kind, .. } => matches!(
@@ -89,7 +80,6 @@ impl AppError {
         }
     }
 
-    /// Create a database error from sqlx error with context
     pub fn from_sqlx(err: &sqlx::Error, context: &str) -> Self {
         let db_error = match err {
             sqlx::Error::PoolTimedOut => DatabaseError::PoolExhausted,
@@ -115,8 +105,6 @@ impl AppError {
         AppError::Database(db_error)
     }
 
-    /// Create a database error from anyhow error with context
-    #[allow(clippy::needless_pass_by_value)] 
     pub fn from_anyhow_db(err: anyhow::Error, context: &str) -> Self {
         AppError::Database(DatabaseError::QueryFailed {
             query_context: context.to_string(),
@@ -124,8 +112,6 @@ impl AppError {
         })
     }
 
-    /// Create a network error from reqwest error
-    #[allow(clippy::needless_pass_by_value)] 
     pub fn from_reqwest(err: reqwest::Error) -> Self {
         let kind = if err.is_timeout() {
             NetworkErrorKind::Timeout
@@ -141,7 +127,6 @@ impl AppError {
         }
     }
 
-    /// Create an API error with status code
     pub fn api_error(status_code: u16, message: impl Into<String>) -> Self {
         AppError::Api {
             status_code,
@@ -149,17 +134,14 @@ impl AppError {
         }
     }
 
-    /// Create a validation error
     pub fn validation(message: impl Into<String>) -> Self {
         AppError::Validation(message.into())
     }
 
-    /// Create an IO error
     pub fn io(message: impl Into<String>) -> Self {
         AppError::Io(message.into())
     }
 
-    /// Get error category for logging/metrics
     pub fn category(&self) -> &'static str {
         match self {
             AppError::Network { .. } => "network",
@@ -176,8 +158,6 @@ impl AppError {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)] 
-#[allow(clippy::panic)] 
 mod tests {
     use super::*;
 

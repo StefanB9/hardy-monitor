@@ -1,7 +1,3 @@
-//! Weekly Pattern View
-//!
-//! Heatmap visualization showing occupancy patterns by weekday and hour.
-
 use hardy_monitor::{db::HourlyAverage, style, widgets::heatmap::HeatmapWidget};
 use iced::{
     Alignment, Border, Color, Element, Length, Theme,
@@ -13,7 +9,6 @@ use crate::{
     views::components::{card_container, primary_btn_style, secondary_btn_style},
 };
 
-/// Props required for weekly pattern rendering
 pub struct WeeklyPatternProps<'a> {
     pub analytics_data: &'a [HourlyAverage],
     pub analytics_range: AnalyticsRange,
@@ -21,8 +16,6 @@ pub struct WeeklyPatternProps<'a> {
     pub heatmap_tooltip_cache: &'a Cache,
 }
 
-/// Render the weekly pattern view
-#[allow(clippy::needless_pass_by_value)]
 pub fn view(props: WeeklyPatternProps<'_>) -> Element<'_, Message> {
     let range_btn = |label: &str, range: AnalyticsRange| {
         let active = props.analytics_range == range;

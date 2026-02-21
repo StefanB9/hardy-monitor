@@ -7,7 +7,6 @@ use chrono::{
 
 use crate::{db::HourlyAverage, schedule::GymSchedule, traits::Clock};
 
-/// Full weekday names (0 = Monday, 6 = Sunday).
 const DAY_NAMES_LONG: [&str; 7] = [
     "Monday",
     "Tuesday",
@@ -18,36 +17,24 @@ const DAY_NAMES_LONG: [&str; 7] = [
     "Sunday",
 ];
 
-/// Abbreviated weekday names (0 = Monday, 6 = Sunday).
 const DAY_NAMES_SHORT: [&str; 7] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
-
-/// Mode for comparing time periods.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ComparisonMode {
-    /// Compare current week to previous week
     WeekOverWeek,
-    /// Compare current week to same week last month (4 weeks ago)
     MonthOverMonth,
-    /// Compare two custom date ranges
     CustomRange,
 }
 
-/// Direction of a trend.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TrendDirection {
-    /// Occupancy is increasing
     Increasing,
-    /// Occupancy is decreasing
     Decreasing,
-    /// Occupancy is relatively stable (within threshold)
     Stable,
-    /// Not enough data to determine trend
     Insufficient,
 }
 
 impl TrendDirection {
-    /// Returns a human-readable description of the trend.
     pub fn description(&self) -> &'static str {
         match self {
             TrendDirection::Increasing => "getting busier",
@@ -57,7 +44,6 @@ impl TrendDirection {
         }
     }
 
-    /// Returns an emoji representation of the trend.
     pub fn emoji(&self) -> &'static str {
         match self {
             TrendDirection::Increasing => "📈",
@@ -68,29 +54,19 @@ impl TrendDirection {
     }
 }
 
-/// Comparison of occupancy for a specific hour between two periods.
 #[derive(Debug, Clone)]
 pub struct HourlyComparison {
-    /// Day of week (0=Monday, 6=Sunday)
     pub weekday: i32,
-    /// Hour of day (0-23)
     pub hour: i32,
-    /// Average percentage in the baseline/previous period
     pub baseline_avg: f64,
-    /// Average percentage in the current/comparison period
     pub current_avg: f64,
-    /// Absolute change (current - baseline)
     pub absolute_change: f64,
-    /// Percentage change relative to baseline
     pub percent_change: f64,
-    /// Sample count in baseline period
     pub baseline_samples: i64,
-    /// Sample count in current period
     pub current_samples: i64,
 }
 
 impl HourlyComparison {
-    /// Returns the trend direction for this hour.
     pub fn trend(&self) -> TrendDirection {
         if self.baseline_samples < 2 || self.current_samples < 2 {
             return TrendDirection::Insufficient;
@@ -105,110 +81,65 @@ impl HourlyComparison {
     }
 }
 
-/// Comparison between two time periods.
 #[derive(Debug, Clone)]
 pub struct PeriodComparison {
-    /// Mode used for this comparison
     pub mode: ComparisonMode,
-    /// Overall average in baseline period
     pub baseline_overall_avg: f64,
-    /// Overall average in current period
     pub current_overall_avg: f64,
-    /// Overall change percentage
     pub overall_change_percent: f64,
-    /// Overall trend direction
     pub overall_trend: TrendDirection,
-    /// Hour-by-hour comparisons
     pub hourly_comparisons: Vec<HourlyComparison>,
-    /// Hours with biggest increases
-    pub biggest_increases: Vec<(i32, i32, f64)>, 
-    /// Hours with biggest decreases
-    pub biggest_decreases: Vec<(i32, i32, f64)>, 
+    pub biggest_increases: Vec<(i32, i32, f64)>,
+    pub biggest_decreases: Vec<(i32, i32, f64)>,
 }
 
-
-/// Statistical summary of occupancy data.
 #[derive(Debug, Clone)]
 pub struct OccupancyStats {
-    /// Arithmetic mean of occupancy
     pub mean: f64,
-    /// Median occupancy
     pub median: f64,
-    /// Standard deviation
     pub std_dev: f64,
-    /// Minimum occupancy
     pub min: f64,
-    /// Maximum occupancy
     pub max: f64,
-    /// Number of samples
     pub sample_count: usize,
-    /// Coefficient of variation (`std_dev` / mean) - measures consistency
     pub coefficient_of_variation: f64,
 }
 
-/// Represents a peak or quiet period.
 #[derive(Debug, Clone)]
 pub struct TimePeriod {
-    /// Day of week (0=Monday, 6=Sunday)
     pub weekday: i32,
-    /// Starting hour
     pub start_hour: i32,
-    /// Ending hour (exclusive)
     pub end_hour: i32,
-    /// Average occupancy during this period
     pub avg_occupancy: f64,
 }
 
-/// Day-of-week analysis result.
 #[derive(Debug, Clone)]
 pub struct DayAnalysis {
-    /// Day of week (0=Monday, 6=Sunday)
     pub weekday: i32,
-    /// Day name
     pub day_name: &'static str,
-    /// Average occupancy for this day
     pub avg_occupancy: f64,
-    /// Peak hour for this day
     pub peak_hour: Option<i32>,
-    /// Peak occupancy
     pub peak_occupancy: f64,
-    /// Quietest hour for this day
     pub quietest_hour: Option<i32>,
-    /// Quietest occupancy
     pub quietest_occupancy: f64,
-    /// Sample count
     pub sample_count: i64,
 }
 
-/// Generated insight about occupancy patterns.
 #[derive(Debug, Clone)]
 pub struct Insight {
-    /// Category of the insight
     pub category: InsightCategory,
-    /// Severity/importance level (1-5, higher = more important)
     pub importance: u8,
-    /// Short title
     pub title: String,
-    /// Detailed description
     pub description: String,
-    /// Associated data (optional - weekday, hour, value)
     pub data: Option<(i32, i32, f64)>,
 }
 
-/// Categories of insights.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InsightCategory {
-    /// Trend-related insight
     Trend,
-    /// Peak hour insight
     Peak,
-    /// Quiet time recommendation
     QuietTime,
-    /// Unusual pattern detected
     Anomaly,
-    /// Day-specific insight
     DayPattern,
-    /// Consistency/predictability insight
     Consistency,
 }
 
@@ -216,30 +147,20 @@ pub fn midnight_utc(date: NaiveDate) -> DateTime<Utc> {
     date.and_time(NaiveTime::MIN).and_utc()
 }
 
-/// Returns midnight of the given local date as a UTC `DateTime`.
-///
-/// This is useful for chart boundaries where we want to align to local midnight
-/// rather than UTC midnight, so "today" means the user's local today.
 pub fn midnight_local_as_utc(date: NaiveDate) -> DateTime<Utc> {
     Local
         .from_local_datetime(&date.and_time(NaiveTime::MIN))
         .earliest()
         .map_or_else(
-            || {
-                date.and_time(NaiveTime::MIN).and_utc()
-            },
+            || date.and_time(NaiveTime::MIN).and_utc(),
             |dt| dt.with_timezone(&Utc),
         )
 }
 
-/// Calculate predictions using the system clock.
-/// This is a convenience wrapper for backwards compatibility.
 pub fn calculate_predictions(baseline: &[HourlyAverage]) -> Vec<(DateTime<Utc>, f64)> {
     calculate_predictions_with_schedule(baseline, &GymSchedule::default())
 }
 
-/// Calculate predictions with a custom schedule using the system clock.
-/// This is a convenience wrapper for backwards compatibility.
 pub fn calculate_predictions_with_schedule(
     baseline: &[HourlyAverage],
     schedule: &GymSchedule,
@@ -247,9 +168,6 @@ pub fn calculate_predictions_with_schedule(
     calculate_predictions_with_clock(baseline, schedule, &crate::traits::SystemClock)
 }
 
-/// Calculate predictions with a custom schedule and clock.
-/// This is the core implementation that allows for testability.
-#[allow(clippy::cast_possible_wrap)] 
 #[tracing::instrument(skip_all, fields(baseline.len = baseline.len()))]
 pub fn calculate_predictions_with_clock<C: Clock>(
     baseline: &[HourlyAverage],
@@ -289,16 +207,10 @@ pub fn calculate_predictions_with_clock<C: Clock>(
     predictions
 }
 
-/// Find the best time today using the system clock.
-/// This is a convenience wrapper for backwards compatibility.
 pub fn find_best_time_today(data: &[HourlyAverage]) -> Option<(i32, f64)> {
     find_best_time_today_with_clock(data, &crate::traits::SystemClock)
 }
 
-/// Find the best time today with a custom clock.
-/// This is the core implementation that allows for testability.
-#[allow(clippy::cast_possible_wrap)] 
-#[allow(clippy::cast_possible_truncation)] 
 pub fn find_best_time_today_with_clock<C: Clock>(
     data: &[HourlyAverage],
     clock: &C,
@@ -322,16 +234,11 @@ pub fn find_best_time_today_with_clock<C: Clock>(
 
             (local_w as i32, local_h as i32, d.avg_percentage)
         })
-        .filter(|(w, _, _)| *w == today_idx) 
+        .filter(|(w, _, _)| *w == today_idx)
         .min_by(|a, b| a.2.partial_cmp(&b.2).unwrap_or(std::cmp::Ordering::Equal))
-        .map(|(_, h, avg)| (h, avg)) 
+        .map(|(_, h, avg)| (h, avg))
 }
 
-
-/// Build hour-by-hour comparisons between two sets of hourly averages.
-///
-/// Compares each hour slot between the baseline and current period,
-/// calculating changes and trends.
 #[tracing::instrument(skip_all, fields(baseline.len = baseline.len(), current.len = current.len()))]
 pub fn build_hourly_comparisons(
     baseline: &[HourlyAverage],
@@ -364,7 +271,7 @@ pub fn build_hourly_comparisons(
         let percent_change = if baseline_avg > 0.0 {
             (absolute_change / baseline_avg) * 100.0
         } else if current_avg > 0.0 {
-            100.0 
+            100.0
         } else {
             0.0
         };
@@ -384,13 +291,6 @@ pub fn build_hourly_comparisons(
     comparisons
 }
 
-/// Compare two time periods and generate a comprehensive comparison.
-///
-/// # Arguments
-/// * `baseline` - Hourly averages from the baseline/previous period
-/// * `current` - Hourly averages from the current/comparison period
-/// * `mode` - The comparison mode used
-#[allow(clippy::cast_precision_loss)] 
 #[tracing::instrument(skip_all, fields(mode = ?mode))]
 pub fn compare_periods(
     baseline: &[HourlyAverage],
@@ -462,8 +362,6 @@ pub fn compare_periods(
     }
 }
 
-/// Determine the overall trend direction from hourly comparisons.
-#[allow(clippy::cast_precision_loss)] 
 pub fn determine_trend(comparisons: &[HourlyComparison]) -> TrendDirection {
     let valid_comparisons: Vec<_> = comparisons
         .iter()
@@ -489,9 +387,6 @@ pub fn determine_trend(comparisons: &[HourlyComparison]) -> TrendDirection {
     }
 }
 
-
-/// Calculate statistical summary from hourly averages.
-#[allow(clippy::cast_precision_loss)] 
 #[tracing::instrument(skip_all, fields(n = data.len()))]
 pub fn calculate_stats(data: &[HourlyAverage]) -> Option<OccupancyStats> {
     if data.is_empty() {
@@ -533,9 +428,6 @@ pub fn calculate_stats(data: &[HourlyAverage]) -> Option<OccupancyStats> {
     })
 }
 
-/// Analyze patterns for each day of the week.
-#[allow(clippy::cast_precision_loss)] 
-#[allow(clippy::cast_sign_loss)] 
 #[tracing::instrument(skip_all)]
 pub fn analyze_days(data: &[HourlyAverage]) -> Vec<DayAnalysis> {
     (0..7)
@@ -575,9 +467,6 @@ pub fn analyze_days(data: &[HourlyAverage]) -> Vec<DayAnalysis> {
         .collect()
 }
 
-/// Find peak hours across the week.
-///
-/// Returns the top N hours with highest average occupancy.
 pub fn find_peak_hours(data: &[HourlyAverage], top_n: usize) -> Vec<(i32, i32, f64)> {
     let mut sorted: Vec<_> = data
         .iter()
@@ -590,9 +479,6 @@ pub fn find_peak_hours(data: &[HourlyAverage], top_n: usize) -> Vec<(i32, i32, f
     sorted
 }
 
-/// Find quiet hours across the week.
-///
-/// Returns the top N hours with lowest average occupancy.
 pub fn find_quiet_hours(data: &[HourlyAverage], top_n: usize) -> Vec<(i32, i32, f64)> {
     let mut sorted: Vec<_> = data
         .iter()
@@ -605,8 +491,6 @@ pub fn find_quiet_hours(data: &[HourlyAverage], top_n: usize) -> Vec<(i32, i32, 
     sorted
 }
 
-/// Find continuous quiet windows (consecutive hours below threshold).
-#[allow(clippy::cast_precision_loss)] 
 #[tracing::instrument(skip_all, fields(threshold, min_hours))]
 pub fn find_quiet_windows(
     data: &[HourlyAverage],
@@ -666,12 +550,6 @@ pub fn find_quiet_windows(
     windows
 }
 
-
-/// Generate human-readable insights from occupancy data.
-///
-/// Analyzes the data and produces actionable insights about patterns,
-/// trends, and recommendations.
-#[allow(clippy::too_many_lines)] 
 #[tracing::instrument(skip_all, fields(current.len = current.len(), has_baseline = baseline.is_some()))]
 pub fn generate_insights(
     current: &[HourlyAverage],
@@ -850,7 +728,6 @@ pub fn generate_insights(
     insights
 }
 
-/// Get the weekday name from index (0=Monday).
 pub fn weekday_name(weekday: i32) -> &'static str {
     usize::try_from(weekday)
         .ok()
@@ -859,7 +736,6 @@ pub fn weekday_name(weekday: i32) -> &'static str {
         .unwrap_or("Unknown")
 }
 
-/// Get the short weekday name from index (0=Monday).
 pub fn weekday_short(weekday: i32) -> &'static str {
     usize::try_from(weekday)
         .ok()
@@ -869,18 +745,10 @@ pub fn weekday_short(weekday: i32) -> &'static str {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)] 
-#[allow(clippy::float_cmp)] 
-#[allow(clippy::cast_possible_wrap)] 
-#[allow(clippy::cast_lossless)] 
-#[allow(clippy::cast_possible_truncation)] 
-#[allow(clippy::cast_precision_loss)] 
-#[allow(clippy::uninlined_format_args)] 
 mod tests {
     use chrono::{Datelike, NaiveDate, Timelike};
 
     use super::*;
-
 
     #[test]
     fn test_midnight_utc_basic() {
@@ -913,7 +781,6 @@ mod tests {
         assert_eq!(result.month(), 12);
         assert_eq!(result.day(), 31);
     }
-
 
     #[test]
     fn test_calculate_predictions_empty_baseline() {
@@ -963,7 +830,6 @@ mod tests {
         assert!(result.is_empty());
     }
 
-
     #[test]
     fn test_find_best_time_empty_data() {
         let data: Vec<HourlyAverage> = vec![];
@@ -985,7 +851,7 @@ mod tests {
             HourlyAverage {
                 weekday: today_idx,
                 hour: 14,
-                avg_percentage: 20.0, 
+                avg_percentage: 20.0,
                 sample_count: 5,
             },
             HourlyAverage {
@@ -1009,13 +875,13 @@ mod tests {
 
         let data = vec![
             HourlyAverage {
-                weekday: other_day, 
+                weekday: other_day,
                 hour: 10,
-                avg_percentage: 10.0, 
+                avg_percentage: 10.0,
                 sample_count: 5,
             },
             HourlyAverage {
-                weekday: today_idx, 
+                weekday: today_idx,
                 hour: 14,
                 avg_percentage: 30.0,
                 sample_count: 5,
@@ -1046,7 +912,6 @@ mod tests {
         assert!(result.len() <= 2);
     }
 
-
     mod clock_tests {
         use chrono::TimeZone;
 
@@ -1055,19 +920,19 @@ mod tests {
 
         #[test]
         fn test_predictions_with_mock_clock() {
-            let fixed_time = Utc.with_ymd_and_hms(2024, 6, 17, 10, 0, 0).unwrap(); 
+            let fixed_time = Utc.with_ymd_and_hms(2024, 6, 17, 10, 0, 0).unwrap();
             let clock = MockClock::new(fixed_time);
-            let schedule = GymSchedule::new_for_test(0, 24, 0, 24); 
+            let schedule = GymSchedule::new_for_test(0, 24, 0, 24);
 
             let baseline = vec![
                 HourlyAverage {
-                    weekday: 0, 
+                    weekday: 0,
                     hour: 11,
                     avg_percentage: 30.0,
                     sample_count: 10,
                 },
                 HourlyAverage {
-                    weekday: 0, 
+                    weekday: 0,
                     hour: 12,
                     avg_percentage: 50.0,
                     sample_count: 10,
@@ -1077,8 +942,8 @@ mod tests {
             let predictions = calculate_predictions_with_clock(&baseline, &schedule, &clock);
 
             assert_eq!(predictions.len(), 2);
-            assert_eq!(predictions[0].1, 30.0); 
-            assert_eq!(predictions[1].1, 50.0); 
+            assert_eq!(predictions[0].1, 30.0);
+            assert_eq!(predictions[1].1, 50.0);
         }
 
         #[test]
@@ -1122,7 +987,7 @@ mod tests {
 
         #[test]
         fn test_find_best_time_with_mock_clock() {
-            let fixed_time = Utc.with_ymd_and_hms(2024, 6, 17, 10, 0, 0).unwrap(); 
+            let fixed_time = Utc.with_ymd_and_hms(2024, 6, 17, 10, 0, 0).unwrap();
             let clock = MockClock::new(fixed_time);
 
             let data = vec![
@@ -1135,7 +1000,7 @@ mod tests {
                 HourlyAverage {
                     weekday: 0,
                     hour: 14,
-                    avg_percentage: 15.0, 
+                    avg_percentage: 15.0,
                     sample_count: 5,
                 },
                 HourlyAverage {
@@ -1153,7 +1018,6 @@ mod tests {
         }
     }
 
-
     mod week_boundary_tests {
         use chrono::TimeZone;
 
@@ -1162,19 +1026,19 @@ mod tests {
 
         #[test]
         fn test_predictions_crossing_sunday_to_monday() {
-            let fixed_time = Utc.with_ymd_and_hms(2024, 6, 16, 23, 0, 0).unwrap(); 
+            let fixed_time = Utc.with_ymd_and_hms(2024, 6, 16, 23, 0, 0).unwrap();
             let clock = MockClock::new(fixed_time);
-            let schedule = GymSchedule::new_for_test(0, 24, 0, 24); 
+            let schedule = GymSchedule::new_for_test(0, 24, 0, 24);
 
             let baseline = vec![
                 HourlyAverage {
-                    weekday: 0, 
-                    hour: 0,    
+                    weekday: 0,
+                    hour: 0,
                     avg_percentage: 25.0,
                     sample_count: 10,
                 },
                 HourlyAverage {
-                    weekday: 0, 
+                    weekday: 0,
                     hour: 1,
                     avg_percentage: 30.0,
                     sample_count: 10,
@@ -1184,27 +1048,27 @@ mod tests {
             let predictions = calculate_predictions_with_clock(&baseline, &schedule, &clock);
 
             assert_eq!(predictions.len(), 2);
-            assert_eq!(predictions[0].1, 25.0); 
-            assert_eq!(predictions[1].1, 30.0); 
+            assert_eq!(predictions[0].1, 25.0);
+            assert_eq!(predictions[1].1, 30.0);
         }
 
         #[test]
         fn test_predictions_crossing_saturday_to_sunday() {
-            let fixed_time = Utc.with_ymd_and_hms(2024, 6, 15, 22, 0, 0).unwrap(); 
+            let fixed_time = Utc.with_ymd_and_hms(2024, 6, 15, 22, 0, 0).unwrap();
             let clock = MockClock::new(fixed_time);
-            let schedule = GymSchedule::new_for_test(0, 24, 0, 24); 
+            let schedule = GymSchedule::new_for_test(0, 24, 0, 24);
 
             let baseline = vec![
                 HourlyAverage {
-                    weekday: 5, 
+                    weekday: 5,
                     hour: 23,
                     avg_percentage: 40.0,
                     sample_count: 10,
                 },
                 HourlyAverage {
-                    weekday: 6, 
+                    weekday: 6,
                     hour: 0,
-                    avg_percentage: 15.0, 
+                    avg_percentage: 15.0,
                     sample_count: 10,
                 },
             ];
@@ -1212,25 +1076,25 @@ mod tests {
             let predictions = calculate_predictions_with_clock(&baseline, &schedule, &clock);
 
             assert_eq!(predictions.len(), 2);
-            assert_eq!(predictions[0].1, 40.0); 
-            assert_eq!(predictions[1].1, 15.0); 
+            assert_eq!(predictions[0].1, 40.0);
+            assert_eq!(predictions[1].1, 15.0);
         }
 
         #[test]
         fn test_predictions_at_year_boundary() {
-            let fixed_time = Utc.with_ymd_and_hms(2024, 12, 31, 23, 0, 0).unwrap(); 
+            let fixed_time = Utc.with_ymd_and_hms(2024, 12, 31, 23, 0, 0).unwrap();
             let clock = MockClock::new(fixed_time);
             let schedule = GymSchedule::new_for_test(0, 24, 0, 24);
 
             let baseline = vec![
                 HourlyAverage {
-                    weekday: 2, 
+                    weekday: 2,
                     hour: 0,
                     avg_percentage: 10.0,
                     sample_count: 10,
                 },
                 HourlyAverage {
-                    weekday: 2, 
+                    weekday: 2,
                     hour: 1,
                     avg_percentage: 20.0,
                     sample_count: 10,
@@ -1246,18 +1110,18 @@ mod tests {
 
         #[test]
         fn test_find_best_time_near_midnight_start_of_week() {
-            let fixed_time = Utc.with_ymd_and_hms(2024, 6, 17, 0, 30, 0).unwrap(); 
+            let fixed_time = Utc.with_ymd_and_hms(2024, 6, 17, 0, 30, 0).unwrap();
             let clock = MockClock::new(fixed_time);
 
             let data = vec![
                 HourlyAverage {
-                    weekday: 0, 
+                    weekday: 0,
                     hour: 0,
-                    avg_percentage: 5.0, 
+                    avg_percentage: 5.0,
                     sample_count: 10,
                 },
                 HourlyAverage {
-                    weekday: 0, 
+                    weekday: 0,
                     hour: 12,
                     avg_percentage: 70.0,
                     sample_count: 10,
@@ -1272,20 +1136,20 @@ mod tests {
 
         #[test]
         fn test_find_best_time_near_midnight_end_of_week() {
-            let fixed_time = Utc.with_ymd_and_hms(2024, 6, 16, 23, 30, 0).unwrap(); 
+            let fixed_time = Utc.with_ymd_and_hms(2024, 6, 16, 23, 30, 0).unwrap();
             let clock = MockClock::new(fixed_time);
 
             let data = vec![
                 HourlyAverage {
-                    weekday: 6, 
+                    weekday: 6,
                     hour: 10,
                     avg_percentage: 35.0,
                     sample_count: 10,
                 },
                 HourlyAverage {
-                    weekday: 6, 
+                    weekday: 6,
                     hour: 23,
-                    avg_percentage: 8.0, 
+                    avg_percentage: 8.0,
                     sample_count: 10,
                 },
             ];
@@ -1303,7 +1167,7 @@ mod tests {
             let schedule = GymSchedule::new_for_test(0, 24, 0, 24);
 
             let baseline = vec![HourlyAverage {
-                weekday: 6, 
+                weekday: 6,
                 hour: 23,
                 avg_percentage: 45.0,
                 sample_count: 10,
@@ -1317,18 +1181,18 @@ mod tests {
 
         #[test]
         fn test_find_best_time_no_data_for_current_day() {
-            let fixed_time = Utc.with_ymd_and_hms(2024, 6, 19, 10, 0, 0).unwrap(); 
+            let fixed_time = Utc.with_ymd_and_hms(2024, 6, 19, 10, 0, 0).unwrap();
             let clock = MockClock::new(fixed_time);
 
             let data = vec![
                 HourlyAverage {
-                    weekday: 0, 
+                    weekday: 0,
                     hour: 10,
                     avg_percentage: 20.0,
                     sample_count: 10,
                 },
                 HourlyAverage {
-                    weekday: 1, 
+                    weekday: 1,
                     hour: 10,
                     avg_percentage: 30.0,
                     sample_count: 10,
@@ -1341,7 +1205,7 @@ mod tests {
 
         #[test]
         fn test_predictions_all_week_data_available() {
-            let fixed_time = Utc.with_ymd_and_hms(2024, 6, 21, 11, 0, 0).unwrap(); 
+            let fixed_time = Utc.with_ymd_and_hms(2024, 6, 21, 11, 0, 0).unwrap();
             let clock = MockClock::new(fixed_time);
             let schedule = GymSchedule::new_for_test(0, 24, 0, 24);
 
@@ -1396,7 +1260,6 @@ mod tests {
         }
     }
 
-
     mod proptest_tests {
         use proptest::prelude::*;
 
@@ -1407,7 +1270,7 @@ mod tests {
             fn midnight_utc_always_at_midnight(
                 year in 2000i32..2100,
                 month in 1u32..=12,
-                day in 1u32..=28  
+                day in 1u32..=28
             ) {
                 if let Some(date) = NaiveDate::from_ymd_opt(year, month, day) {
                     let result = midnight_utc(date);
@@ -1474,7 +1337,6 @@ mod tests {
         }
     }
 
-
     mod comparative_tests {
         use super::*;
 
@@ -1506,7 +1368,7 @@ mod tests {
             assert_eq!(result[0].baseline_avg, 40.0);
             assert_eq!(result[0].current_avg, 50.0);
             assert_eq!(result[0].absolute_change, 10.0);
-            assert!((result[0].percent_change - 25.0).abs() < 0.01); 
+            assert!((result[0].percent_change - 25.0).abs() < 0.01);
         }
 
         #[test]
@@ -1519,7 +1381,7 @@ mod tests {
             assert_eq!(result.len(), 1);
             assert_eq!(result[0].baseline_avg, 0.0);
             assert_eq!(result[0].current_avg, 50.0);
-            assert_eq!(result[0].percent_change, 100.0); 
+            assert_eq!(result[0].percent_change, 100.0);
         }
 
         #[test]
@@ -1563,7 +1425,7 @@ mod tests {
                 absolute_change: 10.0,
                 percent_change: 25.0,
                 baseline_samples: 1,
-                current_samples: 1, 
+                current_samples: 1,
             }];
 
             let result = determine_trend(&comparisons);
@@ -1617,7 +1479,7 @@ mod tests {
                     baseline_avg: 50.0,
                     current_avg: 51.0,
                     absolute_change: 1.0,
-                    percent_change: 2.0, 
+                    percent_change: 2.0,
                     baseline_samples: 10,
                     current_samples: 10,
                 })
@@ -1678,7 +1540,6 @@ mod tests {
         }
     }
 
-
     mod stats_tests {
         use super::*;
 
@@ -1721,7 +1582,7 @@ mod tests {
             let result = calculate_stats(&data).unwrap();
 
             assert_eq!(result.mean, 50.0);
-            assert_eq!(result.median, 50.0); 
+            assert_eq!(result.median, 50.0);
             assert_eq!(result.min, 20.0);
             assert_eq!(result.max, 80.0);
             assert_eq!(result.sample_count, 4);
@@ -1731,9 +1592,9 @@ mod tests {
         #[test]
         fn test_analyze_days() {
             let data = vec![
-                make_hourly_avg(0, 10, 30.0, 5), 
-                make_hourly_avg(0, 11, 50.0, 5), 
-                make_hourly_avg(1, 10, 40.0, 5), 
+                make_hourly_avg(0, 10, 30.0, 5),
+                make_hourly_avg(0, 11, 50.0, 5),
+                make_hourly_avg(1, 10, 40.0, 5),
             ];
 
             let result = analyze_days(&data);
@@ -1752,31 +1613,31 @@ mod tests {
         fn test_find_peak_hours() {
             let data = vec![
                 make_hourly_avg(0, 10, 30.0, 5),
-                make_hourly_avg(0, 11, 80.0, 5), 
+                make_hourly_avg(0, 11, 80.0, 5),
                 make_hourly_avg(1, 10, 70.0, 5),
-                make_hourly_avg(2, 15, 90.0, 5), 
+                make_hourly_avg(2, 15, 90.0, 5),
             ];
 
             let result = find_peak_hours(&data, 2);
 
             assert_eq!(result.len(), 2);
-            assert_eq!(result[0], (2, 15, 90.0)); 
+            assert_eq!(result[0], (2, 15, 90.0));
             assert_eq!(result[1], (0, 11, 80.0));
         }
 
         #[test]
         fn test_find_quiet_hours() {
             let data = vec![
-                make_hourly_avg(0, 10, 10.0, 5), 
+                make_hourly_avg(0, 10, 10.0, 5),
                 make_hourly_avg(0, 11, 80.0, 5),
-                make_hourly_avg(1, 10, 20.0, 5), 
+                make_hourly_avg(1, 10, 20.0, 5),
                 make_hourly_avg(2, 15, 90.0, 5),
             ];
 
             let result = find_quiet_hours(&data, 2);
 
             assert_eq!(result.len(), 2);
-            assert_eq!(result[0], (0, 10, 10.0)); 
+            assert_eq!(result[0], (0, 10, 10.0));
             assert_eq!(result[1], (1, 10, 20.0));
         }
 
@@ -1786,7 +1647,7 @@ mod tests {
                 make_hourly_avg(0, 6, 20.0, 5),
                 make_hourly_avg(0, 7, 25.0, 5),
                 make_hourly_avg(0, 8, 30.0, 5),
-                make_hourly_avg(0, 9, 70.0, 5), 
+                make_hourly_avg(0, 9, 70.0, 5),
                 make_hourly_avg(0, 10, 80.0, 5),
             ];
 
@@ -1799,7 +1660,6 @@ mod tests {
             assert!(window.end_hour >= 8);
         }
     }
-
 
     mod insight_tests {
         use super::*;
@@ -1853,9 +1713,7 @@ mod tests {
 
             let current: Vec<HourlyAverage> = (0..7)
                 .flat_map(|weekday| {
-                    (8..20).map(move |hour| {
-                        make_hourly_avg(weekday, hour, 60.0, 10) 
-                    })
+                    (8..20).map(move |hour| make_hourly_avg(weekday, hour, 60.0, 10))
                 })
                 .collect();
 
@@ -1880,7 +1738,6 @@ mod tests {
             }
         }
     }
-
 
     mod utility_tests {
         use super::*;

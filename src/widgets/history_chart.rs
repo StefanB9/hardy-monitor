@@ -4,7 +4,7 @@ use iced::{
     widget::canvas::{self, Action, Frame, LineDash, Path, Stroke, Text},
 };
 
-use crate::{analytics::midnight_utc, db::OccupancyLog, style};
+use crate::{analytics::midnight_utc, db::OccupancyLog, ml::PredictionWithConfidence, style};
 
 #[derive(Debug, Clone, Copy)]
 pub enum Interaction {
@@ -14,6 +14,7 @@ pub enum Interaction {
 pub struct HistoryChart<'a> {
     pub history: &'a [OccupancyLog],
     pub predictions: &'a [(DateTime<Utc>, f64)],
+    pub confidence_band: &'a [PredictionWithConfidence],
     pub range_start: DateTime<Utc>,
     pub range_end: DateTime<Utc>,
     pub cache: &'a canvas::Cache,
@@ -37,9 +38,6 @@ impl canvas::Program<Interaction> for HistoryChart<'_> {
         None
     }
 
-    #[allow(clippy::too_many_lines)] 
-    #[allow(clippy::cast_precision_loss)] 
-    #[allow(clippy::cast_possible_truncation)] 
     fn draw(
         &self,
         (): &Self::State,
@@ -173,6 +171,30 @@ impl canvas::Program<Interaction> for HistoryChart<'_> {
                         .with_color(style::ACCENT_BLUE)
                         .with_width(2.0),
                 );
+            }
+
+            if !self.confidence_band.is_empty() {
+                let band: Vec<_> = self
+                    .confidence_band
+                    .iter()
+                    .filter(|p| {
+                        p.timestamp >= self.range_start
+                            && p.timestamp <= self.range_end + ChronoDuration::hours(2)
+                    })
+                    .collect();
+
+                if !band.is_empty() {
+                    let mut fill = canvas::path::Builder::new();
+                    fill.move_to(to_pt(band[0].timestamp, band[0].confidence_high));
+                    for p in &band {
+                        fill.line_to(to_pt(p.timestamp, p.confidence_high));
+                    }
+                    for p in band.iter().rev() {
+                        fill.line_to(to_pt(p.timestamp, p.confidence_low));
+                    }
+                    fill.close();
+                    frame.fill(&fill.build(), Color::from_rgba(0.2, 0.9, 0.9, 0.12));
+                }
             }
 
             if !self.predictions.is_empty() {

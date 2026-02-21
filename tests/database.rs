@@ -3,24 +3,22 @@
 //! Each test creates and drops its own isolated `PostgreSQL` database via
 //! `common::TestDatabase`, ensuring tests never read or write production data
 //! and run deterministically regardless of pre-existing state.
-#![allow(clippy::unwrap_used)] 
-#![allow(clippy::expect_used)] 
-#![allow(clippy::float_cmp)] 
-#![allow(clippy::cast_precision_loss)] 
+#![allow(clippy::unwrap_used)]
+#![allow(clippy::expect_used)]
+#![allow(clippy::float_cmp)]
+#![allow(clippy::cast_precision_loss)]
 
 mod common;
 
 use chrono::{DateTime, Duration, TimeZone, Utc};
 use hardy_monitor::MockClock;
 
-/// Test that database creation and migration complete without error.
 #[tokio::test]
 async fn test_database_creation() {
     let tdb = common::TestDatabase::new().await;
     tdb.cleanup().await;
 }
 
-/// Test inserting a single record returns a positive auto-increment ID.
 #[tokio::test]
 async fn test_insert_record() {
     let tdb = common::TestDatabase::new().await;
@@ -36,7 +34,6 @@ async fn test_insert_record() {
     tdb.cleanup().await;
 }
 
-/// Test inserting multiple records and retrieving them through `get_history`.
 #[tokio::test]
 async fn test_insert_and_get_history() {
     let tdb = common::TestDatabase::new().await;
@@ -64,12 +61,6 @@ async fn test_insert_and_get_history() {
     tdb.cleanup().await;
 }
 
-/// Test that `get_history_range` returns only records within the requested
-/// window.
-///
-/// Six records are inserted at `now`, `now-1h`, …, `now-5h`.
-/// The query window is `[now-2h, now+1h]` (inclusive), which captures exactly
-/// three: `now`, `now-1h`, and `now-2h`.
 #[tokio::test]
 async fn test_get_history_range() {
     let tdb = common::TestDatabase::new().await;
@@ -97,12 +88,6 @@ async fn test_get_history_range() {
     tdb.cleanup().await;
 }
 
-/// Test that `get_averages_range` correctly groups records into hourly buckets
-/// and computes their average.
-///
-/// Three records are inserted at 10:30, 10:20, and 10:10 with percentages
-/// 30, 40, and 50.  The expected aggregate is one bucket (hour 10) with an
-/// average of 40.0.
 #[tokio::test]
 async fn test_get_averages_range() {
     let tdb = common::TestDatabase::new().await;
@@ -142,7 +127,6 @@ async fn test_get_averages_range() {
     tdb.cleanup().await;
 }
 
-/// Test that the connection pool handles concurrent inserts without data loss.
 #[tokio::test]
 async fn test_concurrent_inserts() {
     let tdb = common::TestDatabase::new().await;
@@ -179,8 +163,6 @@ async fn test_concurrent_inserts() {
     tdb.cleanup().await;
 }
 
-/// Test that `OccupancyLog::datetime()` correctly parses the timestamp stored
-/// by a round-trip through the database.
 #[tokio::test]
 async fn test_occupancy_log_datetime_parsing() {
     let tdb = common::TestDatabase::new().await;
@@ -206,8 +188,6 @@ async fn test_occupancy_log_datetime_parsing() {
     tdb.cleanup().await;
 }
 
-/// Test that `export_to_csv` produces a correctly named file containing a
-/// header row and one data row per record.
 #[tokio::test]
 async fn test_csv_export_with_mock_clock() {
     let tdb = common::TestDatabase::new().await;

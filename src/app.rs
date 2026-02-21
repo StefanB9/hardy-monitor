@@ -28,8 +28,9 @@ use iced::{
 use muda::MenuEvent;
 use tray_icon::{TrayIcon, TrayIconEvent};
 
-use crate::views::{self, DashboardProps, DataRepairProps, InsightsProps, WeeklyPatternProps};
-
+use crate::views::{
+    self, DashboardProps, DataRepairProps, InsightsProps, MLPredictionsProps, WeeklyPatternProps,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ViewMode {
@@ -37,6 +38,7 @@ pub enum ViewMode {
     Dashboard,
     WeeklyPattern,
     Insights,
+    MLPredictions,
     DataRepair,
 }
 
@@ -83,10 +85,10 @@ struct MonitorState {
     baseline_for_comparison: Vec<HourlyAverage>,
     predictor: OccupancyPredictor,
     ml_predictions: Vec<PredictionWithConfidence>,
+    ml_predictions_simple: Vec<(DateTime<Utc>, f64)>,
     ml_training_in_progress: bool,
 }
 
-/// Threshold before showing "Updating..." indicator (prevents flickering)
 const LOADING_DEBOUNCE_MS: u64 = 200;
 
 struct UiState {
@@ -97,11 +99,13 @@ struct UiState {
     gauge_cache: Cache,
     heatmap_cache: Cache,
     heatmap_tooltip_cache: Cache,
+    ml_predictions_chart_cache: Cache,
     current_view: ViewMode,
     analytics_range: AnalyticsRange,
     history_start_date: String,
     history_end_date: String,
     history_days_preset: Option<i64>,
+    show_ml_prediction: bool,
     is_window_visible: bool,
 }
 
@@ -138,7 +142,7 @@ pub enum Message {
     FetchTick,
     FetchAlignmentComplete,
     RefreshNow,
-    ChartInteraction, 
+    ChartInteraction,
 
     FetchCompleted(Result<Option<f64>, AppError>),
     HistoryLoaded(Result<Vec<OccupancyLog>, AppError>),
@@ -170,15 +174,14 @@ pub enum Message {
     RepairEndDateChanged(String),
     RepairPresetSelected(RepairPreset),
     StartRepairJob,
-    #[allow(dead_code)]
     RepairProgress(RepairProgress),
     RepairCompleted(Result<RepairSummary, AppError>),
 
     MlTrainingCompleted(Result<Box<TrainingResult>, String>),
+    PredictionModeToggled(bool),
 }
 
 impl HardyMonitorApp {
-    #[allow(clippy::needless_pass_by_value)] 
     pub fn new(
         db: Database,
         tray_icon: TrayIcon,
@@ -220,6 +223,7 @@ impl HardyMonitorApp {
                 baseline_for_comparison: Vec::new(),
                 predictor: OccupancyPredictor::new(config.ml.clone()),
                 ml_predictions: Vec::new(),
+                ml_predictions_simple: Vec::new(),
                 ml_training_in_progress: false,
             },
             ui: UiState {
@@ -230,11 +234,13 @@ impl HardyMonitorApp {
                 gauge_cache: Cache::new(),
                 heatmap_cache: Cache::new(),
                 heatmap_tooltip_cache: Cache::new(),
+                ml_predictions_chart_cache: Cache::new(),
                 current_view: ViewMode::default(),
                 analytics_range: AnalyticsRange::default(),
                 history_start_date: today_str.clone(),
                 history_end_date: tomorrow_str.clone(),
                 history_days_preset: Some(1),
+                show_ml_prediction: false,
                 is_window_visible: true,
             },
             notifications: NotificationState {
@@ -268,7 +274,6 @@ impl HardyMonitorApp {
         let seconds_to_next_minute = 60 - now.timestamp() % 60;
         let alignment_task = Task::perform(
             async move {
-                #[allow(clippy::cast_sign_loss)]
                 tokio::time::sleep(Duration::from_secs(seconds_to_next_minute as u64)).await;
             },
             |()| Message::FetchAlignmentComplete,
@@ -280,8 +285,6 @@ impl HardyMonitorApp {
         )
     }
 
-    #[allow(clippy::too_many_lines)] 
-    #[allow(clippy::match_same_arms)] 
     pub fn update(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::Tick => {
@@ -292,6 +295,13 @@ impl HardyMonitorApp {
                     &self.schedule,
                     self.clock.as_ref(),
                 );
+                self.data.ml_predictions_simple = self
+                    .data
+                    .ml_predictions
+                    .iter()
+                    .map(PredictionWithConfidence::to_simple)
+                    .collect();
+                self.ui.ml_predictions_chart_cache.clear();
                 Task::none()
             }
             Message::ChartInteraction => Task::none(),
@@ -579,18 +589,31 @@ impl HardyMonitorApp {
                 self.repair.last_result = Some(result);
                 Task::none()
             }
+            Message::PredictionModeToggled(checked) => {
+                self.ui.show_ml_prediction = checked;
+                Task::none()
+            }
             Message::MlTrainingCompleted(result) => {
                 self.data.ml_training_in_progress = false;
                 match result {
                     Ok(training) => {
                         let trained_at = training.persisted.created_at;
                         self.data.predictor.set_model(training.model, trained_at);
-                        self.data.predictor.update_baseline(&self.data.prediction_baseline);
+                        self.data
+                            .predictor
+                            .update_baseline(&self.data.prediction_baseline);
                         self.data.ml_predictions = self.data.predictor.predict(
                             &self.data.prediction_baseline,
                             &self.schedule,
                             self.clock.as_ref(),
                         );
+                        self.data.ml_predictions_simple = self
+                            .data
+                            .ml_predictions
+                            .iter()
+                            .map(PredictionWithConfidence::to_simple)
+                            .collect();
+                        self.ui.ml_predictions_chart_cache.clear();
                         tracing::info!(
                             trained_at = %trained_at,
                             training_mse = training.persisted.training_mse,
@@ -625,6 +648,10 @@ impl HardyMonitorApp {
                 history_start_date: &self.ui.history_start_date,
                 history_end_date: &self.ui.history_end_date,
                 history_days_preset: self.ui.history_days_preset,
+                ml_predictions: &self.data.ml_predictions,
+                ml_predictions_simple: &self.data.ml_predictions_simple,
+                show_ml_prediction: self.ui.show_ml_prediction,
+                ml_has_model: self.data.predictor.has_model(),
             }),
             ViewMode::WeeklyPattern => views::weekly_pattern::view(WeeklyPatternProps {
                 analytics_data: &self.data.analytics_data,
@@ -642,6 +669,15 @@ impl HardyMonitorApp {
                 ml_has_model: self.data.predictor.has_model(),
                 ml_training_in_progress: self.data.ml_training_in_progress,
                 ml_last_trained: self.data.predictor.last_training(),
+            }),
+            ViewMode::MLPredictions => views::ml_predictions::view(MLPredictionsProps {
+                ml_predictions: &self.data.ml_predictions,
+                ml_predictions_simple: &self.data.ml_predictions_simple,
+                ml_has_model: self.data.predictor.has_model(),
+                ml_training_in_progress: self.data.ml_training_in_progress,
+                ml_last_trained: self.data.predictor.last_training(),
+                chart_cache: &self.ui.ml_predictions_chart_cache,
+                now: self.clock.now_utc(),
             }),
             ViewMode::DataRepair => views::data_repair::view(DataRepairProps {
                 start_date: &self.repair.start_date,
@@ -716,11 +752,9 @@ impl HardyMonitorApp {
         Subscription::batch(subs)
     }
 
-    #[allow(clippy::unused_self)] 
     pub fn theme(&self) -> Theme {
         Theme::Dark
     }
-
 
     fn view_sidebar(&self) -> Element<'_, Message> {
         let sidebar_width = self.config.window.sidebar_width;
@@ -768,6 +802,8 @@ impl HardyMonitorApp {
             nav_btn("Weekly Heatmap", ViewMode::WeeklyPattern),
             Space::new().height(10),
             nav_btn("Insights", ViewMode::Insights),
+            Space::new().height(10),
+            nav_btn("Predictions", ViewMode::MLPredictions),
             Space::new().height(10),
             nav_btn("Data Repair", ViewMode::DataRepair),
         ])
@@ -837,6 +873,7 @@ impl HardyMonitorApp {
                 ViewMode::Dashboard => "Dashboard",
                 ViewMode::WeeklyPattern => "Weekly Heatmap",
                 ViewMode::Insights => "Insights",
+                ViewMode::MLPredictions => "Predictions",
                 ViewMode::DataRepair => "Data Repair",
             })
             .size(28)
@@ -861,8 +898,6 @@ impl HardyMonitorApp {
         .into()
     }
 
-
-    /// Start loading state with debounce tracking
     fn start_loading(&mut self) {
         if !self.ui.is_loading {
             self.ui.is_loading = true;
@@ -870,25 +905,21 @@ impl HardyMonitorApp {
         }
     }
 
-    /// Stop loading state and clear debounce tracking
     fn stop_loading(&mut self) {
         self.ui.is_loading = false;
         self.ui.loading_started_at = None;
     }
 
-    /// Check if loading indicator should be visible (after debounce threshold)
     fn should_show_loading(&self) -> bool {
         if !self.ui.is_loading {
             return false;
         }
         match self.ui.loading_started_at {
             Some(started) => started.elapsed().as_millis() >= u128::from(LOADING_DEBOUNCE_MS),
-            None => true, 
+            None => true,
         }
     }
 
-
-    /// Handle successful or failed fetch completion
     fn handle_fetch_completed(&mut self, result: Result<Option<f64>, AppError>) -> Task<Message> {
         self.stop_loading();
         match result {
@@ -903,7 +934,6 @@ impl HardyMonitorApp {
                 self.error = None;
                 self.ui.gauge_cache.clear();
 
-                // Feed observation into predictor and refresh ML predictions
                 self.data.predictor.add_observation(now, percentage);
                 self.data.predictions =
                     analytics::calculate_predictions(&self.data.prediction_baseline);
@@ -912,6 +942,13 @@ impl HardyMonitorApp {
                     &self.schedule,
                     self.clock.as_ref(),
                 );
+                self.data.ml_predictions_simple = self
+                    .data
+                    .ml_predictions
+                    .iter()
+                    .map(PredictionWithConfidence::to_simple)
+                    .collect();
+                self.ui.ml_predictions_chart_cache.clear();
 
                 let is_below = percentage < self.notifications.threshold;
 
@@ -924,7 +961,6 @@ impl HardyMonitorApp {
                     ),
                 ];
 
-                // Trigger ML retraining when due and not already running
                 if !self.data.ml_training_in_progress
                     && self.data.predictor.needs_retraining(self.clock.as_ref())
                 {
@@ -974,7 +1010,6 @@ impl HardyMonitorApp {
         }
     }
 
-    /// Handle loaded insights data and compute analytics
     fn handle_insights_data_loaded(
         &mut self,
         current: Result<Vec<HourlyAverage>, AppError>,
@@ -1002,8 +1037,6 @@ impl HardyMonitorApp {
         Task::none()
     }
 
-    /// Fetch the latest occupancy record from the database (read-only, no API
-    /// calls).
     fn fetch_latest_from_db(db: Arc<Database>) -> Task<Message> {
         Task::perform(
             async move {
@@ -1039,7 +1072,6 @@ impl HardyMonitorApp {
         )
     }
 
-    #[allow(clippy::needless_pass_by_value)] 
     fn load_analytics(
         db: Arc<Database>,
         range: AnalyticsRange,
@@ -1065,7 +1097,6 @@ impl HardyMonitorApp {
         )
     }
 
-    #[allow(clippy::needless_pass_by_value)] 
     fn load_prediction_baseline(
         db: Arc<Database>,
         days: i64,
@@ -1085,10 +1116,6 @@ impl HardyMonitorApp {
         )
     }
 
-    /// Spawn an async ML training task and return a `Task` that resolves to
-    /// `Message::MlTrainingCompleted`.
-    // Time complexity: O(n) DB fetch + O(n · f) training, where n = samples and f = features (16)
-    // Allocations: two Vecs from DB (logs + averages) plus ndarray matrices; freed on task exit
     fn train_ml_model(
         db: Arc<Database>,
         clock: Arc<dyn Clock>,
@@ -1111,7 +1138,6 @@ impl HardyMonitorApp {
         )
     }
 
-    #[allow(clippy::needless_pass_by_value)]
     fn load_insights_data(db: Arc<Database>, clock: Arc<dyn Clock>) -> Task<Message> {
         let now = clock.now_utc();
         let days_since_monday = i64::from(now.weekday().num_days_from_monday());

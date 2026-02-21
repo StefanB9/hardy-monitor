@@ -20,13 +20,10 @@ use crate::{
     schedule::GymSchedule,
 };
 
-/// Maximum gap in minutes that will be filled with interpolation.
 const MAX_GAP_MINUTES: i64 = 5;
 
-/// Number of days to process concurrently during repair.
 const CONCURRENT_DAYS: usize = 4;
 
-/// Progress update for a repair job.
 #[derive(Debug, Clone)]
 pub struct RepairProgress {
     pub current_day: NaiveDate,
@@ -34,17 +31,15 @@ pub struct RepairProgress {
     pub processed_days: u32,
 }
 
-/// Summary of a completed repair job.
 #[derive(Debug, Clone)]
 pub struct RepairSummary {
     pub days_processed: u32,
     pub gaps_filled: u32,
     pub records_deleted: u32,
     pub records_smoothed: u32,
-    pub boundary_entries_added: u32, 
+    pub boundary_entries_added: u32,
 }
 
-/// Result of repairing a single day.
 #[derive(Debug, Default)]
 struct DayRepairResult {
     gaps_filled: u32,
@@ -53,19 +48,16 @@ struct DayRepairResult {
     boundary_entries_added: u32,
 }
 
-/// Data repairer that handles filling gaps and normalizing occupancy data.
 pub struct DataRepairer {
     db: Arc<Database>,
     schedule: GymSchedule,
 }
 
 impl DataRepairer {
-    /// Create a new `DataRepairer`.
     pub fn new(db: Arc<Database>, schedule: GymSchedule) -> Self {
         Self { db, schedule }
     }
 
-    /// Repair data for a date range.
     pub async fn repair_date_range(
         &self,
         start: NaiveDate,
@@ -122,7 +114,6 @@ impl DataRepairer {
         Ok(summary)
     }
 
-    /// Repair data for a single day.
     async fn repair_day(&self, date: NaiveDate) -> Result<DayRepairResult> {
         let mut result = DayRepairResult::default();
 
@@ -156,8 +147,6 @@ impl DataRepairer {
         Ok(result)
     }
 
-    /// Clean records outside valid operating hours.
-    /// Returns (`count_deleted`, `count_zeroed`).
     async fn clean_outside_hours(
         &self,
         records: &[OccupancyLog],
@@ -197,7 +186,6 @@ impl DataRepairer {
         Ok((deleted_count, zeroed_count))
     }
 
-    /// Remove outliers and smooth data using a moving average.
     async fn smooth_and_filter(&self, records: &[OccupancyLog]) -> Result<u32> {
         if records.len() < 3 {
             return Ok(0);
@@ -247,10 +235,6 @@ impl DataRepairer {
         Ok(modified_count)
     }
 
-    /// Fill gaps in the data with linear interpolation.
-    #[allow(clippy::cast_precision_loss)] 
-    #[allow(clippy::cast_possible_truncation)] 
-    #[allow(clippy::cast_sign_loss)] 
     async fn fill_gaps(
         &self,
         records: &[OccupancyLog],
@@ -322,7 +306,6 @@ impl DataRepairer {
         Ok(filled_count)
     }
 
-    /// Ensure a start-of-day entry exists at `open_hour`:00.
     async fn ensure_start_of_day_entry(&self, date: NaiveDate, open_hour: u32) -> Result<bool> {
         let local_tz = Local;
 
@@ -349,7 +332,6 @@ impl DataRepairer {
         }
     }
 
-    /// Ensure an end-of-day entry exists at `close_hour`:00.
     async fn ensure_end_of_day_entry(&self, date: NaiveDate, close_hour: u32) -> Result<bool> {
         let local_tz = Local;
 
@@ -378,7 +360,6 @@ impl DataRepairer {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)] 
 mod tests {
     use super::*;
 

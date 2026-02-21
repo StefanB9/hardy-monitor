@@ -1,13 +1,8 @@
-//! Date Picker Component
-//!
-//! Reusable date input field with consistent styling.
-
 use hardy_monitor::style;
 use iced::{Border, Element, Length, widget::text_input};
 
 use crate::app::Message;
 
-/// Create a styled date input field
 pub fn styled_input(
     val: &str,
     on_change: impl Fn(String) -> Message + 'static,

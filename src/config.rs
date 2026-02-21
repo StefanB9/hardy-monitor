@@ -49,7 +49,6 @@ impl Default for NetworkConfig {
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct WindowConfig {
-    #[allow(dead_code)]
     pub title: String,
     pub width: f32,
     pub height: f32,
@@ -88,11 +87,8 @@ impl Default for RefreshConfig {
 pub struct NotificationConfig {
     pub enabled: bool,
     pub threshold_percent: f64,
-    /// Ntfy.sh topic for phone notifications (e.g., "hardys-occupancy-1993")
     pub ntfy_topic: Option<String>,
-    /// Ntfy server base URL. Override to point at a self-hosted instance.
     pub ntfy_server: String,
-    /// Minimum seconds between consecutive notifications (prevents spam).
     pub cooldown_secs: u64,
 }
 
@@ -164,10 +160,6 @@ pub struct ScheduleHours {
 }
 
 impl AppConfig {
-    /// Validate all configuration values, returning a descriptive error on the
-    /// first constraint violation.
-    ///
-    /// Called automatically by [`load`](Self::load) after deserialisation.
     pub fn validate(&self) -> Result<(), AppError> {
         for (label, hours) in [
             ("schedule.weekday", self.schedule.weekday),
@@ -278,7 +270,6 @@ impl AppConfig {
             .set_default("schedule.weekend.open_hour", 9)?
             .set_default("schedule.weekend.close_hour", 21)?
 
-            // ML configuration — only meaningful in GUI builds; ignored in daemon
             .set_default("ml.enabled", true)?
             .set_default("ml.training_window_days", 56_i64)?
             .set_default("ml.retrain_interval_hours", 24_i64)?
@@ -301,13 +292,8 @@ impl AppConfig {
 }
 
 #[cfg(test)]
-#[allow(clippy::float_cmp)] 
-#[allow(clippy::unwrap_used)] 
-#[allow(clippy::expect_used)] 
-#[allow(clippy::uninlined_format_args)] 
 mod tests {
     use super::*;
-
 
     #[test]
     fn test_network_config_defaults() {
@@ -362,7 +348,6 @@ mod tests {
         assert_eq!(config.weekend.close_hour, 21);
     }
 
-
     #[test]
     fn test_config_load_with_defaults() {
         let result = AppConfig::load();
@@ -380,7 +365,6 @@ mod tests {
         assert!(config.thresholds.high_occupancy_percent > config.thresholds.low_occupancy_percent);
         assert!(config.analytics.prediction_window_days > 0);
     }
-
 
     #[test]
     fn test_schedule_hours_copy() {
@@ -414,7 +398,6 @@ mod tests {
         assert!(debug_str.contains("NetworkConfig"));
         assert!(debug_str.contains("request_timeout_secs"));
     }
-
 
     #[test]
     fn test_env_var_overrides_gym_api_url() {
@@ -473,9 +456,6 @@ mod tests {
         );
     }
 
-
-    /// Construct a fully-valid `AppConfig` using safe defaults for all fields.
-    /// Individual tests mutate the one field they want to test.
     fn valid_app_config() -> AppConfig {
         AppConfig {
             database: DatabaseConfig {
@@ -574,7 +554,6 @@ mod tests {
         cfg.analytics.prediction_window_days = -1;
         assert!(cfg.validate().is_err());
     }
-
 
     #[test]
     fn test_config_default_values_are_reasonable() {

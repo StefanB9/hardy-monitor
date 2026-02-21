@@ -13,7 +13,6 @@ pub struct GaugeWidget<'a> {
     pub cache: &'a canvas::Cache,
 }
 
-/// Determine the status text based on percentage and thresholds.
 pub fn get_status_text(percentage: f64, low_threshold: f64, high_threshold: f64) -> &'static str {
     if percentage < low_threshold {
         "Not Busy"
@@ -24,7 +23,6 @@ pub fn get_status_text(percentage: f64, low_threshold: f64, high_threshold: f64)
     }
 }
 
-/// Determine the color based on percentage and thresholds.
 pub fn get_status_color(percentage: f64, low_threshold: f64, high_threshold: f64) -> Color {
     if percentage < low_threshold {
         style::ACCENT_GREEN
@@ -38,7 +36,6 @@ pub fn get_status_color(percentage: f64, low_threshold: f64, high_threshold: f64
 impl<Message> canvas::Program<Message> for GaugeWidget<'_> {
     type State = ();
 
-    #[allow(clippy::cast_possible_truncation)] 
     fn draw(
         &self,
         (): &Self::State,
@@ -127,15 +124,12 @@ impl<Message> canvas::Program<Message> for GaugeWidget<'_> {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)] 
-#[allow(clippy::panic)] 
-#[allow(clippy::uninlined_format_args)] 
 mod tests {
+    use anyhow::Result;
     use super::*;
 
     const LOW: f64 = 40.0;
     const HIGH: f64 = 75.0;
-
 
     #[test]
     fn test_status_text_below_low_threshold() {
@@ -175,7 +169,6 @@ mod tests {
         assert_eq!(get_status_text(80.0, 30.0, 60.0), "Crowded");
     }
 
-
     #[test]
     fn test_color_below_low_threshold() {
         let color = get_status_color(20.0, LOW, HIGH);
@@ -207,7 +200,7 @@ mod tests {
     }
 
     #[test]
-    fn test_color_consistency_with_status_text() {
+    fn test_color_consistency_with_status_text() -> Result<()> {
         let test_values = [0.0, 20.0, 39.9, 40.0, 50.0, 74.9, 75.0, 100.0];
 
         for &val in &test_values {
@@ -218,8 +211,10 @@ mod tests {
                 "Not Busy" => assert_eq!(color, style::ACCENT_GREEN),
                 "Moderate" => assert_eq!(color, style::ACCENT_ORANGE),
                 "Crowded" => assert_eq!(color, style::ACCENT_RED),
-                _ => panic!("Unexpected status text: {}", text),
+                _ => return Err(format!("Unexpected status text: '{text}' for value {val}").into()),
             }
         }
+
+        Ok(())
     }
 }

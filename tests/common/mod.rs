@@ -33,35 +33,13 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use hardy_monitor::db::Database;
 use sqlx::{AssertSqlSafe, PgPool};
 
-/// An isolated `PostgreSQL` database for a single test.
-///
-/// Created fresh (with all migrations applied) and dropped after use via
-/// [`cleanup`](TestDatabase::cleanup).
-///
-/// # Usage
-///
-/// ```rust,ignore
-/// #[tokio::test]
-/// async fn my_test() {
-///     let tdb = TestDatabase::new().await;
-///     // use tdb.db ...
-///     tdb.cleanup().await;
-/// }
-/// ```
 pub struct TestDatabase {
     db_name: String,
     admin_pool: PgPool,
-    /// Connected, migrated database handle ready for use in the test.
     pub db: Database,
 }
 
 impl TestDatabase {
-    /// Create a fresh test database and run all migrations.
-    ///
-    /// Reads `DATABASE_URL` from the environment (or a `.env` file). Derives
-    /// an admin connection URL by replacing the database name segment with
-    /// `postgres`, then creates a uniquely-named database and runs all `SQLx`
-    /// migrations before returning.
     pub async fn new() -> Self {
         dotenvy::dotenv().ok();
 
@@ -101,14 +79,6 @@ impl TestDatabase {
         }
     }
 
-    /// Drop the test database.
-    ///
-    /// **Must be called at the end of every test.** If the test panics before
-    /// this point, the database is left behind and must be cleaned up manually
-    /// (see module-level docs).
-    ///
-    /// Requires `PostgreSQL` 13+ (`DROP DATABASE ... WITH (FORCE)`).
-    #[allow(clippy::print_stderr)]
     pub async fn cleanup(self) {
         self.db.close().await;
 
@@ -131,10 +101,6 @@ impl TestDatabase {
     }
 }
 
-/// Replace the database name segment of a ``PostgreSQL`` connection URL.
-///
-/// Handles `postgres://` and `postgresql://` schemes, optional ports, and
-/// preserved query parameters (e.g. `?sslmode=require`).
 fn replace_db_name(url: &str, new_db: &str) -> String {
     let (base, params) = url.split_once('?').unwrap_or((url, ""));
 
@@ -154,12 +120,6 @@ fn replace_db_name(url: &str, new_db: &str) -> String {
     }
 }
 
-/// Generate a database name that is unique to this process and call instant.
-///
-/// Combines the process ID with a nanosecond-precision timestamp. Within a
-/// single nextest test binary (one binary per `tests/*.rs` file) all tests
-/// share the same process, so the nanosecond counter advances between calls
-/// and ensures uniqueness even across fully-parallel workers.
 fn unique_db_name() -> String {
     let pid = std::process::id();
     let nanos = SystemTime::now()

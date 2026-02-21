@@ -1,41 +1,35 @@
-//! Training pipeline for ML models
-
 use std::collections::VecDeque;
 
 use chrono::{DateTime, Duration, Utc};
 
-use crate::db::{Database, HourlyAverage, OccupancyLog};
-use crate::schedule::GymSchedule;
-use crate::traits::Clock;
+use super::{
+    MlConfig,
+    features::{FeatureExtractor, PredictionFeatures},
+    model::{ModelBuilder, TrainedModel, TrainingError},
+    persistence::{ModelSummary, PersistedModel, SerializedSlotStats},
+};
+use crate::{
+    db::{Database, HourlyAverage, OccupancyLog},
+    schedule::GymSchedule,
+    traits::Clock,
+};
 
-use super::features::{FeatureExtractor, PredictionFeatures};
-use super::model::{ModelBuilder, TrainedModel, TrainingError};
-use super::persistence::{ModelSummary, PersistedModel, SerializedSlotStats};
-use super::MlConfig;
-
-/// Result of a training run
 #[derive(Debug, Clone)]
 pub struct TrainingResult {
-    /// The trained model
     pub model: TrainedModel,
-    /// Feature extractor with updated stats
     pub feature_extractor: FeatureExtractor,
-    /// Persisted model metadata (for saving)
     pub persisted: PersistedModel,
 }
 
-/// Prepare training data from database records
 pub struct TrainingDataPreparer {
     config: MlConfig,
 }
 
 impl TrainingDataPreparer {
-    /// Create a new training data preparer
     pub fn new(config: MlConfig) -> Self {
         Self { config }
     }
 
-    /// Prepare training data from occupancy logs
     pub fn prepare(
         &self,
         logs: &[OccupancyLog],
@@ -62,7 +56,8 @@ impl TrainingDataPreparer {
             }
             recent_window.push_back((timestamp, log.percentage));
 
-            let feature = feature_extractor.extract(timestamp, 0, &recent_window, baseline, schedule);
+            let feature =
+                feature_extractor.extract(timestamp, 0, &recent_window, baseline, schedule);
 
             features.push(feature);
             targets.push(log.percentage);
@@ -76,7 +71,6 @@ impl TrainingDataPreparer {
     }
 }
 
-/// Train a model using the complete pipeline
 pub async fn train_model(
     db: &Database,
     clock: &dyn Clock,
@@ -107,8 +101,6 @@ pub async fn train_model(
         .max_depth(10)
         .min_samples_split(5)
         .min_samples_leaf(2)
-        // Ridge λ = 1e-3: prevents "Matrix is non-invertible" when training samples
-        // all share hours_ahead = 0 (zero-variance column → singular Gram matrix).
         .ridge_lambda(1e-3);
 
     let model = builder.train_with_validation(&features, &targets, 0.2)?;
@@ -119,7 +111,6 @@ pub async fn train_model(
     let slot_stats: Vec<SerializedSlotStats> = baseline
         .iter()
         .map(|avg| SerializedSlotStats {
-            // HourlyAverage uses i32 (DB type); SerializedSlotStats uses u32 — safe cast (0-6, 0-23)
             weekday: avg.weekday as u32,
             hour: avg.hour as u32,
             mean: avg.avg_percentage,
@@ -148,7 +139,6 @@ pub async fn train_model(
     })
 }
 
-/// Train model synchronously (for testing or blocking contexts)
 pub fn train_model_sync(
     logs: &[OccupancyLog],
     baseline: &[HourlyAverage],
@@ -166,8 +156,6 @@ pub fn train_model_sync(
         .max_depth(10)
         .min_samples_split(5)
         .min_samples_leaf(2)
-        // Ridge λ = 1e-3: prevents "Matrix is non-invertible" when training samples
-        // all share hours_ahead = 0 (zero-variance column → singular Gram matrix).
         .ridge_lambda(1e-3);
 
     let model = builder.train_with_validation(&features, &targets, 0.2)?;
@@ -178,7 +166,6 @@ pub fn train_model_sync(
     let slot_stats: Vec<SerializedSlotStats> = baseline
         .iter()
         .map(|avg| SerializedSlotStats {
-            // HourlyAverage uses i32 (DB type); SerializedSlotStats uses u32 — safe cast (0-6, 0-23)
             weekday: avg.weekday as u32,
             hour: avg.hour as u32,
             mean: avg.avg_percentage,
@@ -209,8 +196,10 @@ pub fn train_model_sync(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use anyhow::Result;
     use chrono::TimeZone;
+
+    use super::*;
 
     fn create_test_logs(n: usize) -> Vec<OccupancyLog> {
         let base_time = Utc.with_ymd_and_hms(2024, 6, 1, 6, 0, 0).unwrap();
@@ -253,7 +242,7 @@ mod tests {
         };
 
         let preparer = TrainingDataPreparer::new(config);
-        let logs = create_test_logs(50); 
+        let logs = create_test_logs(50);
         let baseline = create_test_baseline();
         let schedule = GymSchedule::default();
 
@@ -283,7 +272,7 @@ mod tests {
     }
 
     #[test]
-    fn test_train_model_sync() {
+    fn test_train_model_sync() -> Result<()> {
         let config = MlConfig {
             min_samples_for_training: 100,
             training_window_days: 28,
@@ -300,11 +289,9 @@ mod tests {
             Ok(training_result) => {
                 assert!(training_result.model.training_samples >= 100);
                 assert!(training_result.persisted.training_mse >= 0.0);
+                Ok(())
             }
-            Err(TrainingError::FitError(msg)) if msg.contains("non-invertible") => {
-                eprintln!("Note: Training failed due to matrix singularity (expected with synthetic data)");
-            }
-            Err(e) => panic!("Unexpected training error: {:?}", e),
+            Err(e) => Err(e.into()),
         }
     }
 

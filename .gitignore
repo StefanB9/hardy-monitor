@@ -11,3 +11,5 @@ Cargo.lock
 .env.production
 # Keep the example template tracked
 !.env.example
+
+logs

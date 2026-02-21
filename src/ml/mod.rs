@@ -4,21 +4,17 @@ pub mod model;
 pub mod persistence;
 pub mod training;
 
-use std::collections::VecDeque;
-use std::path::PathBuf;
+use std::{collections::VecDeque, path::PathBuf};
 
 use chrono::{DateTime, Datelike, Timelike, Utc};
-use serde::Deserialize;
-
-use crate::db::HourlyAverage;
-use crate::schedule::GymSchedule;
-use crate::traits::Clock;
-
 pub use confidence::{PredictionMethod, PredictionWithConfidence};
 pub use features::{FeatureExtractor, PredictionFeatures};
 pub use model::TrainedModel;
 pub use persistence::PersistedModel;
+use serde::Deserialize;
 pub use training::TrainingResult;
+
+use crate::{db::HourlyAverage, schedule::GymSchedule, traits::Clock};
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct MlConfig {
@@ -168,13 +164,11 @@ impl OccupancyPredictor {
         })
     }
 
-    /// Fallback prediction using simple historical average
     fn fallback_predict(
         &self,
         target_time: DateTime<Utc>,
         baseline: &[HourlyAverage],
     ) -> PredictionWithConfidence {
-        // Cast to i32 to match HourlyAverage DB field types
         let target_weekday = target_time.weekday().num_days_from_monday() as i32;
         let target_hour = target_time.hour() as i32;
 
@@ -192,26 +186,24 @@ impl OccupancyPredictor {
                     (avg.avg_percentage + std_dev).clamp(0.0, 100.0),
                 )
             })
-            .unwrap_or((50.0, 30.0, 70.0)); 
+            .unwrap_or((50.0, 30.0, 70.0));
 
         PredictionWithConfidence {
             timestamp: normalize_timestamp(target_time),
             predicted_value,
             confidence_low,
             confidence_high,
-            confidence_score: 0.5, 
+            confidence_score: 0.5,
             method: PredictionMethod::HistoricalAverage,
         }
     }
 
-    /// Calculate confidence intervals for a prediction
     fn calculate_confidence(
         &self,
         target_time: DateTime<Utc>,
         predicted_value: f64,
         hours_ahead: i64,
     ) -> (f64, f64, f64) {
-        // Cast to i32 to match HourlyAverage DB field types
         let weekday = target_time.weekday().num_days_from_monday() as i32;
         let hour = target_time.hour() as i32;
 
@@ -231,23 +223,19 @@ impl OccupancyPredictor {
         (confidence_low, confidence_high, confidence_score)
     }
 
-    /// Get the configuration
     pub fn config(&self) -> &MlConfig {
         &self.config
     }
 
-    /// Check if a model is loaded
     pub fn has_model(&self) -> bool {
         self.model.is_some()
     }
 
-    /// Get the last training timestamp
     pub fn last_training(&self) -> Option<DateTime<Utc>> {
         self.last_training
     }
 }
 
-/// Normalize a timestamp to the start of the hour
 fn normalize_timestamp(dt: DateTime<Utc>) -> DateTime<Utc> {
     dt.with_minute(0)
         .and_then(|d| d.with_second(0))
@@ -257,9 +245,11 @@ fn normalize_timestamp(dt: DateTime<Utc>) -> DateTime<Utc> {
 
 #[cfg(test)]
 mod tests {
+    use approx::assert_abs_diff_eq;
+    use chrono::TimeZone;
+
     use super::*;
     use crate::traits::MockClock;
-    use chrono::TimeZone;
 
     #[test]
     fn test_predictor_creation() {
@@ -306,16 +296,16 @@ mod tests {
         let predictor = OccupancyPredictor::new(config);
 
         let baseline = vec![HourlyAverage {
-            weekday: 0, 
+            weekday: 0,
             hour: 10,
             avg_percentage: 45.0,
             sample_count: 100,
         }];
 
-        let target = Utc.with_ymd_and_hms(2024, 6, 17, 10, 0, 0).unwrap(); 
+        let target = Utc.with_ymd_and_hms(2024, 6, 17, 10, 0, 0).unwrap();
         let pred = predictor.fallback_predict(target, &baseline);
 
-        assert_eq!(pred.predicted_value, 45.0);
+        assert_abs_diff_eq!(pred.predicted_value, 45.0, epsilon = 1e-5);
         assert!(matches!(pred.method, PredictionMethod::HistoricalAverage));
     }
 

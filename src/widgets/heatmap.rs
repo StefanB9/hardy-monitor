@@ -9,16 +9,12 @@ use crate::{db::HourlyAverage, style};
 pub struct HeatmapWidget<'a> {
     pub data: &'a [HourlyAverage],
     pub cache: &'a canvas::Cache,
-    pub tooltip_cache: &'a canvas::Cache, 
+    pub tooltip_cache: &'a canvas::Cache,
 }
 
 impl<Message> canvas::Program<Message> for HeatmapWidget<'_> {
     type State = ();
 
-    #[allow(clippy::too_many_lines)] 
-    #[allow(clippy::cast_precision_loss)] 
-    #[allow(clippy::cast_possible_wrap)] 
-    #[allow(clippy::cast_possible_truncation)] 
     fn draw(
         &self,
         (): &Self::State,
@@ -165,13 +161,12 @@ impl<Message> canvas::Program<Message> for HeatmapWidget<'_> {
     }
 }
 
-#[allow(clippy::cast_possible_truncation)] 
 fn calculate_gradient_color(percentage: f64) -> Color {
     let p = percentage.clamp(0.0, 100.0) / 100.0;
 
-    let low = Color::from_rgb(0.2, 0.8, 0.2); 
-    let mid = Color::from_rgb(0.9, 0.9, 0.2); 
-    let high = Color::from_rgb(0.9, 0.2, 0.2); 
+    let low = Color::from_rgb(0.2, 0.8, 0.2);
+    let mid = Color::from_rgb(0.9, 0.9, 0.2);
+    let high = Color::from_rgb(0.9, 0.2, 0.2);
 
     if p < 0.5 {
         let factor = p * 2.0;
@@ -194,11 +189,10 @@ fn interpolate_color(c1: Color, c2: Color, factor: f32) -> Color {
 mod tests {
     use super::*;
 
-
     #[test]
     fn test_interpolate_color_at_zero_factor() {
-        let c1 = Color::from_rgb(1.0, 0.0, 0.0); 
-        let c2 = Color::from_rgb(0.0, 1.0, 0.0); 
+        let c1 = Color::from_rgb(1.0, 0.0, 0.0);
+        let c2 = Color::from_rgb(0.0, 1.0, 0.0);
         let result = interpolate_color(c1, c2, 0.0);
 
         assert!((result.r - 1.0).abs() < 0.001);
@@ -208,8 +202,8 @@ mod tests {
 
     #[test]
     fn test_interpolate_color_at_one_factor() {
-        let c1 = Color::from_rgb(1.0, 0.0, 0.0); 
-        let c2 = Color::from_rgb(0.0, 1.0, 0.0); 
+        let c1 = Color::from_rgb(1.0, 0.0, 0.0);
+        let c2 = Color::from_rgb(0.0, 1.0, 0.0);
         let result = interpolate_color(c1, c2, 1.0);
 
         assert!((result.r - 0.0).abs() < 0.001);
@@ -219,8 +213,8 @@ mod tests {
 
     #[test]
     fn test_interpolate_color_at_half_factor() {
-        let c1 = Color::from_rgb(1.0, 0.0, 0.0); 
-        let c2 = Color::from_rgb(0.0, 1.0, 0.0); 
+        let c1 = Color::from_rgb(1.0, 0.0, 0.0);
+        let c2 = Color::from_rgb(0.0, 1.0, 0.0);
         let result = interpolate_color(c1, c2, 0.5);
 
         assert!((result.r - 0.5).abs() < 0.001);
@@ -230,15 +224,14 @@ mod tests {
 
     #[test]
     fn test_interpolate_color_with_blue_channel() {
-        let c1 = Color::from_rgb(0.0, 0.0, 0.0); 
-        let c2 = Color::from_rgb(1.0, 1.0, 1.0); 
+        let c1 = Color::from_rgb(0.0, 0.0, 0.0);
+        let c2 = Color::from_rgb(1.0, 1.0, 1.0);
         let result = interpolate_color(c1, c2, 0.25);
 
         assert!((result.r - 0.25).abs() < 0.001);
         assert!((result.g - 0.25).abs() < 0.001);
         assert!((result.b - 0.25).abs() < 0.001);
     }
-
 
     #[test]
     fn test_gradient_color_at_zero_percent() {
@@ -274,8 +267,8 @@ mod tests {
     #[test]
     fn test_gradient_color_at_seventy_five_percent() {
         let result = calculate_gradient_color(75.0);
-        assert!(result.r > 0.85); 
-        assert!(result.g > 0.2 && result.g < 0.9); 
+        assert!(result.r > 0.85);
+        assert!(result.g > 0.2 && result.g < 0.9);
     }
 
     #[test]

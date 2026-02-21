@@ -14,20 +14,12 @@ use chrono::{DateTime, Local, Utc};
 use futures::future::BoxFuture;
 use tracing::warn;
 
-
-/// Trait for abstracting time access.
-///
-/// This allows injecting mock clocks during testing to create
-/// deterministic, reproducible tests for time-dependent logic.
 pub trait Clock: Send + Sync {
-    /// Get the current time in UTC.
     fn now_utc(&self) -> DateTime<Utc>;
 
-    /// Get the current time in the local timezone.
     fn now_local(&self) -> DateTime<Local>;
 }
 
-/// System clock implementation using real time.
 #[derive(Debug, Clone, Default)]
 pub struct SystemClock;
 
@@ -41,21 +33,18 @@ impl Clock for SystemClock {
     }
 }
 
-/// Mock clock for testing with controllable time.
 #[derive(Debug, Clone)]
 pub struct MockClock {
     utc_time: Arc<Mutex<DateTime<Utc>>>,
 }
 
 impl MockClock {
-    /// Create a new mock clock set to the given UTC time.
     pub fn new(time: DateTime<Utc>) -> Self {
         Self {
             utc_time: Arc::new(Mutex::new(time)),
         }
     }
 
-    /// Set the mock clock to a new time.
     pub fn set_time(&self, time: DateTime<Utc>) {
         *self
             .utc_time
@@ -63,7 +52,6 @@ impl MockClock {
             .unwrap_or_else(std::sync::PoisonError::into_inner) = time;
     }
 
-    /// Advance the clock by a duration.
     pub fn advance(&self, duration: chrono::Duration) {
         let mut time = self
             .utc_time
@@ -86,21 +74,10 @@ impl Clock for MockClock {
     }
 }
 
-
-/// Trait for abstracting system notifications.
-///
-/// This allows testing notification logic without actually
-/// sending system notifications.
 pub trait Notifier: Send + Sync {
-    /// Send a notification with the given title and body.
-    ///
-    /// The returned future is tied to the lifetime of `self` but **not** to
-    /// the string arguments — implementors must clone any strings they need
-    /// before returning the future.
     fn notify<'s>(&'s self, title: &str, body: &str) -> BoxFuture<'s, Result<()>>;
 }
 
-/// System notifier implementation using notify-rust.
 #[cfg(feature = "gui")]
 #[derive(Debug, Clone, Default)]
 pub struct SystemNotifier;
@@ -125,24 +102,16 @@ impl Notifier for SystemNotifier {
     }
 }
 
-/// Combined notifier that sends to both desktop and ntfy.sh.
 #[cfg(feature = "gui")]
 #[derive(Debug, Clone)]
 pub struct CombinedNotifier {
     ntfy_topic: Option<String>,
     ntfy_server: String,
-    /// Pre-built HTTP client shared across all notification calls.
-    /// `reqwest::Client` is backed by an `Arc`; cloning it is a pointer copy.
     http_client: reqwest::Client,
 }
 
 #[cfg(feature = "gui")]
 impl CombinedNotifier {
-    /// Create a new combined notifier.
-    ///
-    /// # Arguments
-    /// * `ntfy_topic` - Optional ntfy.sh topic name for phone notifications
-    /// * `ntfy_server` - Base URL of the ntfy server (e.g. `"https://ntfy.sh"`)
     pub fn new(ntfy_topic: Option<String>, ntfy_server: String) -> Self {
         let http_client = reqwest::Client::builder()
             .timeout(Duration::from_secs(10))
@@ -198,19 +167,16 @@ impl Notifier for CombinedNotifier {
     }
 }
 
-/// Mock notifier for testing that records all notifications.
 #[derive(Debug, Clone, Default)]
 pub struct MockNotifier {
     notifications: Arc<Mutex<Vec<(String, String)>>>,
 }
 
 impl MockNotifier {
-    /// Create a new mock notifier.
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Get all notifications that have been sent.
     pub fn get_notifications(&self) -> Vec<(String, String)> {
         self.notifications
             .lock()
@@ -218,7 +184,6 @@ impl MockNotifier {
             .clone()
     }
 
-    /// Get the count of notifications sent.
     pub fn notification_count(&self) -> usize {
         self.notifications
             .lock()
@@ -226,7 +191,6 @@ impl MockNotifier {
             .len()
     }
 
-    /// Clear all recorded notifications.
     pub fn clear(&self) {
         self.notifications
             .lock()
@@ -234,7 +198,6 @@ impl MockNotifier {
             .clear();
     }
 
-    /// Check if any notification was sent.
     pub fn was_called(&self) -> bool {
         !self
             .notifications
@@ -260,7 +223,6 @@ impl Notifier for MockNotifier {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)] 
 mod tests {
     use chrono::TimeZone;
 

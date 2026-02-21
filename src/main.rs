@@ -23,7 +23,6 @@ use {
 #[command(name = "hardy-monitor")]
 #[command(about = "Gym occupancy monitor - daemon or GUI mode")]
 struct Args {
-    /// Run in daemon mode (headless data collector)
     #[arg(long)]
     daemon: bool,
 }
@@ -106,8 +105,8 @@ fn setup_logging(_args: &Args) -> Option<tracing_appender::non_blocking::WorkerG
         .with(
             fmt::layer()
                 .with_writer(non_blocking_writer)
-                .with_ansi(false) 
-                .with_target(false), 
+                .with_ansi(false)
+                .with_target(false),
         )
         .with(filter)
         .init();
@@ -142,7 +141,6 @@ fn main() -> Result<()> {
 const DRIFT_THRESHOLD_SECS: i64 = 5;
 const ALIGNMENT_CHECK_ITERATIONS: u64 = 60;
 
-#[allow(clippy::needless_pass_by_value)] 
 fn run_daemon(rt: tokio::runtime::Runtime, config: Arc<AppConfig>) -> Result<()> {
     rt.block_on(async {
         tracing::info!("Starting Hardy Monitor in daemon mode");
@@ -226,7 +224,6 @@ fn run_daemon(rt: tokio::runtime::Runtime, config: Arc<AppConfig>) -> Result<()>
     })
 }
 
-/// Wait until the next full minute boundary
 async fn wait_for_minute_alignment() {
     let now = chrono::Utc::now();
     let seconds_until_next_minute = 60 - (now.timestamp() % 60);
@@ -235,12 +232,10 @@ async fn wait_for_minute_alignment() {
             wait_secs = seconds_until_next_minute,
             "waiting for next full minute"
         );
-        #[allow(clippy::cast_sign_loss)]
         tokio::time::sleep(Duration::from_secs(seconds_until_next_minute as u64)).await;
     }
 }
 
-/// Fetch current occupancy and store in database
 #[tracing::instrument(skip_all)]
 async fn fetch_and_store(api_client: &api::GymApiClient, database: &db::Database) -> Result<f64> {
     let response = api_client.fetch_occupancy().await?;
@@ -250,9 +245,7 @@ async fn fetch_and_store(api_client: &api::GymApiClient, database: &db::Database
     Ok(percentage)
 }
 
-/// Run in GUI mode - desktop application (read-only, no API fetching)
 #[cfg(feature = "gui")]
-#[allow(clippy::needless_pass_by_value)] 
 fn run_gui(rt: tokio::runtime::Runtime, config: Arc<AppConfig>) -> Result<()> {
     let (database, icon, tray_icon_data) = rt.block_on(async {
         tracing::info!("Connecting to database...");
@@ -275,12 +268,10 @@ fn run_gui(rt: tokio::runtime::Runtime, config: Arc<AppConfig>) -> Result<()> {
 
             let quit_item = MenuItem::with_id("quit", "Quit", true, None);
 
-            #[allow(clippy::expect_used)] 
             tray_menu
                 .append_items(&[&show_item, &PredefinedMenuItem::separator(), &quit_item])
                 .expect("Failed to build menu");
 
-            #[allow(clippy::expect_used)] 
             let tray_icon = TrayIconBuilder::new()
                 .with_menu(Box::new(tray_menu))
                 .with_tooltip("Hardy's Gym Monitor")

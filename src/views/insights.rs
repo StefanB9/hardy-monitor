@@ -1,8 +1,3 @@
-//! Insights View
-//!
-//! Analytics and insights about occupancy patterns, trends, and
-//! recommendations.
-
 use chrono::{DateTime, Local, Utc};
 use hardy_monitor::{
     analytics::{self, DayAnalysis, Insight, OccupancyStats, TrendDirection},
@@ -15,7 +10,6 @@ use iced::{
 
 use crate::{app::Message, views::components::card_container};
 
-/// Props required for insights rendering
 pub struct InsightsProps<'a> {
     pub trend: Option<TrendDirection>,
     pub stats: Option<&'a OccupancyStats>,
@@ -28,12 +22,6 @@ pub struct InsightsProps<'a> {
     pub ml_last_trained: Option<DateTime<Utc>>,
 }
 
-/// Render the insights view
-#[allow(
-    clippy::too_many_lines,
-    clippy::needless_pass_by_value,
-    clippy::cast_possible_truncation
-)]
 pub fn view(props: InsightsProps<'_>) -> Element<'_, Message> {
     let trend_card = {
         let (trend_icon, trend_text, trend_color) = match props.trend {
@@ -302,7 +290,9 @@ pub fn view(props: InsightsProps<'_>) -> Element<'_, Message> {
             .unwrap_or_else(|| "N/A".to_string());
 
         card_container(column![
-            text("ML Prediction Model").size(14).color(style::TEXT_MUTED),
+            text("ML Prediction Model")
+                .size(14)
+                .color(style::TEXT_MUTED),
             Space::new().height(15),
             row![
                 text("Status:").size(12).color(style::TEXT_MUTED),

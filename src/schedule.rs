@@ -2,7 +2,6 @@ use chrono::{DateTime, Datelike, Local, NaiveDate, Timelike};
 
 use crate::config::ScheduleConfig;
 
-/// Gym schedule with configurable opening hours.
 #[derive(Debug, Clone)]
 pub struct GymSchedule {
     weekday_open: u32,
@@ -21,7 +20,6 @@ impl GymSchedule {
         }
     }
 
-    /// Check if the gym is currently open.
     pub fn is_open(&self, time: &DateTime<Local>) -> bool {
         let date = time.date_naive();
         let hour = time.hour();
@@ -49,7 +47,6 @@ impl Default for GymSchedule {
 }
 
 impl GymSchedule {
-    /// Create a custom schedule for testing purposes.
     #[cfg(test)]
     pub fn new_for_test(
         weekday_open: u32,
@@ -65,7 +62,6 @@ impl GymSchedule {
         }
     }
 
-    /// Get the opening hour for a specific date.
     pub fn get_open_hour(&self, date: NaiveDate) -> u32 {
         if is_bavarian_holiday(date) || date.weekday().number_from_monday() > 5 {
             self.weekend_open
@@ -74,7 +70,6 @@ impl GymSchedule {
         }
     }
 
-    /// Get the closing hour for a specific date.
     pub fn get_close_hour(&self, date: NaiveDate) -> u32 {
         if is_bavarian_holiday(date) || date.weekday().number_from_monday() > 5 {
             self.weekend_close
@@ -84,18 +79,12 @@ impl GymSchedule {
     }
 }
 
-/// Check if a date is a Bavarian public holiday.
 pub fn is_bavarian_holiday(date: NaiveDate) -> bool {
     let (d, m) = (date.day(), date.month());
     let year = date.year();
 
     match (m, d) {
-        (1 | 5 | 11, 1) 
-        | (1, 6)         
-        | (8, 15)        
-        | (10, 3)        
-        | (12, 25 | 26) =>  
-            return true,
+        (1 | 5 | 11, 1) | (1, 6) | (8, 15) | (10, 3) | (12, 25 | 26) => return true,
         _ => {}
     }
 
@@ -123,10 +112,6 @@ pub fn is_bavarian_holiday(date: NaiveDate) -> bool {
     false
 }
 
-/// Calculate Easter date using the Anonymous Gregorian algorithm.
-/// This is efficient and accurate for the Gregorian calendar (1583-4099).
-#[allow(clippy::many_single_char_names)] 
-#[allow(clippy::cast_sign_loss)] 
 fn easter_date(year: i32) -> Option<NaiveDate> {
     let a = year % 19;
     let b = year / 100;
@@ -147,12 +132,10 @@ fn easter_date(year: i32) -> Option<NaiveDate> {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)] 
 mod tests {
     use chrono::{NaiveDate, TimeZone};
 
     use super::*;
-
 
     #[test]
     fn test_easter_2024() {
@@ -189,7 +172,6 @@ mod tests {
         let easter = easter_date(2038).unwrap();
         assert_eq!(easter, NaiveDate::from_ymd_opt(2038, 4, 25).unwrap());
     }
-
 
     #[test]
     fn test_fixed_holidays() {
@@ -247,7 +229,6 @@ mod tests {
             NaiveDate::from_ymd_opt(2024, 7, 17).unwrap()
         ));
     }
-
 
     fn make_local_datetime(
         year: i32,
@@ -328,7 +309,6 @@ mod tests {
         assert!(schedule.is_open(&time));
     }
 
-
     #[test]
     fn test_spring_forward_just_before_transition() {
         let schedule = GymSchedule::default();
@@ -392,9 +372,9 @@ mod tests {
         let during_open = make_local_datetime(2025, 3, 30, 12, 0);
         let after_close = make_local_datetime(2025, 3, 30, 22, 0);
 
-        assert!(!schedule.is_open(&morning_before_open)); 
-        assert!(schedule.is_open(&during_open)); 
-        assert!(!schedule.is_open(&after_close)); 
+        assert!(!schedule.is_open(&morning_before_open));
+        assert!(schedule.is_open(&during_open));
+        assert!(!schedule.is_open(&after_close));
     }
 
     #[test]
@@ -404,11 +384,10 @@ mod tests {
         let during_open = make_local_datetime(2025, 10, 26, 14, 0);
         let at_closing = make_local_datetime(2025, 10, 26, 21, 0);
 
-        assert!(!schedule.is_open(&morning_before_open)); 
-        assert!(schedule.is_open(&during_open)); 
-        assert!(schedule.is_open(&at_closing)); 
+        assert!(!schedule.is_open(&morning_before_open));
+        assert!(schedule.is_open(&during_open));
+        assert!(schedule.is_open(&at_closing));
     }
-
 
     #[cfg(test)]
     mod proptest_tests {

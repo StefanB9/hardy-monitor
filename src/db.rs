@@ -8,11 +8,8 @@ use sqlx::{FromRow, PgPool};
 
 use crate::traits::Clock;
 
-/// Represents a single occupancy log entry from the database.
 #[derive(Debug, Clone, FromRow, Serialize)]
 pub struct OccupancyLog {
-    /// Populated by `SQLx`.
-    #[allow(dead_code)]
     pub id: i64,
     pub timestamp: DateTime<Utc>,
     pub percentage: f64,
@@ -25,10 +22,9 @@ const _: () = assert!(
 
 #[derive(Debug, Clone)]
 pub struct HourlyAverage {
-    pub weekday: i32, 
-    pub hour: i32,    
+    pub weekday: i32,
+    pub hour: i32,
     pub avg_percentage: f64,
-    #[allow(dead_code)]
     pub sample_count: i64,
 }
 
@@ -73,7 +69,6 @@ impl Database {
         self.get_history_from(cutoff).await
     }
 
-    /// Get the most recent occupancy record.
     #[tracing::instrument(skip_all, fields(db.operation = "get_latest"))]
     pub async fn get_latest_record(&self) -> Result<Option<OccupancyLog>> {
         let log = sqlx::query_as!(
@@ -186,18 +181,6 @@ impl Database {
         Ok(logs)
     }
 
-    /// Export all occupancy logs to a CSV file.
-    ///
-    /// Streams records directly from the database into the CSV writer via a
-    /// bounded channel, keeping peak memory at O(channel capacity) regardless
-    /// of how many records exist.
-    ///
-    /// # Arguments
-    /// * `output_dir` - Directory where the CSV file will be created
-    /// * `clock` - Clock for generating the timestamp in the filename
-    ///
-    /// # Returns
-    /// The path to the created CSV file on success.
     #[tracing::instrument(skip_all, fields(db.operation = "export_csv", output_dir = %output_dir.display()))]
     pub async fn export_to_csv(&self, output_dir: &Path, clock: &dyn Clock) -> Result<PathBuf> {
         let export_time = clock.now_utc();
@@ -251,10 +234,6 @@ impl Database {
         Ok(output_path)
     }
 
-    /// Get all records for a specific local date.
-    ///
-    /// This returns all occupancy logs where the timestamp falls within the
-    /// given date when converted to local time.
     #[tracing::instrument(skip_all, fields(db.operation = "get_records_for_date", %date))]
     pub async fn get_records_for_date(&self, date: NaiveDate) -> Result<Vec<OccupancyLog>> {
         let local_tz = chrono::Local;
@@ -280,7 +259,6 @@ impl Database {
         self.get_history_range(start_of_day, end_of_day).await
     }
 
-    /// Update a record's percentage by ID.
     #[tracing::instrument(skip_all, fields(db.operation = "update_percentage", id))]
     pub async fn update_percentage(&self, id: i64, percentage: f64) -> Result<()> {
         sqlx::query!(
@@ -294,7 +272,6 @@ impl Database {
         Ok(())
     }
 
-    /// Insert a record at a specific timestamp.
     #[tracing::instrument(skip_all, fields(db.operation = "insert_at_timestamp", %timestamp))]
     pub async fn insert_at_timestamp(
         &self,
@@ -304,10 +281,6 @@ impl Database {
         self.insert_record(timestamp, percentage).await
     }
 
-    /// Batch insert multiple records atomically.
-    ///
-    /// All inserts succeed together or none are committed. A failure mid-way
-    /// does not leave a partial write.
     #[tracing::instrument(skip_all, fields(db.operation = "batch_insert", count = records.len()))]
     pub async fn batch_insert(&self, records: Vec<(DateTime<Utc>, f64)>) -> Result<()> {
         let mut tx = self
@@ -340,29 +313,16 @@ impl Database {
         Ok(())
     }
 
-    /// Gracefully close the connection pool.
-    ///
-    /// Waits for all in-flight queries to finish and all connections to be
-    /// returned to the pool before returning. Call this before issuing
-    /// `DROP DATABASE` (e.g., in test teardown) to ensure `PostgreSQL` does not
-    /// refuse the drop due to active connections.
-    ///
-    /// Unlike simply dropping the `Database` value — which schedules pool
-    /// shutdown but does not await it — this method guarantees the pool is
-    /// fully drained before the caller proceeds.
     pub async fn close(self) {
         self.pool.close().await;
     }
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)] 
-#[allow(clippy::float_cmp)] 
 mod tests {
     use chrono::{Datelike, TimeZone, Timelike};
 
     use super::*;
-
 
     fn make_log(timestamp: DateTime<Utc>) -> OccupancyLog {
         OccupancyLog {
@@ -413,11 +373,10 @@ mod tests {
         assert_eq!(log.timestamp.nanosecond(), 123_456_789);
     }
 
-
     #[test]
     fn test_hourly_average_fields() {
         let avg = HourlyAverage {
-            weekday: 0, 
+            weekday: 0,
             hour: 10,
             avg_percentage: 45.5,
             sample_count: 100,

@@ -1,7 +1,3 @@
-//! Helper Functions for View Components
-//!
-//! Shared styling and container helpers used across all views.
-
 use hardy_monitor::style;
 use iced::{
     Border, Color, Element, Shadow, Theme, Vector,
@@ -10,7 +6,6 @@ use iced::{
 
 use crate::app::Message;
 
-/// Create a styled card container with consistent appearance
 pub fn card_container<'a>(
     content: impl Into<Element<'a, Message>>,
 ) -> container::Container<'a, Message> {
@@ -30,7 +25,6 @@ pub fn card_container<'a>(
     })
 }
 
-/// Create a preset button for date range selection
 pub fn preset_btn(label: &str, days: i64, current: Option<i64>) -> Element<'_, Message> {
     use iced::widget::text;
 
@@ -48,7 +42,6 @@ pub fn preset_btn(label: &str, days: i64, current: Option<i64>) -> Element<'_, M
         .into()
 }
 
-/// Primary button style (accent colored)
 pub fn primary_btn_style(_: &Theme, _: iced::widget::button::Status) -> button::Style {
     button::Style {
         background: Some(style::ACCENT_BLUE.into()),
@@ -61,7 +54,6 @@ pub fn primary_btn_style(_: &Theme, _: iced::widget::button::Status) -> button::
     }
 }
 
-/// Secondary button style (subtle)
 pub fn secondary_btn_style(_: &Theme, _: iced::widget::button::Status) -> button::Style {
     button::Style {
         background: Some(style::BG_DARK.into()),

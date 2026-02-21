@@ -247,7 +247,6 @@ impl<'a, Message> canvas::Program<Message> for ComparisonChartWidget<'a> {
     }
 }
 
-/// Get color based on percent change
 fn get_change_color(percent_change: f64) -> Color {
     if percent_change > 5.0 {
         Color::from_rgb(0.9, 0.4, 0.3)

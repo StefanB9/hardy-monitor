@@ -1,16 +1,15 @@
-//! Feature extraction for ML predictions
-//!
-//! Converts raw occupancy data into feature vectors for the ML model.
-
-use std::collections::{HashMap, VecDeque};
-use std::f64::consts::PI;
+use std::{
+    collections::{HashMap, VecDeque},
+    f64::consts::PI,
+};
 
 use chrono::{DateTime, Datelike, Local, Timelike, Utc};
 
-use crate::db::HourlyAverage;
-use crate::schedule::{is_bavarian_holiday, GymSchedule};
+use crate::{
+    db::HourlyAverage,
+    schedule::{GymSchedule, is_bavarian_holiday},
+};
 
-/// Features extracted for a single prediction
 #[derive(Debug, Clone, PartialEq)]
 pub struct PredictionFeatures {
     pub hour_sin: f64,
@@ -37,7 +36,8 @@ pub struct PredictionFeatures {
 }
 
 impl PredictionFeatures {
-    /// Convert features to a vector for the ML model
+    pub const NUM_FEATURES: usize = 16;
+
     pub fn to_vec(&self) -> Vec<f64> {
         vec![
             self.hour_sin,
@@ -59,10 +59,6 @@ impl PredictionFeatures {
         ]
     }
 
-    /// Number of features
-    pub const NUM_FEATURES: usize = 16;
-
-    /// Feature names for debugging/logging
     pub fn feature_names() -> Vec<&'static str> {
         vec![
             "hour_sin",
@@ -85,7 +81,6 @@ impl PredictionFeatures {
     }
 }
 
-/// Statistics for a single (weekday, hour) slot
 #[derive(Debug, Clone, Default)]
 pub struct SlotStats {
     pub mean: f64,
@@ -93,22 +88,18 @@ pub struct SlotStats {
     pub sample_count: i64,
 }
 
-/// Extracts features from raw occupancy data
 #[derive(Debug, Clone)]
 pub struct FeatureExtractor {
-    /// Historical statistics by (weekday, hour) — both i32 to match DB types
     historical_stats: HashMap<(i32, i32), SlotStats>,
 }
 
 impl FeatureExtractor {
-    /// Create a new feature extractor
     pub fn new() -> Self {
         Self {
             historical_stats: HashMap::new(),
         }
     }
 
-    /// Update historical statistics from baseline data
     pub fn update_historical_stats(&mut self, baseline: &[HourlyAverage]) {
         self.historical_stats.clear();
 
@@ -138,19 +129,16 @@ impl FeatureExtractor {
         }
     }
 
-    /// Get the standard deviation for a specific slot
     pub fn get_slot_std(&self, weekday: i32, hour: i32) -> Option<f64> {
         self.historical_stats
             .get(&(weekday, hour))
             .map(|s| s.std_dev)
     }
 
-    /// Get statistics for a specific slot
     pub fn get_slot_stats(&self, weekday: i32, hour: i32) -> Option<&SlotStats> {
         self.historical_stats.get(&(weekday, hour))
     }
 
-    /// Extract features for a prediction target
     pub fn extract(
         &self,
         target_time: DateTime<Utc>,
@@ -160,7 +148,6 @@ impl FeatureExtractor {
         _schedule: &GymSchedule,
     ) -> PredictionFeatures {
         let local_time = target_time.with_timezone(&Local);
-        // Cast to i32 to match HourlyAverage DB types while keeping chrono u32 return values safe
         let hour = local_time.hour() as i32;
         let weekday = local_time.weekday().num_days_from_monday() as i32;
         let week_of_year = local_time.iso_week().week();
@@ -212,7 +199,6 @@ impl FeatureExtractor {
         }
     }
 
-    /// Extract momentum features from recent data
     fn extract_momentum(&self, recent_data: &VecDeque<(DateTime<Utc>, f64)>) -> (f64, f64, f64) {
         if recent_data.is_empty() {
             return (50.0, 50.0, 0.0);
@@ -249,7 +235,6 @@ impl FeatureExtractor {
         (recent_avg_1h, recent_avg_3h, recent_trend)
     }
 
-    /// Calculate trend (slope) from recent values
     fn calculate_trend(&self, values: &[f64]) -> f64 {
         if values.len() < 2 {
             return 0.0;
@@ -275,7 +260,6 @@ impl FeatureExtractor {
         }
     }
 
-    /// Extract day-level features
     fn extract_day_features(
         &self,
         recent_data: &VecDeque<(DateTime<Utc>, f64)>,
@@ -320,8 +304,6 @@ impl Default for FeatureExtractor {
     }
 }
 
-/// Cyclical encoding for periodic features
-/// Returns (sin, cos) encoding to preserve continuity
 fn cyclical_encode(value: f64, period: f64) -> (f64, f64) {
     let angle = 2.0 * PI * value / period;
     (angle.sin(), angle.cos())
@@ -329,8 +311,9 @@ fn cyclical_encode(value: f64, period: f64) -> (f64, f64) {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use approx::assert_relative_eq;
+
+    use super::*;
 
     #[test]
     fn test_cyclical_encoding_continuity() {
@@ -403,7 +386,10 @@ mod tests {
 
         let trend = extractor.calculate_trend(&values);
 
-        assert!(trend > 0.0, "Trend should be positive for increasing values");
+        assert!(
+            trend > 0.0,
+            "Trend should be positive for increasing values"
+        );
     }
 
     #[test]
@@ -413,7 +399,10 @@ mod tests {
 
         let trend = extractor.calculate_trend(&values);
 
-        assert!(trend < 0.0, "Trend should be negative for decreasing values");
+        assert!(
+            trend < 0.0,
+            "Trend should be negative for decreasing values"
+        );
     }
 
     #[test]
@@ -471,8 +460,8 @@ mod tests {
 
     #[test]
     fn test_weekend_detection() {
-        assert!(5 >= 5); 
-        assert!(6 >= 5); 
-        assert!(!(4 >= 5)); 
+        assert!(5 >= 5);
+        assert!(6 >= 5);
+        assert!(!(4 >= 5));
     }
 }

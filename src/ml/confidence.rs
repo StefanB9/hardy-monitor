@@ -1,23 +1,16 @@
-//! Confidence intervals and prediction result types
-
 use chrono::{DateTime, Utc};
 
-/// Method used for generating a prediction
 #[derive(Debug, Clone, PartialEq)]
 pub enum PredictionMethod {
-    /// ML model prediction with confidence score
     MachineLearning { confidence: f64 },
-    /// Simple historical average fallback
     HistoricalAverage,
 }
 
 impl PredictionMethod {
-    /// Check if this is an ML prediction
     pub fn is_ml(&self) -> bool {
         matches!(self, PredictionMethod::MachineLearning { .. })
     }
 
-    /// Get the confidence score (1.0 for historical average)
     pub fn confidence(&self) -> f64 {
         match self {
             PredictionMethod::MachineLearning { confidence } => *confidence,
@@ -26,25 +19,17 @@ impl PredictionMethod {
     }
 }
 
-/// A prediction with confidence intervals
 #[derive(Debug, Clone, PartialEq)]
 pub struct PredictionWithConfidence {
-    /// Target timestamp for this prediction
     pub timestamp: DateTime<Utc>,
-    /// Predicted occupancy percentage (0-100)
     pub predicted_value: f64,
-    /// Lower bound of confidence interval
     pub confidence_low: f64,
-    /// Upper bound of confidence interval
     pub confidence_high: f64,
-    /// Overall confidence score (0-1, higher = more confident)
     pub confidence_score: f64,
-    /// Method used to generate this prediction
     pub method: PredictionMethod,
 }
 
 impl PredictionWithConfidence {
-    /// Create a new prediction with confidence
     pub fn new(
         timestamp: DateTime<Utc>,
         predicted_value: f64,
@@ -63,7 +48,6 @@ impl PredictionWithConfidence {
         }
     }
 
-    /// Check if the prediction is valid
     pub fn is_valid(&self) -> bool {
         self.predicted_value >= 0.0
             && self.predicted_value <= 100.0
@@ -73,12 +57,10 @@ impl PredictionWithConfidence {
             && self.confidence_score <= 1.0
     }
 
-    /// Get the confidence interval width
     pub fn interval_width(&self) -> f64 {
         self.confidence_high - self.confidence_low
     }
 
-    /// Convert to a simple (timestamp, value) tuple for backward compatibility
     pub fn to_simple(&self) -> (DateTime<Utc>, f64) {
         (self.timestamp, self.predicted_value)
     }
@@ -86,8 +68,9 @@ impl PredictionWithConfidence {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use chrono::TimeZone;
+
+    use super::*;
 
     #[test]
     fn test_prediction_method_is_ml() {
@@ -130,10 +113,10 @@ mod tests {
         let timestamp = Utc.with_ymd_and_hms(2024, 6, 17, 10, 0, 0).unwrap();
         let pred = PredictionWithConfidence::new(
             timestamp,
-            150.0, 
-            -10.0, 
-            200.0, 
-            1.5,   
+            150.0,
+            -10.0,
+            200.0,
+            1.5,
             PredictionMethod::HistoricalAverage,
         );
 
@@ -192,7 +175,7 @@ mod tests {
         let invalid = PredictionWithConfidence {
             timestamp,
             predicted_value: 50.0,
-            confidence_low: 60.0, 
+            confidence_low: 60.0,
             confidence_high: 70.0,
             confidence_score: 0.8,
             method: PredictionMethod::HistoricalAverage,

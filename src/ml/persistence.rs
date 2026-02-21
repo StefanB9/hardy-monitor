@@ -1,37 +1,22 @@
-//! Model persistence - save and load trained models
-
-use std::fs;
-use std::path::Path;
+use std::{fs, path::Path};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use super::features::SlotStats;
 
-/// Serializable model metadata and statistics
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PersistedModel {
-    /// Version for backward compatibility
     pub version: u32,
-    /// When the model was trained
     pub created_at: DateTime<Utc>,
-    /// Number of days of data used for training
     pub training_window_days: i64,
-    /// Number of samples used for training
     pub training_samples: usize,
-    /// Training MSE
     pub training_mse: f64,
-    /// Validation MSE (if available)
     pub validation_mse: Option<f64>,
-    /// Historical statistics for each (weekday, hour) slot
     pub slot_stats: Vec<SerializedSlotStats>,
-    /// Serialized model weights/parameters
-    /// Note: For decision trees, we store summary info rather than full model
-    /// as linfa trees don't implement Serialize directly
     pub model_summary: ModelSummary,
 }
 
-/// Serializable slot statistics
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SerializedSlotStats {
     pub weekday: u32,
@@ -53,22 +38,16 @@ impl From<((u32, u32), &SlotStats)> for SerializedSlotStats {
     }
 }
 
-/// Summary of model performance (since full tree serialization is complex)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelSummary {
-    /// Model type identifier
     pub model_type: String,
-    /// Maximum depth used
     pub max_depth: Option<usize>,
-    /// Feature importance (if available)
     pub feature_importance: Option<Vec<f64>>,
 }
 
 impl PersistedModel {
-    /// Current version number
     pub const CURRENT_VERSION: u32 = 1;
 
-    /// Create a new persisted model record
     pub fn new(
         training_window_days: i64,
         training_samples: usize,
@@ -89,7 +68,6 @@ impl PersistedModel {
         }
     }
 
-    /// Save to a file using bincode
     pub fn save(&self, path: &Path) -> Result<(), PersistenceError> {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).map_err(|e| PersistenceError::IoError(e.to_string()))?;
@@ -103,7 +81,6 @@ impl PersistedModel {
         Ok(())
     }
 
-    /// Load from a file
     pub fn load(path: &Path) -> Result<Self, PersistenceError> {
         if !path.exists() {
             return Err(PersistenceError::FileNotFound(
@@ -127,13 +104,11 @@ impl PersistedModel {
         Ok(model)
     }
 
-    /// Check if the persisted model is stale
     pub fn is_stale(&self, max_age_hours: i64) -> bool {
         let age = Utc::now() - self.created_at;
         age.num_hours() > max_age_hours
     }
 
-    /// Get a human-readable summary
     pub fn summary(&self) -> String {
         format!(
             "Model v{}: {} samples, train_mse={:.2}, val_mse={}, created {}",
@@ -148,18 +123,12 @@ impl PersistedModel {
     }
 }
 
-/// Errors that can occur during model persistence
 #[derive(Debug, Clone)]
 pub enum PersistenceError {
-    /// File not found
     FileNotFound(String),
-    /// IO error
     IoError(String),
-    /// Serialization error
     SerializeError(String),
-    /// Deserialization error
     DeserializeError(String),
-    /// Version mismatch
     VersionMismatch { expected: u32, found: u32 },
 }
 
@@ -185,8 +154,9 @@ impl std::error::Error for PersistenceError {}
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use tempfile::tempdir;
+
+    use super::*;
 
     fn create_test_model() -> PersistedModel {
         PersistedModel::new(
@@ -258,7 +228,6 @@ mod tests {
         let model = create_test_model();
 
         assert!(!model.is_stale(24));
-
     }
 
     #[test]
