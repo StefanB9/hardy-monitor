@@ -1,11 +1,12 @@
 [unstable]
-build-std = ["std", "panic_abort", "core", "alloc"]
+build-std = ["std", "panic_abort", "panic_unwind", "core", "alloc"]
 
 [build]
- jobs = 1
+jobs = 8
+rustflags = ["-C", "target-cpu=native", "-Z", "location-detail=none"]
 
 [target.x86_64-pc-windows-msvc]
-rustflags = ["--cfg=web_sys_unstable_apis", "-Zlocation-detail=none", "-Ctarget-cpu=native", "-Zunstable-options"]
+rustflags = ["-C", "link-arg=-fuse-ld=lld", "-C", "link-arg=/OPT:REF", "-C", "link-arg=/OPT:ICF"]
 
 [target.x86_64-unknown-linux-gnu]
-rustflags = ["--cfg=web_sys_unstable_apis", "-Zlocation-detail=none", "-Ctarget-cpu=native", "-Zunstable-options"]
+rustflags = ["-Ctarget-cpu=native", "-C", "link-arg=-Wl,--icf=all"]

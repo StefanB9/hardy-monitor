@@ -201,17 +201,17 @@ mod tests {
 
     use super::*;
 
-    fn create_test_logs(n: usize) -> Vec<OccupancyLog> {
+    fn create_test_logs(n: i32) -> Vec<OccupancyLog> {
         let base_time = Utc.with_ymd_and_hms(2024, 6, 1, 6, 0, 0).unwrap();
 
         (0..n)
             .map(|i| {
-                let timestamp = base_time + Duration::hours(i as i64);
+                let timestamp = base_time + Duration::hours(i64::from(i));
                 let hour = (6 + i) % 24;
-                let weekday = ((i / 24) % 7) as f64;
-                let percentage = 30.0 + (hour as f64 * 2.0) + (weekday * 3.0) + ((i % 10) as f64);
+                let weekday = f64::from((i / 24) % 7);
+                let percentage = 30.0 + (f64::from(hour) * 2.0) + (weekday * 3.0) + f64::from(i % 10);
                 OccupancyLog {
-                    id: i as i64,
+                    id: i64::from(i),
                     timestamp,
                     percentage: percentage.min(95.0),
                 }
@@ -226,7 +226,7 @@ mod tests {
                 baseline.push(HourlyAverage {
                     weekday,
                     hour,
-                    avg_percentage: 40.0 + (hour as f64) + (weekday as f64 * 2.0),
+                    avg_percentage: 40.0 + f64::from(hour) + (f64::from(weekday) * 2.0),
                     sample_count: 10,
                 });
             }
@@ -252,7 +252,7 @@ mod tests {
     }
 
     #[test]
-    fn test_training_data_preparer_success() {
+    fn test_training_data_preparer_success() -> Result<()> {
         let config = MlConfig {
             min_samples_for_training: 100,
             ..Default::default()
@@ -266,9 +266,10 @@ mod tests {
         let result = preparer.prepare(&logs, &baseline, &schedule);
 
         assert!(result.is_ok());
-        let (features, targets) = result.unwrap();
+        let (features, targets) = result?;
         assert_eq!(features.len(), targets.len());
         assert!(features.len() >= 100);
+        Ok(())
     }
 
     #[test]

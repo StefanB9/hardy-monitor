@@ -237,6 +237,8 @@ impl std::error::Error for TrainingError {}
 
 #[cfg(test)]
 mod tests {
+    use anyhow::Result;
+    use approx::assert_relative_eq;
     use super::*;
 
     fn create_test_features(n: usize) -> Vec<PredictionFeatures> {
@@ -272,7 +274,7 @@ mod tests {
     fn test_model_builder_default() {
         let builder = ModelBuilder::default();
         assert!(builder.fit_intercept);
-        assert_eq!(builder.ridge_lambda, 0.0);
+        assert_relative_eq!(builder.ridge_lambda, 0.0);
     }
 
     #[test]
@@ -284,10 +286,10 @@ mod tests {
     }
 
     #[test]
-    fn test_ridge_handles_singular_data() {
+    fn test_ridge_handles_singular_data() -> Result<()> {
         let features: Vec<PredictionFeatures> = (0..200)
             .map(|i| {
-                let t = i as f64;
+                let t = f64::from(i);
                 PredictionFeatures {
                     hour_sin: (t * 0.3).sin(),
                     hour_cos: (t * 0.31).cos(),
@@ -323,9 +325,11 @@ mod tests {
             "ridge must recover from singular Gram matrix: {:?}",
             result.err()
         );
-        let model = result.unwrap();
+        let model = result?;
         assert_eq!(model.training_samples, 200);
         assert!(model.training_mse >= 0.0);
+
+        Ok(())
     }
 
     #[test]
@@ -351,7 +355,7 @@ mod tests {
     }
 
     #[test]
-    fn test_train_success() {
+    fn test_train_success() -> Result<()> {
         let features = create_test_features(100);
         let targets: Vec<f64> = features.iter().map(|f| f.historical_avg).collect();
 
@@ -359,13 +363,15 @@ mod tests {
         let result = builder.train(&features, &targets);
 
         assert!(result.is_ok());
-        let model = result.unwrap();
+        let model = result?;
         assert_eq!(model.training_samples, 100);
         assert!(model.training_mse >= 0.0);
+
+        Ok(())
     }
 
     #[test]
-    fn test_train_with_validation() {
+    fn test_train_with_validation() -> Result<()> {
         let features = create_test_features(100);
         let targets: Vec<f64> = features.iter().map(|f| f.historical_avg).collect();
 
@@ -373,36 +379,42 @@ mod tests {
         let result = builder.train_with_validation(&features, &targets, 0.2);
 
         assert!(result.is_ok());
-        let model = result.unwrap();
+        let model = result?;
         assert!(model.validation_mse.is_some());
+
+        Ok(())
     }
 
     #[test]
-    fn test_model_predict_single() {
+    fn test_model_predict_single() -> Result<()> {
         let features = create_test_features(100);
         let targets: Vec<f64> = features.iter().map(|f| f.historical_avg).collect();
 
         let builder = ModelBuilder::new();
-        let model = builder.train(&features, &targets).unwrap();
+        let model = builder.train(&features, &targets)?;
 
         let test_feature = &features[0];
         let prediction = model.predict(test_feature);
 
         assert!(prediction.is_some());
+
+        Ok(())
     }
 
     #[test]
-    fn test_model_predict_batch() {
+    fn test_model_predict_batch() -> Result<()> {
         let features = create_test_features(100);
         let targets: Vec<f64> = features.iter().map(|f| f.historical_avg).collect();
 
         let builder = ModelBuilder::new();
-        let model = builder.train(&features, &targets).unwrap();
+        let model = builder.train(&features, &targets)?;
 
         let test_features = &features[0..5];
         let predictions = model.predict_batch(test_features);
 
         assert_eq!(predictions.len(), 5);
+
+        Ok(())
     }
 
     #[test]
@@ -416,27 +428,31 @@ mod tests {
     }
 
     #[test]
-    fn test_model_info() {
+    fn test_model_info() -> Result<()> {
         let features = create_test_features(50);
         let targets: Vec<f64> = features.iter().map(|f| f.historical_avg).collect();
 
         let builder = ModelBuilder::new();
-        let model = builder.train(&features, &targets).unwrap();
+        let model = builder.train(&features, &targets)?;
 
         let info = model.info();
         assert!(info.contains("samples=50"));
         assert!(info.contains("train_mse="));
+
+        Ok(())
     }
 
     #[test]
-    fn test_model_coefficients() {
+    fn test_model_coefficients() -> Result<()> {
         let features = create_test_features(100);
         let targets: Vec<f64> = features.iter().map(|f| f.historical_avg).collect();
 
         let builder = ModelBuilder::new();
-        let model = builder.train(&features, &targets).unwrap();
+        let model = builder.train(&features, &targets)?;
 
         let coeffs = model.coefficients();
         assert_eq!(coeffs.len(), PredictionFeatures::NUM_FEATURES);
+
+        Ok(())
     }
 }

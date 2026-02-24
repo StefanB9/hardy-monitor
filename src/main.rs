@@ -268,16 +268,19 @@ fn run_gui(rt: tokio::runtime::Runtime, config: Arc<AppConfig>) -> Result<()> {
 
             let quit_item = MenuItem::with_id("quit", "Quit", true, None);
 
-            tray_menu
+            if let Err(e) = tray_menu
                 .append_items(&[&show_item, &PredefinedMenuItem::separator(), &quit_item])
-                .expect("Failed to build menu");
+            {
+                tracing::error!("Failed to build menu: {e}");
+            }
 
             let tray_icon = TrayIconBuilder::new()
                 .with_menu(Box::new(tray_menu))
                 .with_tooltip("Hardy's Gym Monitor")
                 .with_icon(tray_icon_data.clone())
                 .build()
-                .expect("Failed to build tray icon");
+                .map_err(|e| tracing::error!("Failed to build tray icon: {e}"))
+                .ok();
 
             let notifier = CombinedNotifier::new(
                 config.notifications.ntfy_topic.clone(),

@@ -126,7 +126,7 @@ pub struct HardyMonitorApp {
     schedule: GymSchedule,
     clock: Arc<dyn Clock>,
     notifier: Arc<dyn Notifier>,
-    _tray_icon: TrayIcon,
+    _tray_icon: Option<TrayIcon>,
     error: Option<AppError>,
 
     data: MonitorState,
@@ -184,7 +184,7 @@ pub enum Message {
 impl HardyMonitorApp {
     pub fn new(
         db: Database,
-        tray_icon: TrayIcon,
+        tray_icon: Option<TrayIcon>,
         config: Arc<AppConfig>,
         clock: Arc<dyn Clock>,
         notifier: Arc<dyn Notifier>,

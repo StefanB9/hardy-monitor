@@ -154,6 +154,8 @@ impl std::error::Error for PersistenceError {}
 
 #[cfg(test)]
 mod tests {
+    use anyhow::Result;
+    use approx::assert_relative_eq;
     use tempfile::tempdir;
 
     use super::*;
@@ -194,25 +196,27 @@ mod tests {
 
         assert_eq!(model.version, PersistedModel::CURRENT_VERSION);
         assert_eq!(model.training_samples, 1000);
-        assert_eq!(model.training_mse, 5.5);
+        assert_relative_eq!(model.training_mse, 5.5);
         assert_eq!(model.validation_mse, Some(6.2));
         assert_eq!(model.slot_stats.len(), 2);
     }
 
     #[test]
-    fn test_save_and_load() {
-        let dir = tempdir().unwrap();
+    fn test_save_and_load() -> Result<()> {
+        let dir = tempdir()?;
         let path = dir.path().join("model.bin");
 
         let model = create_test_model();
-        model.save(&path).unwrap();
+        model.save(&path)?;
 
-        let loaded = PersistedModel::load(&path).unwrap();
+        let loaded = PersistedModel::load(&path)?;
 
         assert_eq!(loaded.version, model.version);
         assert_eq!(loaded.training_samples, model.training_samples);
-        assert_eq!(loaded.training_mse, model.training_mse);
+        assert_relative_eq!(loaded.training_mse, model.training_mse);
         assert_eq!(loaded.slot_stats.len(), model.slot_stats.len());
+
+        Ok(())
     }
 
     #[test]
@@ -252,14 +256,14 @@ mod tests {
 
         assert_eq!(serialized.weekday, 0);
         assert_eq!(serialized.hour, 10);
-        assert_eq!(serialized.mean, 50.0);
-        assert_eq!(serialized.std_dev, 15.0);
+        assert_relative_eq!(serialized.mean, 50.0);
+        assert_relative_eq!(serialized.std_dev, 15.0);
         assert_eq!(serialized.sample_count, 100);
     }
 
     #[test]
-    fn test_save_creates_parent_dirs() {
-        let dir = tempdir().unwrap();
+    fn test_save_creates_parent_dirs() -> Result<()> {
+        let dir = tempdir()?;
         let path = dir.path().join("nested").join("dirs").join("model.bin");
 
         let model = create_test_model();
@@ -267,5 +271,7 @@ mod tests {
 
         assert!(result.is_ok());
         assert!(path.exists());
+
+        Ok(())
     }
 }
