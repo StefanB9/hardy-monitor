@@ -1,37 +1,22 @@
-//! Model persistence - save and load trained models
-
-use std::fs;
-use std::path::Path;
+use std::{fs, path::Path};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use super::features::SlotStats;
 
-/// Serializable model metadata and statistics
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PersistedModel {
-    /// Version for backward compatibility
     pub version: u32,
-    /// When the model was trained
     pub created_at: DateTime<Utc>,
-    /// Number of days of data used for training
     pub training_window_days: i64,
-    /// Number of samples used for training
     pub training_samples: usize,
-    /// Training MSE
     pub training_mse: f64,
-    /// Validation MSE (if available)
     pub validation_mse: Option<f64>,
-    /// Historical statistics for each (weekday, hour) slot
     pub slot_stats: Vec<SerializedSlotStats>,
-    /// Serialized model weights/parameters
-    /// Note: For decision trees, we store summary info rather than full model
-    /// as linfa trees don't implement Serialize directly
     pub model_summary: ModelSummary,
 }
 
-/// Serializable slot statistics
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SerializedSlotStats {
     pub weekday: u32,
@@ -53,22 +38,16 @@ impl From<((u32, u32), &SlotStats)> for SerializedSlotStats {
     }
 }
 
-/// Summary of model performance (since full tree serialization is complex)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelSummary {
-    /// Model type identifier
     pub model_type: String,
-    /// Maximum depth used
     pub max_depth: Option<usize>,
-    /// Feature importance (if available)
     pub feature_importance: Option<Vec<f64>>,
 }
 
 impl PersistedModel {
-    /// Current version number
     pub const CURRENT_VERSION: u32 = 1;
 
-    /// Create a new persisted model record
     pub fn new(
         training_window_days: i64,
         training_samples: usize,
@@ -89,22 +68,19 @@ impl PersistedModel {
         }
     }
 
-    /// Save to a file using bincode
     pub fn save(&self, path: &Path) -> Result<(), PersistenceError> {
-        // Create parent directories if needed
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).map_err(|e| PersistenceError::IoError(e.to_string()))?;
         }
 
-        let bytes =
-            bincode::serialize(self).map_err(|e| PersistenceError::SerializeError(e.to_string()))?;
+        let bytes = bincode::serde::encode_to_vec(self, bincode::config::standard())
+            .map_err(|e| PersistenceError::SerializeError(e.to_string()))?;
 
         fs::write(path, bytes).map_err(|e| PersistenceError::IoError(e.to_string()))?;
 
         Ok(())
     }
 
-    /// Load from a file
     pub fn load(path: &Path) -> Result<Self, PersistenceError> {
         if !path.exists() {
             return Err(PersistenceError::FileNotFound(
@@ -114,10 +90,10 @@ impl PersistedModel {
 
         let bytes = fs::read(path).map_err(|e| PersistenceError::IoError(e.to_string()))?;
 
-        let model: Self = bincode::deserialize(&bytes)
-            .map_err(|e| PersistenceError::DeserializeError(e.to_string()))?;
+        let (model, _): (Self, usize) =
+            bincode::serde::decode_from_slice(&bytes, bincode::config::standard())
+                .map_err(|e| PersistenceError::DeserializeError(e.to_string()))?;
 
-        // Version check
         if model.version > Self::CURRENT_VERSION {
             return Err(PersistenceError::VersionMismatch {
                 expected: Self::CURRENT_VERSION,
@@ -128,13 +104,11 @@ impl PersistedModel {
         Ok(model)
     }
 
-    /// Check if the persisted model is stale
     pub fn is_stale(&self, max_age_hours: i64) -> bool {
         let age = Utc::now() - self.created_at;
         age.num_hours() > max_age_hours
     }
 
-    /// Get a human-readable summary
     pub fn summary(&self) -> String {
         format!(
             "Model v{}: {} samples, train_mse={:.2}, val_mse={}, created {}",
@@ -149,18 +123,12 @@ impl PersistedModel {
     }
 }
 
-/// Errors that can occur during model persistence
 #[derive(Debug, Clone)]
 pub enum PersistenceError {
-    /// File not found
     FileNotFound(String),
-    /// IO error
     IoError(String),
-    /// Serialization error
     SerializeError(String),
-    /// Deserialization error
     DeserializeError(String),
-    /// Version mismatch
     VersionMismatch { expected: u32, found: u32 },
 }
 
@@ -186,8 +154,11 @@ impl std::error::Error for PersistenceError {}
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use anyhow::Result;
+    use approx::assert_relative_eq;
     use tempfile::tempdir;
+
+    use super::*;
 
     fn create_test_model() -> PersistedModel {
         PersistedModel::new(
@@ -225,25 +196,27 @@ mod tests {
 
         assert_eq!(model.version, PersistedModel::CURRENT_VERSION);
         assert_eq!(model.training_samples, 1000);
-        assert_eq!(model.training_mse, 5.5);
+        assert_relative_eq!(model.training_mse, 5.5);
         assert_eq!(model.validation_mse, Some(6.2));
         assert_eq!(model.slot_stats.len(), 2);
     }
 
     #[test]
-    fn test_save_and_load() {
-        let dir = tempdir().unwrap();
+    fn test_save_and_load() -> Result<()> {
+        let dir = tempdir()?;
         let path = dir.path().join("model.bin");
 
         let model = create_test_model();
-        model.save(&path).unwrap();
+        model.save(&path)?;
 
-        let loaded = PersistedModel::load(&path).unwrap();
+        let loaded = PersistedModel::load(&path)?;
 
         assert_eq!(loaded.version, model.version);
         assert_eq!(loaded.training_samples, model.training_samples);
-        assert_eq!(loaded.training_mse, model.training_mse);
+        assert_relative_eq!(loaded.training_mse, model.training_mse);
         assert_eq!(loaded.slot_stats.len(), model.slot_stats.len());
+
+        Ok(())
     }
 
     #[test]
@@ -258,13 +231,7 @@ mod tests {
     fn test_is_stale() {
         let model = create_test_model();
 
-        // Just created, should not be stale
         assert!(!model.is_stale(24));
-
-        // With very short max age, should be stale
-        // Note: This might be flaky if the test takes > 0 hours
-        // but in practice a just-created model won't be stale even with max_age=0
-        // because the age calculation is in hours
     }
 
     #[test]
@@ -289,14 +256,14 @@ mod tests {
 
         assert_eq!(serialized.weekday, 0);
         assert_eq!(serialized.hour, 10);
-        assert_eq!(serialized.mean, 50.0);
-        assert_eq!(serialized.std_dev, 15.0);
+        assert_relative_eq!(serialized.mean, 50.0);
+        assert_relative_eq!(serialized.std_dev, 15.0);
         assert_eq!(serialized.sample_count, 100);
     }
 
     #[test]
-    fn test_save_creates_parent_dirs() {
-        let dir = tempdir().unwrap();
+    fn test_save_creates_parent_dirs() -> Result<()> {
+        let dir = tempdir()?;
         let path = dir.path().join("nested").join("dirs").join("model.bin");
 
         let model = create_test_model();
@@ -304,5 +271,7 @@ mod tests {
 
         assert!(result.is_ok());
         assert!(path.exists());
+
+        Ok(())
     }
 }

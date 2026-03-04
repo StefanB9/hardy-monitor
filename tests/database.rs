@@ -1,255 +1,253 @@
 //! Integration tests for database operations.
 //!
-//! These tests require a running PostgreSQL database.
-//! Set DATABASE_URL environment variable to run these tests.
-//!
-//! Example: DATABASE_URL=postgres://hardy:devpassword@localhost:5432/
-//! hardy_monitor_test
+//! Each test creates and drops its own isolated `PostgreSQL` database via
+//! `common::TestDatabase`, ensuring tests never read or write production data
+//! and run deterministically regardless of pre-existing state.
+#![allow(clippy::unwrap_used)]
+#![allow(clippy::expect_used)]
+#![allow(clippy::float_cmp)]
+#![allow(clippy::cast_precision_loss)]
 
-use chrono::{Duration, TimeZone, Utc};
-use hardy_monitor::{MockClock, db::Database};
+mod common;
 
-/// Get the database URL from environment, or skip the test.
-fn get_database_url() -> Option<String> {
-    // Load .env if present
-    let _ = dotenvy::dotenv();
-    std::env::var("DATABASE_URL").ok()
-}
+use chrono::{DateTime, Duration, TimeZone, Utc};
+use hardy_monitor::MockClock;
 
-/// Helper macro to skip tests if DATABASE_URL is not set.
-macro_rules! require_db {
-    () => {
-        match get_database_url() {
-            Some(url) => url,
-            None => {
-                eprintln!("Skipping test: DATABASE_URL not set");
-                return;
-            }
-        }
-    };
-}
-
-/// Test database creation and migration.
 #[tokio::test]
 async fn test_database_creation() {
-    let db_url = require_db!();
-    let result = Database::new(&db_url).await;
-    assert!(
-        result.is_ok(),
-        "Database creation should succeed: {:?}",
-        result.err()
-    );
+    let tdb = common::TestDatabase::new().await;
+    tdb.cleanup().await;
 }
 
-/// Test inserting a single record.
 #[tokio::test]
 async fn test_insert_record() {
-    let db_url = require_db!();
-    let db = Database::new(&db_url).await.expect("DB creation failed");
+    let tdb = common::TestDatabase::new().await;
 
-    let timestamp = Utc::now();
-    let result = db.insert_record(timestamp, 50.0).await;
+    let id = tdb
+        .db
+        .insert_record(Utc::now(), 50.0)
+        .await
+        .expect("insert should succeed");
 
-    assert!(result.is_ok());
-    let id = result.unwrap();
-    assert!(id > 0, "Insert should return a positive ID");
+    assert!(id > 0, "INSERT should return a positive ID");
+
+    tdb.cleanup().await;
 }
 
-/// Test inserting multiple records and retrieving history.
 #[tokio::test]
 async fn test_insert_and_get_history() {
-    let db_url = require_db!();
-    let db = Database::new(&db_url).await.expect("DB creation failed");
+    let tdb = common::TestDatabase::new().await;
 
     let now = Utc::now();
-
-    // Insert 5 records
-    for i in 0..5 {
-        let timestamp = now - Duration::hours(i);
-        db.insert_record(timestamp, (i as f64) * 10.0)
+    for i in 0..5i64 {
+        tdb.db
+            .insert_record(now - Duration::hours(i), (i as f64) * 10.0)
             .await
-            .expect("Insert should succeed");
+            .expect("insert should succeed");
     }
 
-    // Retrieve history for last 1 day
-    let history = db.get_history(1).await.expect("Get history should succeed");
+    let history = tdb
+        .db
+        .get_history(1)
+        .await
+        .expect("get_history should succeed");
 
-    // Note: In a shared test database, there might be more records
-    assert!(history.len() >= 5, "Should retrieve at least 5 records");
+    assert_eq!(
+        history.len(),
+        5,
+        "clean DB should contain exactly 5 records"
+    );
+
+    tdb.cleanup().await;
 }
 
-/// Test retrieving history with date range.
 #[tokio::test]
 async fn test_get_history_range() {
-    let db_url = require_db!();
-    let db = Database::new(&db_url).await.expect("DB creation failed");
+    let tdb = common::TestDatabase::new().await;
 
     let now = Utc::now();
-
-    // Insert records over 3 hours
-    for i in 0..6 {
-        let timestamp = now - Duration::hours(i);
-        db.insert_record(timestamp, 50.0)
+    for i in 0..6i64 {
+        tdb.db
+            .insert_record(now - Duration::hours(i), 50.0)
             .await
-            .expect("Insert should succeed");
+            .expect("insert should succeed");
     }
 
-    // Query only the last 2 hours
-    let start = now - Duration::hours(2);
-    let end = now + Duration::hours(1); // Include current time
-
-    let history = db
-        .get_history_range(start, end)
+    let history = tdb
+        .db
+        .get_history_range(now - Duration::hours(2), now + Duration::hours(1))
         .await
-        .expect("Range query should succeed");
+        .expect("range query should succeed");
 
-    // Should get records from hours 0, 1, 2
-    assert!(
-        history.len() >= 2,
-        "Should have at least 2 records in range"
+    assert_eq!(
+        history.len(),
+        3,
+        "window [now-2h, now+1h] should capture exactly 3 records"
     );
+
+    tdb.cleanup().await;
 }
 
-/// Test aggregation of hourly averages.
 #[tokio::test]
 async fn test_get_averages_range() {
-    let db_url = require_db!();
-    let db = Database::new(&db_url).await.expect("DB creation failed");
+    let tdb = common::TestDatabase::new().await;
 
-    // Use a fixed timestamp to ensure all records fall in the same hour
-    // Use middle of an hour (e.g., 10:30) so +/-20 minutes stays within the same
-    // hour
     let base_time = Utc.with_ymd_and_hms(2024, 6, 15, 10, 30, 0).unwrap();
 
-    // Insert multiple records in the same hour: 10:10, 10:20, 10:30
-    for i in 0..3 {
-        let timestamp = base_time - Duration::minutes(i * 10);
-        db.insert_record(timestamp, 30.0 + (i as f64) * 10.0) // 30, 40, 50
+    for i in 0..3i64 {
+        tdb.db
+            .insert_record(
+                base_time - Duration::minutes(i * 10),
+                30.0 + (i as f64) * 10.0,
+            )
             .await
-            .expect("Insert should succeed");
+            .expect("insert should succeed");
     }
 
-    let start = base_time - Duration::hours(1);
-    let end = base_time + Duration::hours(1);
-
-    let averages = db
-        .get_averages_range(start, end)
+    let averages = tdb
+        .db
+        .get_averages_range(
+            base_time - Duration::hours(1),
+            base_time + Duration::hours(1),
+        )
         .await
-        .expect("Averages query should succeed");
+        .expect("averages query should succeed");
 
-    // Should have at least one hourly average (hour 10)
-    assert!(
-        !averages.is_empty(),
-        "Should have at least one hour of data"
+    assert_eq!(
+        averages.len(),
+        1,
+        "all three records fall in hour 10, so exactly one hourly bucket expected"
     );
+    assert!(
+        (averages[0].avg_percentage - 40.0).abs() < 0.001,
+        "average of 30, 40, 50 should be 40.0; got {:.4}",
+        averages[0].avg_percentage
+    );
+
+    tdb.cleanup().await;
 }
 
-/// Test database handles concurrent writes.
 #[tokio::test]
 async fn test_concurrent_inserts() {
-    let db_url = require_db!();
-    let db = Database::new(&db_url).await.expect("DB creation failed");
+    let tdb = common::TestDatabase::new().await;
 
     let now = Utc::now();
-
-    // Spawn multiple concurrent inserts
     let mut handles = Vec::new();
-    for i in 0..10 {
-        let db_clone = db.clone();
+    for i in 0..10i64 {
+        let db_clone = tdb.db.clone();
         let ts = now - Duration::seconds(i);
         handles.push(tokio::spawn(async move {
             db_clone.insert_record(ts, i as f64).await
         }));
     }
 
-    // Wait for all inserts
     for handle in handles {
-        let result = handle.await.expect("Task should complete");
-        assert!(result.is_ok(), "Insert should succeed");
+        handle
+            .await
+            .expect("task should not panic")
+            .expect("insert should succeed");
     }
 
-    // Verify records were inserted (may have more in shared db)
-    let history = db.get_history(1).await.expect("Query should succeed");
-    assert!(
-        history.len() >= 10,
-        "At least 10 records should be inserted"
+    let history = tdb
+        .db
+        .get_history(1)
+        .await
+        .expect("history query should succeed");
+
+    assert_eq!(
+        history.len(),
+        10,
+        "all 10 concurrent inserts should be present in a clean DB"
     );
+
+    tdb.cleanup().await;
 }
 
-/// Test OccupancyLog datetime parsing from database records.
 #[tokio::test]
 async fn test_occupancy_log_datetime_parsing() {
-    let db_url = require_db!();
-    let db = Database::new(&db_url).await.expect("DB creation failed");
+    let tdb = common::TestDatabase::new().await;
 
-    let now = Utc::now();
-    db.insert_record(now, 75.5)
+    tdb.db
+        .insert_record(Utc::now(), 75.5)
         .await
-        .expect("Insert should succeed");
+        .expect("insert should succeed");
 
-    let history = db.get_history(1).await.expect("Query should succeed");
-    assert!(!history.is_empty(), "Should have at least one record");
+    let history = tdb
+        .db
+        .get_history(1)
+        .await
+        .expect("get_history should succeed");
 
-    // Find the record we just inserted
-    let log = history.iter().find(|l| (l.percentage - 75.5).abs() < 0.01);
-    assert!(log.is_some(), "Should find our inserted record");
+    assert_eq!(history.len(), 1, "clean DB should contain exactly 1 record");
+    let stored = history[0].timestamp;
+    assert!(
+        DateTime::parse_from_rfc3339(&stored.to_rfc3339()).is_ok(),
+        "stored timestamp should survive an RFC3339 round-trip"
+    );
 
-    let log = log.unwrap();
-
-    // Verify datetime parsing works
-    let parsed = log.datetime();
-    assert!(parsed.is_some(), "datetime() should parse the timestamp");
+    tdb.cleanup().await;
 }
 
-/// Test CSV export functionality with MockClock.
 #[tokio::test]
 async fn test_csv_export_with_mock_clock() {
-    let db_url = require_db!();
-    let db = Database::new(&db_url).await.expect("DB creation failed");
+    let tdb = common::TestDatabase::new().await;
 
-    // Insert some test data
     let now = Utc::now();
-    for i in 0..3 {
-        let timestamp = now - Duration::hours(i);
-        db.insert_record(timestamp, (i as f64) * 20.0)
+    for i in 0..3i64 {
+        tdb.db
+            .insert_record(now - Duration::hours(i), (i as f64) * 20.0)
             .await
-            .expect("Insert should succeed");
+            .expect("insert should succeed");
     }
 
-    // Create a mock clock with a fixed time for deterministic filename
     let fixed_time = Utc.with_ymd_and_hms(2024, 6, 15, 10, 30, 45).unwrap();
     let clock = MockClock::new(fixed_time);
 
-    // Export to CSV using a temp directory
-    let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
-    let output_dir = temp_dir.path();
-    let result = db.export_to_csv(output_dir, &clock).await;
+    let temp_dir = tempfile::tempdir().expect("failed to create temp dir");
+    let csv_path = tdb
+        .db
+        .export_to_csv(temp_dir.path(), &clock)
+        .await
+        .expect("CSV export should succeed");
 
-    assert!(result.is_ok(), "CSV export should succeed");
+    assert!(csv_path.exists(), "exported CSV file should exist on disk");
 
-    let csv_path = result.unwrap();
-    assert!(csv_path.exists(), "CSV file should exist");
+    let filename = csv_path
+        .file_name()
+        .expect("path should have a filename")
+        .to_str()
+        .expect("filename should be valid UTF-8");
 
-    // Verify filename format includes the mock time
-    let filename = csv_path.file_name().unwrap().to_str().unwrap();
     assert!(
         filename.contains("20240615_103045"),
-        "Filename should contain mock timestamp, got: {}",
-        filename
+        "filename should embed the mock clock timestamp; got: {filename}"
     );
     assert!(filename.starts_with("hardy_monitor_export_"));
-    assert!(filename.ends_with(".csv"));
+    assert!(
+        std::path::Path::new(filename)
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("csv")),
+        "filename should end with .csv (case-insensitive)"
+    );
 
-    // Verify CSV content has data
-    let content = std::fs::read_to_string(&csv_path).expect("Should read CSV");
+    let content = std::fs::read_to_string(&csv_path).expect("should be able to read the CSV");
     let lines: Vec<&str> = content.lines().collect();
 
-    // Header + data rows
-    assert!(lines.len() >= 2, "Should have header + at least 1 record");
+    assert_eq!(
+        lines.len(),
+        4,
+        "expected 1 header + 3 data rows; got {} lines",
+        lines.len()
+    );
+    assert!(lines[0].contains("id"), "header should contain 'id'");
+    assert!(
+        lines[0].contains("timestamp"),
+        "header should contain 'timestamp'"
+    );
+    assert!(
+        lines[0].contains("percentage"),
+        "header should contain 'percentage'"
+    );
 
-    // Verify header contains expected columns
-    let header = lines[0];
-    assert!(header.contains("id"));
-    assert!(header.contains("timestamp"));
-    assert!(header.contains("percentage"));
+    tdb.cleanup().await;
 }

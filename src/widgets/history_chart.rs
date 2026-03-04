@@ -4,9 +4,8 @@ use iced::{
     widget::canvas::{self, Action, Frame, LineDash, Path, Stroke, Text},
 };
 
-use crate::{analytics::midnight_utc, db::OccupancyLog, style};
+use crate::{analytics::midnight_utc, db::OccupancyLog, ml::PredictionWithConfidence, style};
 
-// Interaction event to avoid circular dependency on Message
 #[derive(Debug, Clone, Copy)]
 pub enum Interaction {
     Hovered,
@@ -15,12 +14,13 @@ pub enum Interaction {
 pub struct HistoryChart<'a> {
     pub history: &'a [OccupancyLog],
     pub predictions: &'a [(DateTime<Utc>, f64)],
+    pub confidence_band: &'a [PredictionWithConfidence],
     pub range_start: DateTime<Utc>,
     pub range_end: DateTime<Utc>,
     pub cache: &'a canvas::Cache,
 }
 
-impl<'a> canvas::Program<Interaction> for HistoryChart<'a> {
+impl canvas::Program<Interaction> for HistoryChart<'_> {
     type State = ();
 
     fn update(
@@ -30,17 +30,17 @@ impl<'a> canvas::Program<Interaction> for HistoryChart<'a> {
         bounds: Rectangle,
         cursor: mouse::Cursor,
     ) -> Option<Action<Interaction>> {
-        if let iced::Event::Mouse(mouse::Event::CursorMoved { .. }) = event {
-            if cursor.position_in(bounds).is_some() {
-                return Some(Action::publish(Interaction::Hovered));
-            }
+        if let iced::Event::Mouse(mouse::Event::CursorMoved { .. }) = event
+            && cursor.position_in(bounds).is_some()
+        {
+            return Some(Action::publish(Interaction::Hovered));
         }
         None
     }
 
     fn draw(
         &self,
-        _: &Self::State,
+        (): &Self::State,
         renderer: &Renderer,
         _: &Theme,
         bounds: Rectangle,
@@ -54,7 +54,6 @@ impl<'a> canvas::Program<Interaction> for HistoryChart<'a> {
             let w = bounds.width - pad_left - pad_right;
             let h = bounds.height - pad_bottom - pad_top;
 
-            // Y-Axis
             for i in 0..=4 {
                 let pct = i as f32 * 25.0;
                 let y = pad_top + h - (pct / 100.0 * h);
@@ -66,7 +65,7 @@ impl<'a> canvas::Program<Interaction> for HistoryChart<'a> {
                         .with_width(1.0),
                 );
                 frame.fill_text(Text {
-                    content: format!("{:.0}", pct),
+                    content: format!("{pct:.0}"),
                     position: Point::new(pad_left - 5.0, y),
                     color: style::TEXT_MUTED,
                     size: 10.0.into(),
@@ -76,7 +75,6 @@ impl<'a> canvas::Program<Interaction> for HistoryChart<'a> {
                 });
             }
 
-            // X-Axis logic
             let dur = (self.range_end - self.range_start).num_seconds();
             if dur > 0 {
                 let tick_interval = if dur <= 86400 * 2 {
@@ -88,13 +86,15 @@ impl<'a> canvas::Program<Interaction> for HistoryChart<'a> {
                 };
                 let mut current = self.range_start;
 
-                // Align first tick
                 if tick_interval == 3600 * 4 {
                     let rem = current.hour() % 4;
                     if rem != 0 {
-                        current += ChronoDuration::hours((4 - rem) as i64);
+                        current += ChronoDuration::hours(i64::from(4 - rem));
                     }
-                    current = current.with_minute(0).unwrap().with_second(0).unwrap();
+                    current = current
+                        .with_minute(0)
+                        .and_then(|t| t.with_second(0))
+                        .unwrap_or(current);
                 } else if tick_interval >= 86400 {
                     current = midnight_utc(current.date_naive() + ChronoDuration::days(1));
                 }
@@ -136,12 +136,11 @@ impl<'a> canvas::Program<Interaction> for HistoryChart<'a> {
                 Point::new(x, y)
             };
 
-            // Draw History
             let mut last_history_point: Option<(Point, DateTime<Utc>)> = None;
             let points: Vec<_> = self
                 .history
                 .iter()
-                .filter_map(|l| l.datetime().map(|d| (d, l.percentage)))
+                .map(|l| (l.timestamp, l.percentage))
                 .filter(|(d, _)| *d >= self.range_start && *d <= self.range_end)
                 .collect();
 
@@ -174,31 +173,51 @@ impl<'a> canvas::Program<Interaction> for HistoryChart<'a> {
                 );
             }
 
-            // Draw Predictions
+            if !self.confidence_band.is_empty() {
+                let band: Vec<_> = self
+                    .confidence_band
+                    .iter()
+                    .filter(|p| {
+                        p.timestamp >= self.range_start
+                            && p.timestamp <= self.range_end + ChronoDuration::hours(2)
+                    })
+                    .collect();
+
+                if !band.is_empty() {
+                    let mut fill = canvas::path::Builder::new();
+                    fill.move_to(to_pt(band[0].timestamp, band[0].confidence_high));
+                    for p in &band {
+                        fill.line_to(to_pt(p.timestamp, p.confidence_high));
+                    }
+                    for p in band.iter().rev() {
+                        fill.line_to(to_pt(p.timestamp, p.confidence_low));
+                    }
+                    fill.close();
+                    frame.fill(&fill.build(), Color::from_rgba(0.2, 0.9, 0.9, 0.12));
+                }
+            }
+
             if !self.predictions.is_empty() {
                 let mut builder = canvas::path::Builder::new();
                 let mut started = false;
 
-                // Connect history to prediction
-                if let Some((pt, dt)) = last_history_point {
-                    if let Some(first_pred) = self.predictions.first() {
-                        if (first_pred.0 - dt).num_hours() < 4 {
-                            builder.move_to(pt);
-                            started = true;
-                        }
-                    }
+                if let Some((pt, dt)) = last_history_point
+                    && let Some(first_pred) = self.predictions.first()
+                    && (first_pred.0 - dt).num_hours() < 4
+                {
+                    builder.move_to(pt);
+                    started = true;
                 }
 
                 for (d, v) in self.predictions {
                     if *d >= self.range_start && *d <= self.range_end + ChronoDuration::hours(2) {
                         let pt = to_pt(*d, *v);
-                        // Clip width
                         if pt.x <= w + pad_left + 20.0 {
-                            if !started {
+                            if started {
+                                builder.line_to(pt);
+                            } else {
                                 builder.move_to(pt);
                                 started = true;
-                            } else {
-                                builder.line_to(pt);
                             }
                             frame.fill(&Path::circle(pt, 3.0), style::ACCENT_CYAN);
                         }
@@ -224,79 +243,77 @@ impl<'a> canvas::Program<Interaction> for HistoryChart<'a> {
 
         let mut geometries = vec![geo];
 
-        // Hover Overlay
-        if let Some(cursor_pos) = cursor.position_in(bounds) {
-            if !self.history.is_empty() {
-                let pad_left = 35.0;
-                let w = bounds.width - pad_left - 10.0;
-                let dur = (self.range_end - self.range_start).num_seconds() as f32;
-                let ratio = (cursor_pos.x - pad_left) / w;
+        if let Some(cursor_pos) = cursor.position_in(bounds)
+            && !self.history.is_empty()
+        {
+            let pad_left = 35.0;
+            let w = bounds.width - pad_left - 10.0;
+            let dur = (self.range_end - self.range_start).num_seconds() as f32;
+            let ratio = (cursor_pos.x - pad_left) / w;
 
-                if (0.0..=1.0).contains(&ratio) {
-                    let time_offset = ratio * dur;
-                    let hover_time = self.range_start + ChronoDuration::seconds(time_offset as i64);
-                    let closest = self
-                        .history
-                        .iter()
-                        .filter_map(|l| l.datetime().map(|d| (d, l.percentage)))
-                        .min_by_key(|(d, _)| (*d - hover_time).num_seconds().abs());
+            if (0.0..=1.0).contains(&ratio) {
+                let time_offset = ratio * dur;
+                let hover_time = self.range_start + ChronoDuration::seconds(time_offset as i64);
+                let closest = self
+                    .history
+                    .iter()
+                    .map(|l| (l.timestamp, l.percentage))
+                    .min_by_key(|(d, _)| (*d - hover_time).num_seconds().abs());
 
-                    if let Some((d, val)) = closest {
-                        if d >= self.range_start && d <= self.range_end {
-                            let pad_top = 10.0;
-                            let h = bounds.height - 25.0 - pad_top;
-                            let x = pad_left
-                                + (d.signed_duration_since(self.range_start).num_seconds() as f32
-                                    / dur)
-                                    * w;
-                            let y = pad_top + h - (val as f32 / 100.0 * h);
+                if let Some((d, val)) = closest
+                    && d >= self.range_start
+                    && d <= self.range_end
+                {
+                    let pad_top = 10.0;
+                    let h = bounds.height - 25.0 - pad_top;
+                    let x = pad_left
+                        + (d.signed_duration_since(self.range_start).num_seconds() as f32 / dur)
+                            * w;
+                    let y = pad_top + h - (val as f32 / 100.0 * h);
 
-                            let mut frame = Frame::new(renderer, bounds.size());
-                            frame.stroke(
-                                &Path::line(Point::new(x, pad_top), Point::new(x, pad_top + h)),
-                                Stroke {
-                                    style: style::TEXT_BRIGHT.into(),
-                                    width: 1.0,
-                                    line_dash: LineDash {
-                                        segments: &[4.0, 4.0],
-                                        offset: 0,
-                                    },
-                                    ..Stroke::default()
-                                },
-                            );
-                            frame.fill(&Path::circle(Point::new(x, y), 4.0), style::ACCENT_CYAN);
+                    let mut frame = Frame::new(renderer, bounds.size());
+                    frame.stroke(
+                        &Path::line(Point::new(x, pad_top), Point::new(x, pad_top + h)),
+                        Stroke {
+                            style: style::TEXT_BRIGHT.into(),
+                            width: 1.0,
+                            line_dash: LineDash {
+                                segments: &[4.0, 4.0],
+                                offset: 0,
+                            },
+                            ..Stroke::default()
+                        },
+                    );
+                    frame.fill(&Path::circle(Point::new(x, y), 4.0), style::ACCENT_CYAN);
 
-                            // Tooltip
-                            let text_str =
-                                format!("{}\n{:.1}%", d.with_timezone(&Local).format("%H:%M"), val);
-                            let (box_w, box_h) = (60.0, 35.0);
-                            let box_x = if x + 10.0 + box_w > bounds.width {
-                                x - 10.0 - box_w
-                            } else {
-                                x + 10.0
-                            };
-                            let box_y = if y - 20.0 < 0.0 { y + 10.0 } else { y - 20.0 };
+                    let text_str =
+                        format!("{}\n{:.1}%", d.with_timezone(&Local).format("%H:%M"), val);
+                    let (box_w, box_h) = (60.0, 35.0);
+                    let box_x = if x + 10.0 + box_w > bounds.width {
+                        x - 10.0 - box_w
+                    } else {
+                        x + 10.0
+                    };
+                    let box_y = if y - 20.0 < 0.0 { y + 10.0 } else { y - 20.0 };
 
-                            frame.fill(
-                                &Path::rounded_rectangle(
-                                    Point::new(box_x, box_y),
-                                    Size::new(box_w, box_h),
-                                    4.0.into(),
-                                ),
-                                style::TOOLTIP_BG,
-                            );
-                            frame.fill_text(Text {
-                                content: text_str,
-                                position: Point::new(box_x + box_w / 2.0, box_y + box_h / 2.0),
-                                color: style::TEXT_BRIGHT,
-                                size: 12.0.into(),
-                                align_x: iced::alignment::Horizontal::Center.into(),
-                                align_y: iced::alignment::Vertical::Center,
-                                ..Default::default()
-                            });
-                            geometries.push(frame.into_geometry());
-                        }
-                    }
+                    frame.fill(
+                        &Path::rounded_rectangle(
+                            Point::new(box_x, box_y),
+                            Size::new(box_w, box_h),
+                            4.0.into(),
+                        ),
+                        style::TOOLTIP_BG,
+                    );
+                    frame.fill_text(Text {
+                        content: text_str,
+                        position: Point::new(box_x + box_w / 2.0, box_y + box_h / 2.0),
+                        color: style::TEXT_BRIGHT,
+                        size: 12.0.into(),
+                        align_x: iced::alignment::Horizontal::Center.into(),
+                        align_y: iced::alignment::Vertical::Center,
+                        ..Default::default()
+                    });
+                    geometries.push(frame.into_geometry());
                 }
             }
         }

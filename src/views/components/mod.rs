@@ -1,7 +1,3 @@
-//! Shared UI Components
-//!
-//! Reusable components used across multiple views.
-
 pub mod date_picker;
 pub mod helpers;
 

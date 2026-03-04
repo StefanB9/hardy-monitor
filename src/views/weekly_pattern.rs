@@ -1,7 +1,3 @@
-//! Weekly Pattern View
-//!
-//! Heatmap visualization showing occupancy patterns by weekday and hour.
-
 use hardy_monitor::{db::HourlyAverage, style, widgets::heatmap::HeatmapWidget};
 use iced::{
     Alignment, Border, Color, Element, Length, Theme,
@@ -13,7 +9,6 @@ use crate::{
     views::components::{card_container, primary_btn_style, secondary_btn_style},
 };
 
-/// Props required for weekly pattern rendering
 pub struct WeeklyPatternProps<'a> {
     pub analytics_data: &'a [HourlyAverage],
     pub analytics_range: AnalyticsRange,
@@ -21,7 +16,6 @@ pub struct WeeklyPatternProps<'a> {
     pub heatmap_tooltip_cache: &'a Cache,
 }
 
-/// Render the weekly pattern view
 pub fn view(props: WeeklyPatternProps<'_>) -> Element<'_, Message> {
     let range_btn = |label: &str, range: AnalyticsRange| {
         let active = props.analytics_range == range;
@@ -53,7 +47,7 @@ pub fn view(props: WeeklyPatternProps<'_>) -> Element<'_, Message> {
     .width(Length::Fill)
     .height(Length::Fill);
 
-    let heatmap_element = Element::from(heatmap).map(|_: ()| Message::ChartInteraction);
+    let heatmap_element = Element::from(heatmap).map(|()| Message::ChartInteraction);
 
     let legend_item = |color: Color, label: &str| {
         row![
@@ -86,7 +80,7 @@ pub fn view(props: WeeklyPatternProps<'_>) -> Element<'_, Message> {
         if let Some(b) = props
             .analytics_data
             .iter()
-            .filter(|d| d.weekday == idx as i32)
+            .filter(|d| d.weekday == i32::try_from(idx).unwrap_or(0))
             .min_by(|a, b| {
                 a.avg_percentage
                     .partial_cmp(&b.avg_percentage)

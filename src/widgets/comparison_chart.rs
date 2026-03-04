@@ -30,10 +30,8 @@ impl<'a, Message> canvas::Program<Message> for ComparisonChartWidget<'a> {
         let chart_width = bounds.width - pad_left - pad_right;
         let chart_height = bounds.height - pad_top - pad_bottom;
 
-        // Draw the main chart (cached)
         let chart_geo = self.cache.draw(renderer, bounds.size(), |frame| {
             if self.data.is_empty() {
-                // Draw "Insufficient data" message
                 frame.fill_text(Text {
                     content: "Insufficient data for comparison".to_string(),
                     position: Point::new(bounds.width / 2.0, bounds.height / 2.0),
@@ -46,20 +44,18 @@ impl<'a, Message> canvas::Program<Message> for ComparisonChartWidget<'a> {
                 return;
             }
 
-            // Calculate max value for scaling
             let max_val = self
                 .data
                 .iter()
                 .map(|d| d.current_avg.max(d.previous_avg))
                 .fold(0.0f64, |a, b| a.max(b))
-                .max(10.0); // Minimum scale of 10%
+                .max(10.0); 
 
             let num_bars = self.data.len();
             let group_width = chart_width / num_bars as f32;
             let bar_width = (group_width * 0.35).min(20.0);
             let bar_gap = 2.0;
 
-            // Draw Y-axis labels
             for i in 0..=4 {
                 let y_val = (max_val / 4.0) * i as f64;
                 let y_pos = pad_top + chart_height - (chart_height * (y_val / max_val) as f32);
@@ -74,7 +70,6 @@ impl<'a, Message> canvas::Program<Message> for ComparisonChartWidget<'a> {
                     ..Default::default()
                 });
 
-                // Grid line
                 let line = Path::line(
                     Point::new(pad_left, y_pos),
                     Point::new(bounds.width - pad_right, y_pos),
@@ -87,13 +82,11 @@ impl<'a, Message> canvas::Program<Message> for ComparisonChartWidget<'a> {
                 );
             }
 
-            // Draw bars and X-axis labels
             let mut last_drawn_hour: Option<u32> = None;
 
             for (i, comparison) in self.data.iter().enumerate() {
                 let group_x = pad_left + i as f32 * group_width + group_width / 2.0;
 
-                // Previous period bar (muted)
                 let prev_height = (comparison.previous_avg / max_val) as f32 * chart_height;
                 if prev_height > 0.0 {
                     let prev_bar = Path::rounded_rectangle(
@@ -104,7 +97,6 @@ impl<'a, Message> canvas::Program<Message> for ComparisonChartWidget<'a> {
                     frame.fill(&prev_bar, Color::from_rgba(0.5, 0.5, 0.6, 0.5));
                 }
 
-                // Current period bar (colored by change)
                 let curr_height = (comparison.current_avg / max_val) as f32 * chart_height;
                 if curr_height > 0.0 {
                     let color = get_change_color(comparison.percent_change);
@@ -116,11 +108,9 @@ impl<'a, Message> canvas::Program<Message> for ComparisonChartWidget<'a> {
                     frame.fill(&curr_bar, color);
                 }
 
-                // X-axis labels (show hour, avoid clutter)
                 let should_draw_label = match last_drawn_hour {
                     None => true,
                     Some(last) => {
-                        // Draw if hour changed and enough space
                         comparison.hour != last && (i == 0 || i % 2 == 0 || num_bars < 24)
                     }
                 };
@@ -139,11 +129,9 @@ impl<'a, Message> canvas::Program<Message> for ComparisonChartWidget<'a> {
                 }
             }
 
-            // Draw legend
             let legend_y = 10.0;
             let legend_x = bounds.width - pad_right - 150.0;
 
-            // Previous period legend
             let prev_box = Path::rounded_rectangle(
                 Point::new(legend_x, legend_y),
                 Size::new(12.0, 12.0),
@@ -159,7 +147,6 @@ impl<'a, Message> canvas::Program<Message> for ComparisonChartWidget<'a> {
                 ..Default::default()
             });
 
-            // Current period legend
             let curr_box = Path::rounded_rectangle(
                 Point::new(legend_x + 70.0, legend_y),
                 Size::new(12.0, 12.0),
@@ -176,7 +163,6 @@ impl<'a, Message> canvas::Program<Message> for ComparisonChartWidget<'a> {
             });
         });
 
-        // Draw tooltip (dynamic)
         self.tooltip_cache.clear();
 
         let tooltip_geo = self.tooltip_cache.draw(renderer, bounds.size(), |frame| {
@@ -188,7 +174,6 @@ impl<'a, Message> canvas::Program<Message> for ComparisonChartWidget<'a> {
                 let num_bars = self.data.len();
                 let group_width = chart_width / num_bars as f32;
 
-                // Check if cursor is in chart area
                 if cursor_pos.x > pad_left
                     && cursor_pos.x < bounds.width - pad_right
                     && cursor_pos.y > pad_top
@@ -210,13 +195,11 @@ impl<'a, Message> canvas::Program<Message> for ComparisonChartWidget<'a> {
                             comparison.percent_change
                         );
 
-                        // Calculate tooltip position
                         let tooltip_width = 100.0;
                         let tooltip_height = 70.0;
                         let mut tooltip_x = cursor_pos.x + 15.0;
                         let mut tooltip_y = cursor_pos.y - tooltip_height - 10.0;
 
-                        // Keep tooltip in bounds
                         if tooltip_x + tooltip_width > bounds.width {
                             tooltip_x = cursor_pos.x - tooltip_width - 15.0;
                         }
@@ -224,7 +207,6 @@ impl<'a, Message> canvas::Program<Message> for ComparisonChartWidget<'a> {
                             tooltip_y = cursor_pos.y + 15.0;
                         }
 
-                        // Background
                         let tooltip_bg = Path::rounded_rectangle(
                             Point::new(tooltip_x, tooltip_y),
                             Size::new(tooltip_width, tooltip_height),
@@ -238,7 +220,6 @@ impl<'a, Message> canvas::Program<Message> for ComparisonChartWidget<'a> {
                                 .with_width(1.0),
                         );
 
-                        // Text lines
                         let lines: Vec<&str> = text.lines().collect();
                         for (i, line) in lines.iter().enumerate() {
                             let color = if i == 0 {
@@ -266,16 +247,12 @@ impl<'a, Message> canvas::Program<Message> for ComparisonChartWidget<'a> {
     }
 }
 
-/// Get color based on percent change
 fn get_change_color(percent_change: f64) -> Color {
     if percent_change > 5.0 {
-        // Busier - red/orange tones
         Color::from_rgb(0.9, 0.4, 0.3)
     } else if percent_change < -5.0 {
-        // Quieter - green tones
         Color::from_rgb(0.3, 0.8, 0.5)
     } else {
-        // Stable - blue
         style::ACCENT_BLUE
     }
 }

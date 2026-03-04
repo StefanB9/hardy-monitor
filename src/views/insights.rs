@@ -1,8 +1,4 @@
-//! Insights View
-//!
-//! Analytics and insights about occupancy patterns, trends, and
-//! recommendations.
-
+use chrono::{DateTime, Local, Utc};
 use hardy_monitor::{
     analytics::{self, DayAnalysis, Insight, OccupancyStats, TrendDirection},
     style,
@@ -14,7 +10,6 @@ use iced::{
 
 use crate::{app::Message, views::components::card_container};
 
-/// Props required for insights rendering
 pub struct InsightsProps<'a> {
     pub trend: Option<TrendDirection>,
     pub stats: Option<&'a OccupancyStats>,
@@ -22,11 +17,12 @@ pub struct InsightsProps<'a> {
     pub quiet_hours: &'a [(i32, i32, f64)],
     pub day_analysis: &'a [DayAnalysis],
     pub insights: &'a [Insight],
+    pub ml_has_model: bool,
+    pub ml_training_in_progress: bool,
+    pub ml_last_trained: Option<DateTime<Utc>>,
 }
 
-/// Render the insights view
 pub fn view(props: InsightsProps<'_>) -> Element<'_, Message> {
-    // Trend card
     let trend_card = {
         let (trend_icon, trend_text, trend_color) = match props.trend {
             Some(TrendDirection::Increasing) => ("^", "Getting Busier", style::ACCENT_RED),
@@ -55,7 +51,6 @@ pub fn view(props: InsightsProps<'_>) -> Element<'_, Message> {
         .width(Length::FillPortion(1))
     };
 
-    // Statistics card
     let stats_card = if let Some(stats) = props.stats {
         let consistency = if stats.coefficient_of_variation < 0.3 {
             ("Very Predictable", style::ACCENT_GREEN)
@@ -100,7 +95,6 @@ pub fn view(props: InsightsProps<'_>) -> Element<'_, Message> {
         .width(Length::FillPortion(1))
     };
 
-    // Peak hours card
     let peak_card = card_container(column![
         text("Busiest Times").size(14).color(style::TEXT_MUTED),
         Space::new().height(15),
@@ -109,7 +103,7 @@ pub fn view(props: InsightsProps<'_>) -> Element<'_, Message> {
             for (weekday, hour, pct) in props.peak_hours.iter().take(5) {
                 peak_col = peak_col.push(
                     row![
-                        container(text(format!("{:.0}%", pct)).size(12).color(style::BG_DARK))
+                        container(text(format!("{pct:.0}%")).size(12).color(style::BG_DARK))
                             .padding([4, 8])
                             .style(|_| container::Style {
                                 background: Some(style::ACCENT_RED.into()),
@@ -136,7 +130,6 @@ pub fn view(props: InsightsProps<'_>) -> Element<'_, Message> {
     ])
     .width(Length::FillPortion(1));
 
-    // Quiet hours card
     let quiet_card = card_container(column![
         text("Quietest Times").size(14).color(style::TEXT_MUTED),
         Space::new().height(15),
@@ -145,7 +138,7 @@ pub fn view(props: InsightsProps<'_>) -> Element<'_, Message> {
             for (weekday, hour, pct) in props.quiet_hours.iter().take(5) {
                 quiet_col = quiet_col.push(
                     row![
-                        container(text(format!("{:.0}%", pct)).size(12).color(style::BG_DARK))
+                        container(text(format!("{pct:.0}%")).size(12).color(style::BG_DARK))
                             .padding([4, 8])
                             .style(|_| container::Style {
                                 background: Some(style::ACCENT_GREEN.into()),
@@ -172,7 +165,6 @@ pub fn view(props: InsightsProps<'_>) -> Element<'_, Message> {
     ])
     .width(Length::FillPortion(1));
 
-    // Day analysis card
     let days_card = card_container(column![
         text("Daily Patterns").size(14).color(style::TEXT_MUTED),
         Space::new().height(15),
@@ -221,7 +213,6 @@ pub fn view(props: InsightsProps<'_>) -> Element<'_, Message> {
     ])
     .width(Length::Fill);
 
-    // Insights list
     let insights_card = card_container(column![
         text("Key Insights").size(14).color(style::TEXT_MUTED),
         Space::new().height(15),
@@ -284,21 +275,51 @@ pub fn view(props: InsightsProps<'_>) -> Element<'_, Message> {
     ])
     .width(Length::Fill);
 
-    // Layout
+    let ml_status_card = {
+        let (status_text, status_color) = if props.ml_training_in_progress {
+            ("Training...", style::ACCENT_ORANGE)
+        } else if props.ml_has_model {
+            ("Active", style::ACCENT_GREEN)
+        } else {
+            ("Collecting data", style::TEXT_MUTED)
+        };
+
+        let trained_str = props
+            .ml_last_trained
+            .map(|t| t.with_timezone(&Local).format("%Y-%m-%d %H:%M").to_string())
+            .unwrap_or_else(|| "N/A".to_string());
+
+        card_container(column![
+            text("ML Prediction Model")
+                .size(14)
+                .color(style::TEXT_MUTED),
+            Space::new().height(15),
+            row![
+                text("Status:").size(12).color(style::TEXT_MUTED),
+                Space::new().width(8),
+                text(status_text).size(12).color(status_color),
+                Space::new().width(Length::Fill),
+                text("Last trained:").size(12).color(style::TEXT_MUTED),
+                Space::new().width(8),
+                text(trained_str).size(12).color(style::TEXT_BRIGHT),
+            ]
+            .align_y(Alignment::Center),
+        ])
+        .width(Length::Fill)
+    };
+
     let content = column![
-        // Row 1: High Level Stats
         row![trend_card, stats_card]
             .spacing(20)
             .height(Length::Fixed(160.0)),
         Space::new().height(20),
-        // Row 2: Daily Patterns (Full Width)
         days_card,
         Space::new().height(20),
-        // Row 3: Hourly Analysis (Side by Side)
         row![peak_card, quiet_card].spacing(20),
         Space::new().height(20),
-        // Row 4: Detailed Text Insights
         insights_card,
+        Space::new().height(20),
+        ml_status_card,
     ]
     .padding(10);
 

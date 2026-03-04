@@ -1,10 +1,6 @@
-//! Dashboard View
-//!
-//! Main dashboard showing current occupancy, best time recommendations,
-//! and historical occupancy chart.
-
 use chrono::{DateTime, Duration as ChronoDuration, Local, Utc};
 use hardy_monitor::{
+    PredictionWithConfidence,
     analytics::midnight_local_as_utc,
     db::OccupancyLog,
     schedule::GymSchedule,
@@ -26,7 +22,6 @@ use crate::{
     },
 };
 
-/// Props required for dashboard rendering
 pub struct DashboardProps<'a> {
     pub occupancy: Option<f64>,
     pub history: &'a [OccupancyLog],
@@ -42,9 +37,12 @@ pub struct DashboardProps<'a> {
     pub history_start_date: &'a str,
     pub history_end_date: &'a str,
     pub history_days_preset: Option<i64>,
+    pub ml_predictions: &'a [PredictionWithConfidence],
+    pub ml_predictions_simple: &'a [(DateTime<Utc>, f64)],
+    pub show_ml_prediction: bool,
+    pub ml_has_model: bool,
 }
 
-/// Render the dashboard view
 pub fn view(props: DashboardProps<'_>) -> Element<'_, Message> {
     let gauge = Canvas::new(GaugeWidget {
         percentage: props.occupancy.unwrap_or(0.0),
@@ -153,12 +151,12 @@ pub fn view(props: DashboardProps<'_>) -> Element<'_, Message> {
                 .size(16)
                 .color(style::TEXT_MUTED),
             Space::new().height(20),
-            text(format!("{:02}:00", hour))
+            text(format!("{hour:02}:00"))
                 .size(36)
                 .color(style::ACCENT_CYAN),
             Space::new().height(10),
             container(
-                text(format!("~{:.0}% load", avg))
+                text(format!("~{avg:.0}% load"))
                     .size(14)
                     .color(style::BG_DARK)
             )
@@ -207,7 +205,6 @@ pub fn view(props: DashboardProps<'_>) -> Element<'_, Message> {
     .spacing(10)
     .align_y(Alignment::Center);
 
-    // Use local time for chart boundaries so "Today" means local today
     let (chart_start, chart_end) = if let Some(days) = props.history_days_preset {
         let local_today = Local::now().date_naive();
         let end_aligned = midnight_local_as_utc(local_today + ChronoDuration::days(1));
@@ -229,9 +226,20 @@ pub fn view(props: DashboardProps<'_>) -> Element<'_, Message> {
         }
     };
 
+    let (active_predictions, confidence_band): (
+        &[(DateTime<Utc>, f64)],
+        &[PredictionWithConfidence],
+    ) = if props.show_ml_prediction && props.ml_has_model && !props.ml_predictions_simple.is_empty()
+    {
+        (props.ml_predictions_simple, props.ml_predictions)
+    } else {
+        (props.predictions, &[])
+    };
+
     let chart = Canvas::new(HistoryChart {
         history: props.history,
-        predictions: props.predictions,
+        predictions: active_predictions,
+        confidence_band,
         range_start: chart_start,
         range_end: chart_end,
         cache: props.chart_cache,
@@ -241,13 +249,52 @@ pub fn view(props: DashboardProps<'_>) -> Element<'_, Message> {
 
     let chart_element = Element::from(chart).map(|_| Message::ChartInteraction);
 
+    let show_ml = props.show_ml_prediction;
+    let ml_has_model = props.ml_has_model;
+    let ml_text_color = if ml_has_model {
+        style::TEXT_BRIGHT
+    } else {
+        style::TEXT_MUTED
+    };
+    let ml_checkbox = row![
+        {
+            let cb = checkbox(show_ml)
+                .size(14)
+                .style(move |_theme, _status| checkbox::Style {
+                    icon_color: style::TEXT_BRIGHT,
+                    background: if show_ml {
+                        style::ACCENT_CYAN.into()
+                    } else {
+                        style::BG_DARK.into()
+                    },
+                    border: Border {
+                        radius: 4.0.into(),
+                        width: 1.0,
+                        color: style::STROKE_DIM,
+                    },
+                    text_color: None,
+                });
+            if ml_has_model {
+                Element::from(cb.on_toggle(Message::PredictionModeToggled))
+            } else {
+                Element::from(cb)
+            }
+        },
+        Space::new().width(6),
+        text("ML").size(12).color(ml_text_color),
+    ]
+    .spacing(0)
+    .align_y(Alignment::Center);
+
     column![
         top_row,
         card_container(column![
             row![
                 text("Occupancy Trends").size(16).color(style::TEXT_MUTED),
                 Space::new().width(Length::Fill),
-                controls
+                controls,
+                Space::new().width(16),
+                ml_checkbox,
             ]
             .align_y(Alignment::Center),
             Space::new().height(20),

@@ -1,11 +1,5 @@
-//! Structured Error Types for Hardy Monitor
-//!
-//! This module provides type-safe error handling with proper error chains
-//! and recovery information.
-
 use thiserror::Error;
 
-/// Primary application error type with structured variants
 #[derive(Error, Debug, Clone)]
 pub enum AppError {
     #[error("Network error: {message}")]
@@ -31,9 +25,12 @@ pub enum AppError {
 
     #[error("Unexpected error: {0}")]
     Unknown(String),
+
+    #[cfg(feature = "gui")]
+    #[error("ML training error: {0}")]
+    MlTraining(String),
 }
 
-/// Network-specific error kinds for better error handling
 #[derive(Error, Debug, Clone, PartialEq, Eq)]
 pub enum NetworkErrorKind {
     #[error("Connection timeout")]
@@ -48,7 +45,6 @@ pub enum NetworkErrorKind {
     Unknown,
 }
 
-/// Database-specific error types
 #[derive(Error, Debug, Clone)]
 pub enum DatabaseError {
     #[error("Query failed ({query_context}): {message}")]
@@ -71,22 +67,21 @@ pub enum DatabaseError {
 }
 
 impl AppError {
-    /// Returns true if this error is likely transient and retrying may succeed
     pub fn is_retryable(&self) -> bool {
         match self {
             AppError::Network { kind, .. } => matches!(
                 kind,
                 NetworkErrorKind::Timeout | NetworkErrorKind::ConnectionRefused
             ),
-            AppError::Database(DatabaseError::PoolExhausted) => true,
-            AppError::Database(DatabaseError::ConnectionFailed(_)) => true,
+            AppError::Database(
+                DatabaseError::PoolExhausted | DatabaseError::ConnectionFailed(_),
+            ) => true,
             _ => false,
         }
     }
 
-    /// Create a database error from sqlx error with context
-    pub fn from_sqlx(err: sqlx::Error, context: &str) -> Self {
-        let db_error = match &err {
+    pub fn from_sqlx(err: &sqlx::Error, context: &str) -> Self {
+        let db_error = match err {
             sqlx::Error::PoolTimedOut => DatabaseError::PoolExhausted,
             sqlx::Error::RowNotFound => DatabaseError::NotFound,
             sqlx::Error::Database(db_err) => {
@@ -110,7 +105,6 @@ impl AppError {
         AppError::Database(db_error)
     }
 
-    /// Create a database error from anyhow error with context
     pub fn from_anyhow_db(err: anyhow::Error, context: &str) -> Self {
         AppError::Database(DatabaseError::QueryFailed {
             query_context: context.to_string(),
@@ -118,7 +112,6 @@ impl AppError {
         })
     }
 
-    /// Create a network error from reqwest error
     pub fn from_reqwest(err: reqwest::Error) -> Self {
         let kind = if err.is_timeout() {
             NetworkErrorKind::Timeout
@@ -134,7 +127,6 @@ impl AppError {
         }
     }
 
-    /// Create an API error with status code
     pub fn api_error(status_code: u16, message: impl Into<String>) -> Self {
         AppError::Api {
             status_code,
@@ -142,17 +134,14 @@ impl AppError {
         }
     }
 
-    /// Create a validation error
     pub fn validation(message: impl Into<String>) -> Self {
         AppError::Validation(message.into())
     }
 
-    /// Create an IO error
     pub fn io(message: impl Into<String>) -> Self {
         AppError::Io(message.into())
     }
 
-    /// Get error category for logging/metrics
     pub fn category(&self) -> &'static str {
         match self {
             AppError::Network { .. } => "network",
@@ -162,6 +151,8 @@ impl AppError {
             AppError::Config(_) => "config",
             AppError::Api { .. } => "api",
             AppError::Unknown(_) => "unknown",
+            #[cfg(feature = "gui")]
+            AppError::MlTraining(_) => "ml_training",
         }
     }
 }

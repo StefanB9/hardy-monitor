@@ -1,7 +1,3 @@
-//! Data Repair View
-//!
-//! Tools for repairing gaps in historical occupancy data.
-
 use hardy_monitor::{
     error::AppError,
     repair::{RepairProgress, RepairSummary},
@@ -17,7 +13,6 @@ use crate::{
     views::components::{card_container, primary_btn_style, secondary_btn_style, styled_input},
 };
 
-/// Props required for data repair rendering
 pub struct DataRepairProps<'a> {
     pub start_date: &'a str,
     pub end_date: &'a str,
@@ -26,7 +21,6 @@ pub struct DataRepairProps<'a> {
     pub last_result: Option<&'a Result<RepairSummary, AppError>>,
 }
 
-/// Render the data repair view
 pub fn view(props: DataRepairProps<'_>) -> Element<'_, Message> {
     let preset_btn = |label: &str, preset: RepairPreset| {
         button(text(label.to_string()).size(12))

@@ -1,45 +1,29 @@
-//! Machine Learning module for occupancy prediction
-//!
-//! This module provides ML-based predictions using Gradient Boosted Decision Trees
-//! trained on historical occupancy data.
-
 pub mod confidence;
 pub mod features;
 pub mod model;
 pub mod persistence;
 pub mod training;
 
-use std::collections::VecDeque;
-use std::path::PathBuf;
+use std::{collections::VecDeque, path::PathBuf};
 
 use chrono::{DateTime, Datelike, Timelike, Utc};
-
-use crate::db::HourlyAverage;
-use crate::schedule::GymSchedule;
-use crate::traits::Clock;
-
 pub use confidence::{PredictionMethod, PredictionWithConfidence};
 pub use features::{FeatureExtractor, PredictionFeatures};
 pub use model::TrainedModel;
 pub use persistence::PersistedModel;
+use serde::Deserialize;
 pub use training::TrainingResult;
 
-/// Configuration for the ML prediction system
-#[derive(Debug, Clone)]
+use crate::{db::HourlyAverage, schedule::GymSchedule, traits::Clock};
+
+#[derive(Debug, Clone, Deserialize)]
 pub struct MlConfig {
-    /// Whether ML predictions are enabled
     pub enabled: bool,
-    /// Number of days of historical data to use for training
     pub training_window_days: i64,
-    /// How often to retrain the model (in hours)
     pub retrain_interval_hours: i64,
-    /// How many hours ahead to predict
     pub prediction_horizon_hours: i64,
-    /// Minimum number of samples required before training
     pub min_samples_for_training: usize,
-    /// Path to save/load the trained model
     pub model_path: Option<PathBuf>,
-    /// Whether to fall back to simple averages if ML fails
     pub fallback_on_error: bool,
 }
 
@@ -57,38 +41,29 @@ impl Default for MlConfig {
     }
 }
 
-/// Main predictor that combines ML model with fallback logic
 pub struct OccupancyPredictor {
-    /// Trained ML model (if available)
     model: Option<TrainedModel>,
-    /// Feature extractor for building prediction inputs
     feature_extractor: FeatureExtractor,
-    /// Recent occupancy data for momentum features
     recent_data: VecDeque<(DateTime<Utc>, f64)>,
-    /// Timestamp of last model training
     last_training: Option<DateTime<Utc>>,
-    /// Configuration
     config: MlConfig,
 }
 
 impl OccupancyPredictor {
-    /// Create a new predictor with the given configuration
     pub fn new(config: MlConfig) -> Self {
         Self {
             model: None,
             feature_extractor: FeatureExtractor::new(),
-            recent_data: VecDeque::with_capacity(180), // 3 hours at 1-min intervals
+            recent_data: VecDeque::with_capacity(180),
             last_training: None,
             config,
         }
     }
 
-    /// Check if ML predictions can be used
     pub fn can_use_ml(&self) -> bool {
         self.config.enabled && self.model.is_some()
     }
 
-    /// Check if the model needs retraining
     pub fn needs_retraining(&self, clock: &dyn Clock) -> bool {
         match self.last_training {
             None => true,
@@ -99,27 +74,22 @@ impl OccupancyPredictor {
         }
     }
 
-    /// Update the trained model
     pub fn set_model(&mut self, model: TrainedModel, trained_at: DateTime<Utc>) {
         self.model = Some(model);
         self.last_training = Some(trained_at);
     }
 
-    /// Add a recent occupancy observation for momentum features
     pub fn add_observation(&mut self, timestamp: DateTime<Utc>, percentage: f64) {
-        // Keep only the last 3 hours of data
         while self.recent_data.len() >= 180 {
             self.recent_data.pop_front();
         }
         self.recent_data.push_back((timestamp, percentage));
     }
 
-    /// Update feature extractor with new baseline data
     pub fn update_baseline(&mut self, baseline: &[HourlyAverage]) {
         self.feature_extractor.update_historical_stats(baseline);
     }
 
-    /// Generate predictions for the next N hours
     pub fn predict(
         &self,
         baseline: &[HourlyAverage],
@@ -132,7 +102,6 @@ impl OccupancyPredictor {
         for hours_ahead in 1..=self.config.prediction_horizon_hours {
             let target_time = now + chrono::Duration::hours(hours_ahead);
 
-            // Skip if gym is closed at target time
             let local_target = target_time.with_timezone(&chrono::Local);
             if !schedule.is_open(&local_target) {
                 continue;
@@ -145,7 +114,6 @@ impl OccupancyPredictor {
         predictions
     }
 
-    /// Generate a single prediction for a target time
     fn predict_single(
         &self,
         target_time: DateTime<Utc>,
@@ -153,18 +121,15 @@ impl OccupancyPredictor {
         baseline: &[HourlyAverage],
         schedule: &GymSchedule,
     ) -> PredictionWithConfidence {
-        // Try ML prediction first if available
         if self.can_use_ml() {
             if let Some(pred) = self.ml_predict(target_time, hours_ahead, baseline, schedule) {
                 return pred;
             }
         }
 
-        // Fall back to simple historical average
         self.fallback_predict(target_time, baseline)
     }
 
-    /// ML-based prediction
     fn ml_predict(
         &self,
         target_time: DateTime<Utc>,
@@ -174,7 +139,6 @@ impl OccupancyPredictor {
     ) -> Option<PredictionWithConfidence> {
         let model = self.model.as_ref()?;
 
-        // Extract features for the target time
         let features = self.feature_extractor.extract(
             target_time,
             hours_ahead,
@@ -183,10 +147,8 @@ impl OccupancyPredictor {
             schedule,
         );
 
-        // Get prediction from model
         let predicted_value = model.predict(&features)?;
 
-        // Calculate confidence based on historical variance and horizon
         let (confidence_low, confidence_high, confidence_score) =
             self.calculate_confidence(target_time, predicted_value, hours_ahead);
 
@@ -202,14 +164,13 @@ impl OccupancyPredictor {
         })
     }
 
-    /// Fallback prediction using simple historical average
     fn fallback_predict(
         &self,
         target_time: DateTime<Utc>,
         baseline: &[HourlyAverage],
     ) -> PredictionWithConfidence {
-        let target_weekday = target_time.weekday().num_days_from_monday();
-        let target_hour = target_time.hour();
+        let target_weekday = target_time.weekday().num_days_from_monday() as i32;
+        let target_hour = target_time.hour() as i32;
 
         let (predicted_value, confidence_low, confidence_high) = baseline
             .iter()
@@ -225,64 +186,56 @@ impl OccupancyPredictor {
                     (avg.avg_percentage + std_dev).clamp(0.0, 100.0),
                 )
             })
-            .unwrap_or((50.0, 30.0, 70.0)); // Default if no data
+            .unwrap_or((50.0, 30.0, 70.0));
 
         PredictionWithConfidence {
             timestamp: normalize_timestamp(target_time),
             predicted_value,
             confidence_low,
             confidence_high,
-            confidence_score: 0.5, // Lower confidence for fallback
+            confidence_score: 0.5,
             method: PredictionMethod::HistoricalAverage,
         }
     }
 
-    /// Calculate confidence intervals for a prediction
     fn calculate_confidence(
         &self,
         target_time: DateTime<Utc>,
         predicted_value: f64,
         hours_ahead: i64,
     ) -> (f64, f64, f64) {
-        let weekday = target_time.weekday().num_days_from_monday();
-        let hour = target_time.hour();
+        let weekday = target_time.weekday().num_days_from_monday() as i32;
+        let hour = target_time.hour() as i32;
 
-        // Get historical standard deviation for this slot
         let base_std = self
             .feature_extractor
             .get_slot_std(weekday, hour)
             .unwrap_or(15.0);
 
-        // Increase uncertainty with prediction horizon
         let horizon_penalty = 1.0 + (hours_ahead as f64 - 1.0) * 0.15;
         let adjusted_std = base_std * horizon_penalty;
 
         let confidence_low = (predicted_value - adjusted_std).clamp(0.0, 100.0);
         let confidence_high = (predicted_value + adjusted_std).clamp(0.0, 100.0);
 
-        // Confidence score: higher when std is lower
         let confidence_score = (1.0 / (1.0 + adjusted_std / 20.0)).clamp(0.0, 1.0);
 
         (confidence_low, confidence_high, confidence_score)
     }
 
-    /// Get the configuration
     pub fn config(&self) -> &MlConfig {
         &self.config
     }
 
-    /// Check if a model is loaded
     pub fn has_model(&self) -> bool {
         self.model.is_some()
     }
 
-    /// Get the last training timestamp
     pub fn last_training(&self) -> Option<DateTime<Utc>> {
         self.last_training
     }
 }
 
-/// Normalize a timestamp to the start of the hour
 fn normalize_timestamp(dt: DateTime<Utc>) -> DateTime<Utc> {
     dt.with_minute(0)
         .and_then(|d| d.with_second(0))
@@ -292,9 +245,11 @@ fn normalize_timestamp(dt: DateTime<Utc>) -> DateTime<Utc> {
 
 #[cfg(test)]
 mod tests {
+    use approx::assert_abs_diff_eq;
+    use chrono::TimeZone;
+
     use super::*;
     use crate::traits::MockClock;
-    use chrono::TimeZone;
 
     #[test]
     fn test_predictor_creation() {
@@ -341,16 +296,16 @@ mod tests {
         let predictor = OccupancyPredictor::new(config);
 
         let baseline = vec![HourlyAverage {
-            weekday: 0, // Monday
+            weekday: 0,
             hour: 10,
             avg_percentage: 45.0,
             sample_count: 100,
         }];
 
-        let target = Utc.with_ymd_and_hms(2024, 6, 17, 10, 0, 0).unwrap(); // Monday
+        let target = Utc.with_ymd_and_hms(2024, 6, 17, 10, 0, 0).unwrap();
         let pred = predictor.fallback_predict(target, &baseline);
 
-        assert_eq!(pred.predicted_value, 45.0);
+        assert_abs_diff_eq!(pred.predicted_value, 45.0, epsilon = 1e-5);
         assert!(matches!(pred.method, PredictionMethod::HistoricalAverage));
     }
 
