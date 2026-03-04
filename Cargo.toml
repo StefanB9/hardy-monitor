@@ -13,9 +13,9 @@ gui = ["dep:approx", "dep:bincode", "dep:iced", "dep:image", "dep:linfa", "dep:l
 anyhow = { version = "1.0.102", default-features = false, features = ["std"] }
 approx = { version = "0.5.1", default-features = false, optional = true }
 bincode = { version = "2.0.1", default-features = false, features = ["std", "serde"], optional = true }
-chrono = { version = "0.4.43", default-features = false, features = ["clock", "serde"] }
+chrono = { version = "0.4.44", default-features = false, features = ["clock", "serde"] }
 clap = { version = "4.5.60", default-features = false, features = ["derive", "std"] }
-config = { version = "0.15.19", default-features = false }
+config = { version = "0.15.19", default-features = false, features = ["toml"] }
 csv = { version = "1.4.0", default-features = false }
 dirs = { version = "6.0.0", default-features = false }
 dotenvy = { version = "0.15.7", default-features = false }
@@ -31,7 +31,7 @@ reqwest = { version = "0.13.2", default-features = false, features = ["json", "n
 serde = { version = "1.0.228", default-features = false, features = ["derive"] }
 sqlx = { version = "0.9.0-alpha.1", default-features = false, features = ["chrono", "macros", "migrate", "postgres", "runtime-tokio", "tls-rustls"] }
 thiserror = { version = "2.0.18", default-features = false }
-tokio = { version = "1.49.0", default-features = false, features = ["macros", "rt-multi-thread"] }
+tokio = { version = "1.50.0", default-features = false, features = ["macros", "rt-multi-thread"] }
 tracing = { version = "0.1.44", default-features = false, features = ["attributes", "std"] }
 tracing-appender = { version = "0.2.4", default-features = false }
 tracing-subscriber = { version = "0.3.22", default-features = false, features = ["env-filter", "fmt", "std"] }
@@ -40,7 +40,7 @@ tray-icon = { version = "0.21.3", default-features = false, optional = true }
 [dev-dependencies]
 proptest = "1.10.0"
 temp-env = "0.3.6"
-tempfile = "3.25.0"
+tempfile = "3.26.0"
 wiremock = "0.6.5"
 
 [profile.release]
