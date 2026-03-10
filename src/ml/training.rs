@@ -83,7 +83,7 @@ pub async fn train_model(
     let logs = db
         .get_history_range(start, end)
         .await
-        .map_err(|e| TrainingError::FitError(format!("Database error: {}", e)))?;
+        .map_err(|e| TrainingError::FitError(format!("Database error: {e}")))?;
 
     if logs.len() < config.min_samples_for_training {
         return Err(TrainingError::InsufficientData(logs.len()));
@@ -92,7 +92,7 @@ pub async fn train_model(
     let baseline = db
         .get_averages_range(start, end)
         .await
-        .map_err(|e| TrainingError::FitError(format!("Database error: {}", e)))?;
+        .map_err(|e| TrainingError::FitError(format!("Database error: {e}")))?;
 
     let preparer = TrainingDataPreparer::new(config.clone());
     let (features, targets) = preparer.prepare(&logs, &baseline, schedule)?;

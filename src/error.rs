@@ -159,6 +159,8 @@ impl AppError {
 
 #[cfg(test)]
 mod tests {
+    use anyhow::Result;
+
     use super::*;
 
     #[test]
@@ -195,11 +197,14 @@ mod tests {
     }
 
     #[test]
-    fn test_validation_helper() {
+    fn test_validation_helper() -> Result<()> {
         let err = AppError::validation("bad input");
-        match err {
-            AppError::Validation(msg) => assert_eq!(msg, "bad input"),
-            _ => panic!("Wrong error type"),
-        }
+        let AppError::Validation(msg) = err else {
+            anyhow::bail!("Wrong error type");
+        };
+
+        assert_eq!(msg, "bad input");
+
+        Ok(())
     }
 }

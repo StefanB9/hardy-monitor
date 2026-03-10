@@ -2,7 +2,7 @@
 build-std = ["std", "panic_abort", "panic_unwind", "core", "alloc"]
 
 [build]
-jobs = 8
+#jobs = 1
 rustflags = ["-C", "target-cpu=native", "-Z", "location-detail=none"]
 
 [target.x86_64-pc-windows-msvc]

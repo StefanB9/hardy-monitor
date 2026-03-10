@@ -76,6 +76,8 @@ impl GymApiClient {
 
 #[cfg(test)]
 mod tests {
+    use anyhow::Result;
+    use approx::assert_relative_eq;
     use super::*;
 
     fn make_response(num_val: &str) -> GymResponse {
@@ -88,43 +90,43 @@ mod tests {
     }
 
     #[test]
-    fn test_occupancy_percentage_valid_integer() {
+    fn test_occupancy_percentage_valid_integer() -> Result<()> {
         let response = make_response("75");
-        let result = response.occupancy_percentage();
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), 75.0);
+        let val = response.occupancy_percentage()?;
+        assert_relative_eq!(val, 75.0);
+        Ok(())
     }
 
     #[test]
-    fn test_occupancy_percentage_valid_decimal() {
+    fn test_occupancy_percentage_valid_decimal() -> Result<()> {
         let response = make_response("42.5");
-        let result = response.occupancy_percentage();
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), 42.5);
+        let val = response.occupancy_percentage()?;
+        assert_relative_eq!(val, 42.5);
+        Ok(())
     }
 
     #[test]
-    fn test_occupancy_percentage_zero() {
+    fn test_occupancy_percentage_zero() -> Result<()> {
         let response = make_response("0");
-        let result = response.occupancy_percentage();
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), 0.0);
+        let val = response.occupancy_percentage()?;
+        assert_relative_eq!(val, 0.0);
+        Ok(())
     }
 
     #[test]
-    fn test_occupancy_percentage_hundred() {
+    fn test_occupancy_percentage_hundred() -> Result<()> {
         let response = make_response("100");
-        let result = response.occupancy_percentage();
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), 100.0);
+        let val = response.occupancy_percentage()?;
+        assert_relative_eq!(val, 100.0);
+        Ok(())
     }
 
     #[test]
-    fn test_occupancy_percentage_over_hundred() {
+    fn test_occupancy_percentage_over_hundred() -> Result<()> {
         let response = make_response("120.5");
-        let result = response.occupancy_percentage();
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), 120.5);
+        let val = response.occupancy_percentage()?;
+        assert_relative_eq!(val, 120.5);
+        Ok(())
     }
 
     #[test]
@@ -149,19 +151,19 @@ mod tests {
     }
 
     #[test]
-    fn test_occupancy_percentage_negative() {
+    fn test_occupancy_percentage_negative() -> Result<()> {
         let response = make_response("-5.0");
-        let result = response.occupancy_percentage();
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), -5.0);
+        let val = response.occupancy_percentage()?;
+        assert_relative_eq!(val, -5.0);
+        Ok(())
     }
 
     #[test]
-    fn test_occupancy_percentage_scientific_notation() {
+    fn test_occupancy_percentage_scientific_notation() -> Result<()> {
         let response = make_response("1e2");
-        let result = response.occupancy_percentage();
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), 100.0);
+        let val = response.occupancy_percentage()?;
+        assert_relative_eq!(val, 100.0);
+        Ok(())
     }
 
     #[test]

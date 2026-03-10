@@ -9,6 +9,7 @@ use iced::{
 
 use crate::{app::Message, views::components::card_container};
 
+#[derive(Clone, Copy)]
 pub struct MLPredictionsProps<'a> {
     pub ml_predictions: &'a [PredictionWithConfidence],
     pub ml_predictions_simple: &'a [(DateTime<Utc>, f64)],

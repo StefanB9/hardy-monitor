@@ -61,7 +61,7 @@ impl TrainedModel {
             self.training_samples,
             self.training_mse,
             self.validation_mse
-                .map(|v| format!("{:.2}", v))
+                .map(|v| format!("{v:.2}"))
                 .unwrap_or_else(|| "N/A".to_string()),
             self.created_at.format("%Y-%m-%d %H:%M")
         )
@@ -218,17 +218,16 @@ impl std::fmt::Display for TrainingError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             TrainingError::InsufficientData(n) => {
-                write!(f, "Insufficient data for training: {} samples", n)
+                write!(f, "Insufficient data for training: {n} samples")
             }
             TrainingError::MismatchedLengths { features, targets } => {
                 write!(
                     f,
-                    "Feature and target lengths mismatch: {} vs {}",
-                    features, targets
+                    "Feature and target lengths mismatch: {features} vs {targets}",
                 )
             }
-            TrainingError::ArrayError(e) => write!(f, "Array error: {}", e),
-            TrainingError::FitError(e) => write!(f, "Model fitting error: {}", e),
+            TrainingError::ArrayError(e) => write!(f, "Array error: {e}"),
+            TrainingError::FitError(e) => write!(f, "Model fitting error: {e}"),
         }
     }
 }
@@ -241,6 +240,7 @@ mod tests {
     use approx::assert_relative_eq;
     use super::*;
 
+    #[allow(clippy::cast_precision_loss)]
     fn create_test_features(n: usize) -> Vec<PredictionFeatures> {
         (0..n)
             .map(|i| {
@@ -264,7 +264,7 @@ mod tests {
                     is_holiday: if i % 30 == 0 { 1.0 } else { 0.0 },
                     week_of_year_sin: (t * 0.02).sin() + noise1,
                     week_of_year_cos: (t * 0.021).cos() + noise2,
-                    hours_ahead: 1.0 + (i % 6) as f64,
+                    hours_ahead: 1.0 + (t % 6.0),
                 }
             })
             .collect()

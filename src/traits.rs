@@ -271,17 +271,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_mock_notifier_records_notifications() {
+    async fn test_mock_notifier_records_notifications() -> Result<()> {
         let notifier = MockNotifier::new();
 
         assert!(!notifier.was_called());
         assert_eq!(notifier.notification_count(), 0);
 
-        notifier.notify("Title 1", "Body 1").await.unwrap();
+        notifier.notify("Title 1", "Body 1").await?;
         assert!(notifier.was_called());
         assert_eq!(notifier.notification_count(), 1);
 
-        notifier.notify("Title 2", "Body 2").await.unwrap();
+        notifier.notify("Title 2", "Body 2").await?;
         assert_eq!(notifier.notification_count(), 2);
 
         let notifications = notifier.get_notifications();
@@ -293,17 +293,20 @@ mod tests {
             notifications[1],
             ("Title 2".to_string(), "Body 2".to_string())
         );
+
+        Ok(())
     }
 
     #[tokio::test]
-    async fn test_mock_notifier_clear() {
+    async fn test_mock_notifier_clear() -> Result<()> {
         let notifier = MockNotifier::new();
 
-        notifier.notify("Test", "Test").await.unwrap();
+        notifier.notify("Test", "Test").await?;
         assert!(notifier.was_called());
 
         notifier.clear();
         assert!(!notifier.was_called());
         assert_eq!(notifier.notification_count(), 0);
+        Ok(())
     }
 }

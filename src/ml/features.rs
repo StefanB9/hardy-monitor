@@ -152,9 +152,9 @@ impl FeatureExtractor {
         let weekday = local_time.weekday().num_days_from_monday() as i32;
         let week_of_year = local_time.iso_week().week();
 
-        let (hour_sin, hour_cos) = cyclical_encode(hour as f64, 24.0);
-        let (weekday_sin, weekday_cos) = cyclical_encode(weekday as f64, 7.0);
-        let (week_of_year_sin, week_of_year_cos) = cyclical_encode(week_of_year as f64, 52.0);
+        let (hour_sin, hour_cos) = cyclical_encode(f64::from(hour), 24.0);
+        let (weekday_sin, weekday_cos) = cyclical_encode(f64::from(weekday), 7.0);
+        let (week_of_year_sin, week_of_year_cos) = cyclical_encode(f64::from(week_of_year), 52.0);
 
         let (historical_avg, historical_std) = self
             .historical_stats
@@ -311,6 +311,7 @@ fn cyclical_encode(value: f64, period: f64) -> (f64, f64) {
 
 #[cfg(test)]
 mod tests {
+    use anyhow::Result;
     use approx::assert_relative_eq;
 
     use super::*;
@@ -322,7 +323,7 @@ mod tests {
 
         let distance = ((sin_23 - sin_0).powi(2) + (cos_23 - cos_0).powi(2)).sqrt();
 
-        assert!(distance < 0.5, "Distance was {}", distance);
+        assert!(distance < 0.5, "Distance was {distance}");
     }
 
     #[test]
@@ -348,7 +349,7 @@ mod tests {
     }
 
     #[test]
-    fn test_update_historical_stats() {
+    fn test_update_historical_stats() -> Result<()> {
         let mut extractor = FeatureExtractor::new();
 
         let baseline = vec![
@@ -374,9 +375,13 @@ mod tests {
 
         extractor.update_historical_stats(&baseline);
 
-        let stats = extractor.get_slot_stats(0, 10).unwrap();
+        let stats = extractor
+            .get_slot_stats(0, 10)
+            .ok_or_else(|| anyhow::anyhow!("Expected stats for weekday 0 at hour 10 to be present after update"))?;
+
         assert_relative_eq!(stats.mean, 50.0, epsilon = 1e-10);
         assert!(stats.std_dev > 0.0);
+        Ok(())
     }
 
     #[test]
@@ -453,15 +458,8 @@ mod tests {
 
         let (avg_1h, avg_3h, trend) = extractor.extract_momentum(&recent);
 
-        assert_eq!(avg_1h, 50.0);
-        assert_eq!(avg_3h, 50.0);
-        assert_eq!(trend, 0.0);
-    }
-
-    #[test]
-    fn test_weekend_detection() {
-        assert!(5 >= 5);
-        assert!(6 >= 5);
-        assert!(!(4 >= 5));
+        assert_relative_eq!(avg_1h, 50.0);
+        assert_relative_eq!(avg_3h, 50.0);
+        assert_relative_eq!(trend, 0.0);
     }
 }

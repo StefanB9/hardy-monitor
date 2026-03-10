@@ -9,6 +9,7 @@ use crate::{
     views::components::{card_container, primary_btn_style, secondary_btn_style},
 };
 
+#[derive(Clone, Copy)]
 pub struct WeeklyPatternProps<'a> {
     pub analytics_data: &'a [HourlyAverage],
     pub analytics_range: AnalyticsRange,

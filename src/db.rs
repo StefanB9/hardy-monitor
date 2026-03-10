@@ -320,6 +320,7 @@ impl Database {
 
 #[cfg(test)]
 mod tests {
+    use approx::assert_relative_eq;
     use chrono::{Datelike, TimeZone, Timelike};
 
     use super::*;
@@ -333,44 +334,52 @@ mod tests {
     }
 
     #[test]
-    fn test_timestamp_utc_fields() {
-        let ts = Utc.with_ymd_and_hms(2024, 6, 15, 14, 30, 0).unwrap();
+    fn test_timestamp_utc_fields() -> Result<()> {
+        let ts = Utc.with_ymd_and_hms(2024, 6, 15, 14, 30, 0)
+            .single()
+            .ok_or_else(|| anyhow::anyhow!("Invalid timestamp"))?;
         let log = make_log(ts);
         assert_eq!(log.timestamp.year(), 2024);
         assert_eq!(log.timestamp.month(), 6);
         assert_eq!(log.timestamp.day(), 15);
         assert_eq!(log.timestamp.hour(), 14);
         assert_eq!(log.timestamp.minute(), 30);
+        Ok(())
     }
 
     #[test]
-    fn test_timestamp_year_boundary() {
-        let ts = Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap();
+    fn test_timestamp_year_boundary() -> Result<()> {
+        let ts = Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0)
+            .single()
+            .ok_or_else(|| anyhow::anyhow!("Invalid timestamp"))?;
         let log = make_log(ts);
         assert_eq!(log.timestamp.year(), 2024);
         assert_eq!(log.timestamp.month(), 1);
         assert_eq!(log.timestamp.day(), 1);
+        Ok(())
     }
 
     #[test]
-    fn test_timestamp_roundtrips_via_rfc3339() {
-        let ts = Utc.with_ymd_and_hms(2024, 6, 15, 14, 30, 0).unwrap();
+    fn test_timestamp_roundtrips_via_rfc3339() -> Result<()> {
+        let ts = Utc.with_ymd_and_hms(2024, 6, 15, 14, 30, 0)
+            .single()
+            .ok_or_else(|| anyhow::anyhow!("Invalid timestamp"))?;
         let log = make_log(ts);
-        let reparsed = DateTime::parse_from_rfc3339(&log.timestamp.to_rfc3339())
-            .unwrap()
+        let reparsed = DateTime::parse_from_rfc3339(&log.timestamp.to_rfc3339())?
             .with_timezone(&Utc);
         assert_eq!(log.timestamp, reparsed);
+        Ok(())
     }
 
     #[test]
-    fn test_timestamp_subsecond_precision() {
+    fn test_timestamp_subsecond_precision() -> Result<()> {
         use chrono::NaiveDateTime;
         let ndt =
-            NaiveDateTime::parse_from_str("2024-06-15T14:30:00.123456789", "%Y-%m-%dT%H:%M:%S%.f")
-                .unwrap();
+            NaiveDateTime::parse_from_str("2024-06-15T14:30:00.123456789", "%Y-%m-%dT%H:%M:%S%.f")?;
         let ts = Utc.from_utc_datetime(&ndt);
         let log = make_log(ts);
         assert_eq!(log.timestamp.nanosecond(), 123_456_789);
+        Ok(())
     }
 
     #[test]
@@ -383,7 +392,7 @@ mod tests {
         };
         assert_eq!(avg.weekday, 0);
         assert_eq!(avg.hour, 10);
-        assert_eq!(avg.avg_percentage, 45.5);
+        assert_relative_eq!(avg.avg_percentage, 45.5);
         assert_eq!(avg.sample_count, 100);
     }
 

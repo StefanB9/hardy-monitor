@@ -116,7 +116,7 @@ impl PersistedModel {
             self.training_samples,
             self.training_mse,
             self.validation_mse
-                .map(|v| format!("{:.2}", v))
+                .map(|v| format!("{v:.2}"))
                 .unwrap_or_else(|| "N/A".to_string()),
             self.created_at.format("%Y-%m-%d %H:%M UTC")
         )
@@ -135,15 +135,14 @@ pub enum PersistenceError {
 impl std::fmt::Display for PersistenceError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            PersistenceError::FileNotFound(path) => write!(f, "Model file not found: {}", path),
-            PersistenceError::IoError(e) => write!(f, "IO error: {}", e),
-            PersistenceError::SerializeError(e) => write!(f, "Serialization error: {}", e),
-            PersistenceError::DeserializeError(e) => write!(f, "Deserialization error: {}", e),
+            PersistenceError::FileNotFound(path) => write!(f, "Model file not found: {path}"),
+            PersistenceError::IoError(e) => write!(f, "IO error: {e}"),
+            PersistenceError::SerializeError(e) => write!(f, "Serialization error: {e}"),
+            PersistenceError::DeserializeError(e) => write!(f, "Deserialization error: {e}"),
             PersistenceError::VersionMismatch { expected, found } => {
                 write!(
                     f,
-                    "Model version mismatch: expected v{}, found v{}",
-                    expected, found
+                    "Model version mismatch: expected v{expected}, found v{found}",
                 )
             }
         }

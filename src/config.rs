@@ -293,6 +293,7 @@ impl AppConfig {
 
 #[cfg(test)]
 mod tests {
+    use approx::assert_relative_eq;
     use super::*;
 
     #[test]
@@ -306,9 +307,9 @@ mod tests {
     fn test_window_config_defaults() {
         let config = WindowConfig::default();
         assert_eq!(config.title, "Hardy's Gym Monitor");
-        assert_eq!(config.width, 1200.0);
-        assert_eq!(config.height, 850.0);
-        assert_eq!(config.sidebar_width, 250.0);
+        assert_relative_eq!(config.width, 1200.0);
+        assert_relative_eq!(config.height, 850.0);
+        assert_relative_eq!(config.sidebar_width, 250.0);
     }
 
     #[test]
@@ -323,14 +324,14 @@ mod tests {
     fn test_notification_config_defaults() {
         let config = NotificationConfig::default();
         assert!(!config.enabled);
-        assert_eq!(config.threshold_percent, 30.0);
+        assert_relative_eq!(config.threshold_percent, 30.0);
     }
 
     #[test]
     fn test_thresholds_config_defaults() {
         let config = ThresholdsConfig::default();
-        assert_eq!(config.low_occupancy_percent, 40.0);
-        assert_eq!(config.high_occupancy_percent, 75.0);
+        assert_relative_eq!(config.low_occupancy_percent, 40.0);
+        assert_relative_eq!(config.high_occupancy_percent, 75.0);
     }
 
     #[test]
@@ -355,8 +356,8 @@ mod tests {
     }
 
     #[test]
-    fn test_loaded_config_has_expected_structure() {
-        let config = AppConfig::load().expect("Config should load");
+    fn test_loaded_config_has_expected_structure() -> Result<()> {
+        let config = AppConfig::load()?;
 
         assert!(!config.gym.api_url.is_empty());
         assert!(config.network.request_timeout_secs > 0);
@@ -364,6 +365,8 @@ mod tests {
         assert!(config.refresh.data_fetch_interval_secs > 0);
         assert!(config.thresholds.high_occupancy_percent > config.thresholds.low_occupancy_percent);
         assert!(config.analytics.prediction_window_days > 0);
+
+        Ok(())
     }
 
     #[test]
@@ -385,7 +388,7 @@ mod tests {
 
         let thresholds = ThresholdsConfig::default();
         let cloned = thresholds.clone();
-        assert_eq!(
+        assert_relative_eq!(
             cloned.low_occupancy_percent,
             thresholds.low_occupancy_percent
         );
@@ -394,66 +397,78 @@ mod tests {
     #[test]
     fn test_config_structs_are_debug() {
         let config = NetworkConfig::default();
-        let debug_str = format!("{:?}", config);
+        let debug_str = format!("{config:?}");
         assert!(debug_str.contains("NetworkConfig"));
         assert!(debug_str.contains("request_timeout_secs"));
     }
 
     #[test]
-    fn test_env_var_overrides_gym_api_url() {
+    fn test_env_var_overrides_gym_api_url() -> Result<()> {
         let env_key = "HARDY__GYM__API_URL";
         let test_url = "https://test.example.com/api";
 
-        temp_env::with_var(env_key, Some(test_url), || {
-            let config = AppConfig::load().expect("Config should load");
+        temp_env::with_var(env_key, Some(test_url), || -> Result<()> {
+            let config = AppConfig::load()?;
             assert_eq!(
                 config.gym.api_url, test_url,
                 "Environment variable should override gym.api_url"
             );
-        });
+            Ok(())
+        })?;
+
+        Ok(())
     }
 
     #[test]
-    fn test_env_var_overrides_network_timeout() {
+    fn test_env_var_overrides_network_timeout() -> Result<()> {
         let env_key = "HARDY__NETWORK__REQUEST_TIMEOUT_SECS";
 
-        temp_env::with_var(env_key, Some("120"), || {
-            let config = AppConfig::load().expect("Config should load");
+        temp_env::with_var(env_key, Some("120"), || -> Result<()> {
+            let config = AppConfig::load()?;
             assert_eq!(
                 config.network.request_timeout_secs, 120,
                 "Environment variable should override network.request_timeout_secs"
             );
-        });
+            Ok(())
+        })?;
+
+        Ok(())
     }
 
     #[test]
-    fn test_env_var_overrides_thresholds() {
+    fn test_env_var_overrides_thresholds() -> Result<()> {
         temp_env::with_vars(
             vec![
                 ("HARDY__THRESHOLDS__LOW_OCCUPANCY_PERCENT", Some("25.0")),
                 ("HARDY__THRESHOLDS__HIGH_OCCUPANCY_PERCENT", Some("85.0")),
             ],
-            || {
-                let config = AppConfig::load().expect("Config should load");
-                assert_eq!(config.thresholds.low_occupancy_percent, 25.0);
-                assert_eq!(config.thresholds.high_occupancy_percent, 85.0);
+            || -> Result<()> {
+                let config = AppConfig::load()?;
+                assert_relative_eq!(config.thresholds.low_occupancy_percent, 25.0);
+                assert_relative_eq!(config.thresholds.high_occupancy_percent, 85.0);
+                Ok(())
             },
-        );
+        )?;
+
+        Ok(())
     }
 
     #[test]
-    fn test_env_var_overrides_notifications() {
+    fn test_env_var_overrides_notifications() -> Result<()> {
         temp_env::with_vars(
             vec![
                 ("HARDY__NOTIFICATIONS__ENABLED", Some("true")),
                 ("HARDY__NOTIFICATIONS__THRESHOLD_PERCENT", Some("15.5")),
             ],
-            || {
-                let config = AppConfig::load().expect("Config should load");
+            || -> Result<()> {
+                let config = AppConfig::load()?;
                 assert!(config.notifications.enabled);
-                assert_eq!(config.notifications.threshold_percent, 15.5);
+                assert_relative_eq!(config.notifications.threshold_percent, 15.5);
+                Ok(())
             },
-        );
+        )?;
+
+        Ok(())
     }
 
     fn valid_app_config() -> AppConfig {
@@ -573,8 +588,8 @@ mod tests {
     }
 
     #[test]
-    fn test_config_threshold_relationship() {
-        let config = AppConfig::load().expect("Config should load");
+    fn test_config_threshold_relationship() -> Result<()> {
+        let config = AppConfig::load()?;
 
         assert!(
             config.thresholds.low_occupancy_percent <= config.thresholds.high_occupancy_percent,
@@ -582,30 +597,38 @@ mod tests {
             config.thresholds.low_occupancy_percent,
             config.thresholds.high_occupancy_percent
         );
+
+        Ok(())
     }
 
     #[test]
-    fn test_config_schedule_hours_in_valid_range() {
-        let config = AppConfig::load().expect("Config should load");
+    fn test_config_schedule_hours_in_valid_range() -> Result<()> {
+        let config = AppConfig::load()?;
 
         assert!(config.schedule.weekday.open_hour < 24);
         assert!(config.schedule.weekday.close_hour <= 24);
         assert!(config.schedule.weekend.open_hour < 24);
         assert!(config.schedule.weekend.close_hour <= 24);
+
+        Ok(())
     }
 
     #[test]
-    fn test_config_refresh_intervals_are_positive() {
-        let config = AppConfig::load().expect("Config should load");
+    fn test_config_refresh_intervals_are_positive() -> Result<()> {
+        let config = AppConfig::load()?;
 
         assert!(config.refresh.ui_interval_secs > 0);
         assert!(config.refresh.data_fetch_interval_secs > 0);
         assert!(config.refresh.tray_poll_interval_ms > 0);
+
+        Ok(())
     }
 
     #[test]
-    fn test_config_prediction_window_is_positive() {
-        let config = AppConfig::load().expect("Config should load");
+    fn test_config_prediction_window_is_positive() -> Result<()> {
+        let config = AppConfig::load()?;
         assert!(config.analytics.prediction_window_days > 0);
+
+        Ok(())
     }
 }

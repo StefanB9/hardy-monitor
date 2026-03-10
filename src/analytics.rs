@@ -746,6 +746,7 @@ pub fn weekday_short(weekday: i32) -> &'static str {
 
 #[cfg(test)]
 mod tests {
+    use anyhow::Result;
     use chrono::{Datelike, NaiveDate, Timelike};
 
     use super::*;
@@ -1019,6 +1020,7 @@ mod tests {
     }
 
     mod week_boundary_tests {
+        use approx::assert_relative_eq;
         use chrono::TimeZone;
 
         use super::*;
@@ -1215,7 +1217,7 @@ mod tests {
                     baseline.push(HourlyAverage {
                         weekday,
                         hour,
-                        avg_percentage: (weekday * 10 + hour) as f64,
+                        avg_percentage: f64::from(weekday * 10 + hour),
                         sample_count: 10,
                     });
                 }
@@ -1224,8 +1226,8 @@ mod tests {
             let predictions = calculate_predictions_with_clock(&baseline, &schedule, &clock);
 
             assert_eq!(predictions.len(), 2);
-            assert_eq!(predictions[0].1, 52.0);
-            assert_eq!(predictions[1].1, 53.0);
+            assert_relative_eq!(predictions[0].1, 52.0);
+            assert_relative_eq!(predictions[1].1, 53.0);
         }
 
         #[test]
@@ -1236,7 +1238,7 @@ mod tests {
                 .map(|weekday| HourlyAverage {
                     weekday,
                     hour: 10,
-                    avg_percentage: (weekday as f64) * 10.0 + 5.0,
+                    avg_percentage: f64::from(weekday) * 10.0 + 5.0,
                     sample_count: 10,
                 })
                 .collect();
@@ -1249,11 +1251,9 @@ mod tests {
 
                 if !predictions.is_empty() {
                     let expected_weekday = day % 7;
-                    let expected_pct = (expected_weekday as f64) * 10.0 + 5.0;
-                    assert_eq!(
-                        predictions[0].1, expected_pct,
-                        "Day {} should have percentage {}",
-                        day, expected_pct
+                    let expected_pct = f64::from(expected_weekday) * 10.0 + 5.0;
+                    assert_relative_eq!(
+                        predictions[0].1, expected_pct
                     );
                 }
             }
@@ -1302,9 +1302,9 @@ mod tests {
                 let mut baseline = Vec::new();
                 for i in 0..baseline_size {
                     baseline.push(HourlyAverage {
-                        weekday: (i % 7) as i32,
-                        hour: (i % 24) as i32,
-                        avg_percentage: (i as f64) * 1.5,
+                        weekday: i32::try_from(i % 7).unwrap_or(0),
+                        hour: i32::try_from(i % 24).unwrap_or(0),
+                        avg_percentage: f64::from(u32::try_from(i).unwrap_or(0)) * 1.5,
                         sample_count: 1,
                     });
                 }
@@ -1317,13 +1317,14 @@ mod tests {
             fn find_best_time_returns_lowest_if_found(
                 percentages in prop::collection::vec(0.0f64..=100.0, 1..50)
             ) {
-                let today_idx = Local::now().weekday().num_days_from_monday() as i32;
+                let today_idx = i32::try_from(Local::now().weekday().num_days_from_monday()).unwrap_or(0);
+
                 let data: Vec<HourlyAverage> = percentages
                     .iter()
                     .enumerate()
                     .map(|(i, &pct)| HourlyAverage {
                         weekday: today_idx,
-                        hour: (i % 24) as i32,
+                        hour: i32::try_from(i % 24).unwrap_or(0),
                         avg_percentage: pct,
                         sample_count: 1,
                     })
@@ -1338,6 +1339,7 @@ mod tests {
     }
 
     mod comparative_tests {
+        use approx::assert_relative_eq;
         use super::*;
 
         fn make_hourly_avg(weekday: i32, hour: i32, pct: f64, samples: i64) -> HourlyAverage {
@@ -1365,9 +1367,9 @@ mod tests {
             assert_eq!(result.len(), 1);
             assert_eq!(result[0].weekday, 0);
             assert_eq!(result[0].hour, 10);
-            assert_eq!(result[0].baseline_avg, 40.0);
-            assert_eq!(result[0].current_avg, 50.0);
-            assert_eq!(result[0].absolute_change, 10.0);
+            assert_relative_eq!(result[0].baseline_avg, 40.0);
+            assert_relative_eq!(result[0].current_avg, 50.0);
+            assert_relative_eq!(result[0].absolute_change, 10.0);
             assert!((result[0].percent_change - 25.0).abs() < 0.01);
         }
 
@@ -1379,9 +1381,9 @@ mod tests {
             let result = build_hourly_comparisons(&baseline, &current);
 
             assert_eq!(result.len(), 1);
-            assert_eq!(result[0].baseline_avg, 0.0);
-            assert_eq!(result[0].current_avg, 50.0);
-            assert_eq!(result[0].percent_change, 100.0);
+            assert_relative_eq!(result[0].baseline_avg, 0.0);
+            assert_relative_eq!(result[0].current_avg, 50.0);
+            assert_relative_eq!(result[0].percent_change, 100.0);
         }
 
         #[test]
@@ -1392,9 +1394,9 @@ mod tests {
             let result = build_hourly_comparisons(&baseline, &current);
 
             assert_eq!(result.len(), 1);
-            assert_eq!(result[0].baseline_avg, 50.0);
-            assert_eq!(result[0].current_avg, 0.0);
-            assert_eq!(result[0].percent_change, -100.0);
+            assert_relative_eq!(result[0].baseline_avg, 50.0);
+            assert_relative_eq!(result[0].current_avg, 0.0);
+            assert_relative_eq!(result[0].percent_change, -100.0);
         }
 
         #[test]
@@ -1541,6 +1543,7 @@ mod tests {
     }
 
     mod stats_tests {
+        use approx::assert_relative_eq;
         use super::*;
 
         fn make_hourly_avg(weekday: i32, hour: i32, pct: f64, samples: i64) -> HourlyAverage {
@@ -1559,34 +1562,38 @@ mod tests {
         }
 
         #[test]
-        fn test_calculate_stats_single_value() {
+        fn test_calculate_stats_single_value() -> Result<()> {
             let data = vec![make_hourly_avg(0, 10, 50.0, 5)];
-            let result = calculate_stats(&data).unwrap();
+            let result = calculate_stats(&data)
+                .ok_or_else(|| anyhow::anyhow!("Expected stats"))?;
 
-            assert_eq!(result.mean, 50.0);
-            assert_eq!(result.median, 50.0);
-            assert_eq!(result.std_dev, 0.0);
-            assert_eq!(result.min, 50.0);
-            assert_eq!(result.max, 50.0);
+            assert_relative_eq!(result.mean, 50.0);
+            assert_relative_eq!(result.median, 50.0);
+            assert_relative_eq!(result.std_dev, 0.0);
+            assert_relative_eq!(result.min, 50.0);
+            assert_relative_eq!(result.max, 50.0);
             assert_eq!(result.sample_count, 1);
+            Ok(())
         }
 
         #[test]
-        fn test_calculate_stats_multiple_values() {
+        fn test_calculate_stats_multiple_values() -> Result<()> {
             let data = vec![
                 make_hourly_avg(0, 10, 20.0, 5),
                 make_hourly_avg(0, 11, 40.0, 5),
                 make_hourly_avg(0, 12, 60.0, 5),
                 make_hourly_avg(0, 13, 80.0, 5),
             ];
-            let result = calculate_stats(&data).unwrap();
+            let result = calculate_stats(&data)
+                .ok_or_else(|| anyhow::anyhow!("Expected stats for multiple values"))?;
 
-            assert_eq!(result.mean, 50.0);
-            assert_eq!(result.median, 50.0);
-            assert_eq!(result.min, 20.0);
-            assert_eq!(result.max, 80.0);
+            assert_relative_eq!(result.mean, 50.0);
+            assert_relative_eq!(result.median, 50.0);
+            assert_relative_eq!(result.min, 20.0);
+            assert_relative_eq!(result.max, 80.0);
             assert_eq!(result.sample_count, 4);
             assert!(result.std_dev > 0.0);
+            Ok(())
         }
 
         #[test]
@@ -1604,9 +1611,9 @@ mod tests {
             assert_eq!(result[0].weekday, 0);
             assert_eq!(result[0].day_name, "Monday");
             assert_eq!(result[0].peak_hour, Some(11));
-            assert_eq!(result[0].peak_occupancy, 50.0);
+            assert_relative_eq!(result[0].peak_occupancy, 50.0);
             assert_eq!(result[0].quietest_hour, Some(10));
-            assert_eq!(result[0].quietest_occupancy, 30.0);
+            assert_relative_eq!(result[0].quietest_occupancy, 30.0);
         }
 
         #[test]
@@ -1684,7 +1691,7 @@ mod tests {
             let data: Vec<HourlyAverage> = (0..7)
                 .flat_map(|weekday| {
                     (8..20)
-                        .map(move |hour| make_hourly_avg(weekday, hour, (20 + hour * 3) as f64, 10))
+                        .map(move |hour| make_hourly_avg(weekday, hour, f64::from(20 + hour * 3), 10))
                 })
                 .collect();
 
@@ -1727,7 +1734,7 @@ mod tests {
             let data: Vec<HourlyAverage> = (0..7)
                 .flat_map(|weekday| {
                     (8..20)
-                        .map(move |hour| make_hourly_avg(weekday, hour, (20 + hour * 3) as f64, 10))
+                        .map(move |hour| make_hourly_avg(weekday, hour, f64::from(20 + hour * 3), 10))
                 })
                 .collect();
 

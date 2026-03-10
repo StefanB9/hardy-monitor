@@ -361,6 +361,8 @@ impl DataRepairer {
 
 #[cfg(test)]
 mod tests {
+    use anyhow::Result;
+
     use super::*;
 
     #[test]
@@ -376,13 +378,16 @@ mod tests {
     }
 
     #[test]
-    fn test_repair_progress_creation() {
+    fn test_repair_progress_creation() -> Result<()> {
         let progress = RepairProgress {
-            current_day: NaiveDate::from_ymd_opt(2024, 1, 15).unwrap(),
+            current_day: NaiveDate::from_ymd_opt(2024, 1, 15)
+                .ok_or_else(|| anyhow::anyhow!("Invalid date"))?,
             total_days: 30,
             processed_days: 5,
         };
         assert_eq!(progress.total_days, 30);
         assert_eq!(progress.processed_days, 5);
+
+        Ok(())
     }
 }

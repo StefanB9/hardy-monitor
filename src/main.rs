@@ -125,11 +125,11 @@ fn main() -> Result<()> {
     let rt = tokio::runtime::Runtime::new().context("Failed to create tokio runtime")?;
 
     if args.daemon {
-        run_daemon(rt, config)
+        run_daemon(&rt, &config)
     } else {
         #[cfg(feature = "gui")]
         {
-            run_gui(rt, config)
+            run_gui(&rt, config)
         }
         #[cfg(not(feature = "gui"))]
         {
@@ -141,7 +141,7 @@ fn main() -> Result<()> {
 const DRIFT_THRESHOLD_SECS: i64 = 5;
 const ALIGNMENT_CHECK_ITERATIONS: u64 = 60;
 
-fn run_daemon(rt: tokio::runtime::Runtime, config: Arc<AppConfig>) -> Result<()> {
+fn run_daemon(rt: &tokio::runtime::Runtime, config: &Arc<AppConfig>) -> Result<()> {
     rt.block_on(async {
         tracing::info!("Starting Hardy Monitor in daemon mode");
 
@@ -232,7 +232,8 @@ async fn wait_for_minute_alignment() {
             wait_secs = seconds_until_next_minute,
             "waiting for next full minute"
         );
-        tokio::time::sleep(Duration::from_secs(seconds_until_next_minute as u64)).await;
+        let sleep_secs = seconds_until_next_minute.try_into().unwrap_or(0);
+        tokio::time::sleep(Duration::from_secs(sleep_secs)).await;
     }
 }
 
@@ -246,7 +247,7 @@ async fn fetch_and_store(api_client: &api::GymApiClient, database: &db::Database
 }
 
 #[cfg(feature = "gui")]
-fn run_gui(rt: tokio::runtime::Runtime, config: Arc<AppConfig>) -> Result<()> {
+fn run_gui(rt: &tokio::runtime::Runtime, config: Arc<AppConfig>) -> Result<()> {
     let (database, icon, tray_icon_data) = rt.block_on(async {
         tracing::info!("Connecting to database...");
         let database = db::Database::new(&config.database.url).await?;

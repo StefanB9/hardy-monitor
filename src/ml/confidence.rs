@@ -68,6 +68,7 @@ impl PredictionWithConfidence {
 
 #[cfg(test)]
 mod tests {
+    use approx::assert_relative_eq;
     use chrono::TimeZone;
 
     use super::*;
@@ -86,8 +87,8 @@ mod tests {
         let ml = PredictionMethod::MachineLearning { confidence: 0.8 };
         let avg = PredictionMethod::HistoricalAverage;
 
-        assert_eq!(ml.confidence(), 0.8);
-        assert_eq!(avg.confidence(), 0.5);
+        assert_relative_eq!(ml.confidence(), 0.8);
+        assert_relative_eq!(avg.confidence(), 0.5);
     }
 
     #[test]
@@ -102,9 +103,9 @@ mod tests {
             PredictionMethod::MachineLearning { confidence: 0.8 },
         );
 
-        assert_eq!(pred.predicted_value, 50.0);
-        assert_eq!(pred.confidence_low, 40.0);
-        assert_eq!(pred.confidence_high, 60.0);
+        assert_relative_eq!(pred.predicted_value, 50.0);
+        assert_relative_eq!(pred.confidence_low, 40.0);
+        assert_relative_eq!(pred.confidence_high, 60.0);
         assert!(pred.is_valid());
     }
 
@@ -120,10 +121,10 @@ mod tests {
             PredictionMethod::HistoricalAverage,
         );
 
-        assert_eq!(pred.predicted_value, 100.0);
-        assert_eq!(pred.confidence_low, 0.0);
-        assert_eq!(pred.confidence_high, 100.0);
-        assert_eq!(pred.confidence_score, 1.0);
+        assert_relative_eq!(pred.predicted_value, 100.0);
+        assert_relative_eq!(pred.confidence_low, 0.0);
+        assert_relative_eq!(pred.confidence_high, 100.0);
+        assert_relative_eq!(pred.confidence_score, 1.0);
     }
 
     #[test]
@@ -138,7 +139,7 @@ mod tests {
             PredictionMethod::HistoricalAverage,
         );
 
-        assert_eq!(pred.interval_width(), 30.0);
+        assert_relative_eq!(pred.interval_width(), 30.0);
     }
 
     #[test]
@@ -155,7 +156,7 @@ mod tests {
 
         let (ts, val) = pred.to_simple();
         assert_eq!(ts, timestamp);
-        assert_eq!(val, 50.0);
+        assert_relative_eq!(val, 50.0);
     }
 
     #[test]
