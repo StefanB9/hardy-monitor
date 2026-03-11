@@ -3,7 +3,7 @@ use linfa::prelude::*;
 use linfa_linear::LinearRegression;
 use ndarray::{Array1, Array2, Axis};
 
-use super::features::PredictionFeatures;
+use super::{evaluation, features::PredictionFeatures};
 
 #[derive(Debug, Clone)]
 pub struct TrainedModel {
@@ -160,7 +160,7 @@ impl ModelBuilder {
             .map_err(|e: linfa_linear::LinearError<f64>| TrainingError::FitError(e.to_string()))?;
 
         let predictions = model.predict(&x);
-        let mse = calculate_mse(&predictions.to_vec(), targets);
+        let mse = evaluation::mse(&predictions.to_vec(), targets).unwrap_or(f64::MAX);
 
         Ok(TrainedModel::new(model, mse, None, n_samples, Utc::now()))
     }
@@ -185,25 +185,11 @@ impl ModelBuilder {
         let mut model = self.train(train_features, train_targets)?;
 
         let val_predictions = model.predict_batch(val_features);
-        let val_mse = calculate_mse(&val_predictions, val_targets);
+        let val_mse = evaluation::mse(&val_predictions, val_targets).unwrap_or(f64::MAX);
         model.validation_mse = Some(val_mse);
 
         Ok(model)
     }
-}
-
-fn calculate_mse(predictions: &[f64], targets: &[f64]) -> f64 {
-    if predictions.is_empty() || predictions.len() != targets.len() {
-        return f64::MAX;
-    }
-
-    let sum_sq_error: f64 = predictions
-        .iter()
-        .zip(targets.iter())
-        .map(|(p, t)| (p - t).powi(2))
-        .sum();
-
-    sum_sq_error / predictions.len() as f64
 }
 
 #[derive(Debug, Clone)]
@@ -238,6 +224,7 @@ impl std::error::Error for TrainingError {}
 mod tests {
     use anyhow::Result;
     use approx::assert_relative_eq;
+
     use super::*;
 
     #[allow(clippy::cast_precision_loss)]
@@ -415,16 +402,6 @@ mod tests {
         assert_eq!(predictions.len(), 5);
 
         Ok(())
-    }
-
-    #[test]
-    fn test_calculate_mse() {
-        let predictions = vec![10.0, 20.0, 30.0];
-        let targets = vec![12.0, 18.0, 32.0];
-
-        let mse = calculate_mse(&predictions, &targets);
-
-        assert!((mse - 4.0).abs() < 1e-10);
     }
 
     #[test]

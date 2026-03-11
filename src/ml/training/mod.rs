@@ -1,3 +1,5 @@
+pub mod cross_validation;
+
 use std::collections::VecDeque;
 
 use chrono::{DateTime, Duration, Utc};
@@ -209,7 +211,8 @@ mod tests {
                 let timestamp = base_time + Duration::hours(i64::from(i));
                 let hour = (6 + i) % 24;
                 let weekday = f64::from((i / 24) % 7);
-                let percentage = 30.0 + (f64::from(hour) * 2.0) + (weekday * 3.0) + f64::from(i % 10);
+                let percentage =
+                    30.0 + (f64::from(hour) * 2.0) + (weekday * 3.0) + f64::from(i % 10);
                 OccupancyLog {
                     id: i64::from(i),
                     timestamp,

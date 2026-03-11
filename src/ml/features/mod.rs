@@ -1,7 +1,7 @@
-use std::{
-    collections::{HashMap, VecDeque},
-    f64::consts::PI,
-};
+mod cyclical;
+mod momentum;
+
+use std::collections::{HashMap, VecDeque};
 
 use chrono::{DateTime, Datelike, Local, Timelike, Utc};
 
@@ -152,9 +152,10 @@ impl FeatureExtractor {
         let weekday = local_time.weekday().num_days_from_monday() as i32;
         let week_of_year = local_time.iso_week().week();
 
-        let (hour_sin, hour_cos) = cyclical_encode(f64::from(hour), 24.0);
-        let (weekday_sin, weekday_cos) = cyclical_encode(f64::from(weekday), 7.0);
-        let (week_of_year_sin, week_of_year_cos) = cyclical_encode(f64::from(week_of_year), 52.0);
+        let (hour_sin, hour_cos) = cyclical::cyclical_encode(f64::from(hour), 24.0);
+        let (weekday_sin, weekday_cos) = cyclical::cyclical_encode(f64::from(weekday), 7.0);
+        let (week_of_year_sin, week_of_year_cos) =
+            cyclical::cyclical_encode(f64::from(week_of_year), 52.0);
 
         let (historical_avg, historical_std) = self
             .historical_stats
@@ -168,9 +169,10 @@ impl FeatureExtractor {
             })
             .unwrap_or((50.0, 15.0));
 
-        let (recent_avg_1h, recent_avg_3h, recent_trend) = self.extract_momentum(recent_data);
+        let (recent_avg_1h, recent_avg_3h, recent_trend) = momentum::extract_momentum(recent_data);
 
-        let (day_avg_so_far, prev_day_avg) = self.extract_day_features(recent_data, &local_time);
+        let (day_avg_so_far, prev_day_avg) =
+            momentum::extract_day_features(recent_data, &local_time);
 
         let is_weekend = if weekday >= 5 { 1.0 } else { 0.0 };
         let is_holiday = if is_bavarian_holiday(local_time.date_naive()) {
@@ -198,104 +200,6 @@ impl FeatureExtractor {
             hours_ahead: hours_ahead as f64,
         }
     }
-
-    fn extract_momentum(&self, recent_data: &VecDeque<(DateTime<Utc>, f64)>) -> (f64, f64, f64) {
-        if recent_data.is_empty() {
-            return (50.0, 50.0, 0.0);
-        }
-
-        let now = recent_data.back().map(|(t, _)| *t).unwrap_or_else(Utc::now);
-        let one_hour_ago = now - chrono::Duration::hours(1);
-        let three_hours_ago = now - chrono::Duration::hours(3);
-
-        let recent_1h: Vec<f64> = recent_data
-            .iter()
-            .filter(|(t, _)| *t >= one_hour_ago)
-            .map(|(_, v)| *v)
-            .collect();
-        let recent_avg_1h = if recent_1h.is_empty() {
-            50.0
-        } else {
-            recent_1h.iter().sum::<f64>() / recent_1h.len() as f64
-        };
-
-        let recent_3h: Vec<f64> = recent_data
-            .iter()
-            .filter(|(t, _)| *t >= three_hours_ago)
-            .map(|(_, v)| *v)
-            .collect();
-        let recent_avg_3h = if recent_3h.is_empty() {
-            50.0
-        } else {
-            recent_3h.iter().sum::<f64>() / recent_3h.len() as f64
-        };
-
-        let recent_trend = self.calculate_trend(&recent_3h);
-
-        (recent_avg_1h, recent_avg_3h, recent_trend)
-    }
-
-    fn calculate_trend(&self, values: &[f64]) -> f64 {
-        if values.len() < 2 {
-            return 0.0;
-        }
-
-        let n = values.len() as f64;
-        let x_mean = (n - 1.0) / 2.0;
-        let y_mean = values.iter().sum::<f64>() / n;
-
-        let mut numerator = 0.0;
-        let mut denominator = 0.0;
-
-        for (i, &y) in values.iter().enumerate() {
-            let x = i as f64;
-            numerator += (x - x_mean) * (y - y_mean);
-            denominator += (x - x_mean).powi(2);
-        }
-
-        if denominator.abs() < f64::EPSILON {
-            0.0
-        } else {
-            (numerator / denominator) * 60.0
-        }
-    }
-
-    fn extract_day_features(
-        &self,
-        recent_data: &VecDeque<(DateTime<Utc>, f64)>,
-        local_time: &DateTime<Local>,
-    ) -> (f64, f64) {
-        let today = local_time.date_naive();
-        let yesterday = today - chrono::Duration::days(1);
-
-        let mut today_values = Vec::new();
-        let mut yesterday_values = Vec::new();
-
-        for (timestamp, value) in recent_data {
-            let local_ts = timestamp.with_timezone(&Local);
-            let date = local_ts.date_naive();
-
-            if date == today {
-                today_values.push(*value);
-            } else if date == yesterday {
-                yesterday_values.push(*value);
-            }
-        }
-
-        let day_avg_so_far = if today_values.is_empty() {
-            50.0
-        } else {
-            today_values.iter().sum::<f64>() / today_values.len() as f64
-        };
-
-        let prev_day_avg = if yesterday_values.is_empty() {
-            50.0
-        } else {
-            yesterday_values.iter().sum::<f64>() / yesterday_values.len() as f64
-        };
-
-        (day_avg_so_far, prev_day_avg)
-    }
 }
 
 impl Default for FeatureExtractor {
@@ -304,43 +208,13 @@ impl Default for FeatureExtractor {
     }
 }
 
-fn cyclical_encode(value: f64, period: f64) -> (f64, f64) {
-    let angle = 2.0 * PI * value / period;
-    (angle.sin(), angle.cos())
-}
-
 #[cfg(test)]
 mod tests {
     use anyhow::Result;
     use approx::assert_relative_eq;
+    use proptest::prelude::*;
 
     use super::*;
-
-    #[test]
-    fn test_cyclical_encoding_continuity() {
-        let (sin_23, cos_23) = cyclical_encode(23.0, 24.0);
-        let (sin_0, cos_0) = cyclical_encode(0.0, 24.0);
-
-        let distance = ((sin_23 - sin_0).powi(2) + (cos_23 - cos_0).powi(2)).sqrt();
-
-        assert!(distance < 0.5, "Distance was {distance}");
-    }
-
-    #[test]
-    fn test_cyclical_encoding_opposite() {
-        let (_sin_0, cos_0) = cyclical_encode(0.0, 24.0);
-        let (_sin_12, cos_12) = cyclical_encode(12.0, 24.0);
-
-        assert_relative_eq!(cos_0, -cos_12, epsilon = 1e-10);
-    }
-
-    #[test]
-    fn test_cyclical_encoding_quarter() {
-        let (sin_6, cos_6) = cyclical_encode(6.0, 24.0);
-
-        assert_relative_eq!(sin_6, 1.0, epsilon = 1e-10);
-        assert_relative_eq!(cos_6, 0.0, epsilon = 1e-10);
-    }
 
     #[test]
     fn test_feature_extractor_creation() {
@@ -375,49 +249,13 @@ mod tests {
 
         extractor.update_historical_stats(&baseline);
 
-        let stats = extractor
-            .get_slot_stats(0, 10)
-            .ok_or_else(|| anyhow::anyhow!("Expected stats for weekday 0 at hour 10 to be present after update"))?;
+        let stats = extractor.get_slot_stats(0, 10).ok_or_else(|| {
+            anyhow::anyhow!("Expected stats for weekday 0 at hour 10 to be present after update")
+        })?;
 
         assert_relative_eq!(stats.mean, 50.0, epsilon = 1e-10);
         assert!(stats.std_dev > 0.0);
         Ok(())
-    }
-
-    #[test]
-    fn test_calculate_trend_increasing() {
-        let extractor = FeatureExtractor::new();
-        let values = vec![10.0, 20.0, 30.0, 40.0, 50.0];
-
-        let trend = extractor.calculate_trend(&values);
-
-        assert!(
-            trend > 0.0,
-            "Trend should be positive for increasing values"
-        );
-    }
-
-    #[test]
-    fn test_calculate_trend_decreasing() {
-        let extractor = FeatureExtractor::new();
-        let values = vec![50.0, 40.0, 30.0, 20.0, 10.0];
-
-        let trend = extractor.calculate_trend(&values);
-
-        assert!(
-            trend < 0.0,
-            "Trend should be negative for decreasing values"
-        );
-    }
-
-    #[test]
-    fn test_calculate_trend_flat() {
-        let extractor = FeatureExtractor::new();
-        let values = vec![30.0, 30.0, 30.0, 30.0, 30.0];
-
-        let trend = extractor.calculate_trend(&values);
-
-        assert_relative_eq!(trend, 0.0, epsilon = 1e-10);
     }
 
     #[test]
@@ -451,15 +289,104 @@ mod tests {
         assert_eq!(names.len(), PredictionFeatures::NUM_FEATURES);
     }
 
+    // ── Property-based tests for PredictionFeatures (Step 7) ─────────
+
+    fn arb_prediction_features() -> impl Strategy<Value = PredictionFeatures> {
+        // Split into two groups to stay within proptest's 12-element tuple limit.
+        let time_and_stats = (
+            -1.0_f64..=1.0,   // hour_sin
+            -1.0_f64..=1.0,   // hour_cos
+            -1.0_f64..=1.0,   // weekday_sin
+            -1.0_f64..=1.0,   // weekday_cos
+            0.0_f64..=100.0,  // historical_avg
+            0.0_f64..=50.0,   // historical_std
+            0.0_f64..=100.0,  // recent_avg_1h
+            0.0_f64..=100.0,  // recent_avg_3h
+            -50.0_f64..=50.0, // recent_trend
+            0.0_f64..=100.0,  // day_avg_so_far
+            0.0_f64..=100.0,  // prev_day_avg
+        );
+        let context = (
+            proptest::prop_oneof![Just(0.0_f64), Just(1.0)], // is_weekend
+            proptest::prop_oneof![Just(0.0_f64), Just(1.0)], // is_holiday
+            -1.0_f64..=1.0,                                  // week_of_year_sin
+            -1.0_f64..=1.0,                                  // week_of_year_cos
+            0.0_f64..=24.0,                                  // hours_ahead
+        );
+        (time_and_stats, context).prop_map(
+            |(
+                (
+                    hour_sin,
+                    hour_cos,
+                    weekday_sin,
+                    weekday_cos,
+                    historical_avg,
+                    historical_std,
+                    recent_avg_1h,
+                    recent_avg_3h,
+                    recent_trend,
+                    day_avg_so_far,
+                    prev_day_avg,
+                ),
+                (is_weekend, is_holiday, week_of_year_sin, week_of_year_cos, hours_ahead),
+            )| {
+                PredictionFeatures {
+                    hour_sin,
+                    hour_cos,
+                    weekday_sin,
+                    weekday_cos,
+                    historical_avg,
+                    historical_std,
+                    recent_avg_1h,
+                    recent_avg_3h,
+                    recent_trend,
+                    day_avg_so_far,
+                    prev_day_avg,
+                    is_weekend,
+                    is_holiday,
+                    week_of_year_sin,
+                    week_of_year_cos,
+                    hours_ahead,
+                }
+            },
+        )
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(1000))]
+
+        #[test]
+        fn prop_to_vec_correct_length(features in arb_prediction_features()) {
+            prop_assert_eq!(
+                features.to_vec().len(),
+                PredictionFeatures::NUM_FEATURES,
+                "to_vec() length must equal NUM_FEATURES"
+            );
+        }
+
+        #[test]
+        fn prop_all_features_finite(features in arb_prediction_features()) {
+            for (i, v) in features.to_vec().iter().enumerate() {
+                prop_assert!(
+                    v.is_finite(),
+                    "Feature at index {i} is not finite: {v}"
+                );
+            }
+        }
+
+        #[test]
+        fn prop_to_vec_deterministic(features in arb_prediction_features()) {
+            let v1 = features.to_vec();
+            let v2 = features.to_vec();
+            prop_assert_eq!(v1, v2, "to_vec() must be deterministic");
+        }
+    }
+
     #[test]
-    fn test_extract_momentum_empty() {
-        let extractor = FeatureExtractor::new();
-        let recent: VecDeque<(DateTime<Utc>, f64)> = VecDeque::new();
-
-        let (avg_1h, avg_3h, trend) = extractor.extract_momentum(&recent);
-
-        assert_relative_eq!(avg_1h, 50.0);
-        assert_relative_eq!(avg_3h, 50.0);
-        assert_relative_eq!(trend, 0.0);
+    fn test_feature_names_match_num_features() {
+        assert_eq!(
+            PredictionFeatures::feature_names().len(),
+            PredictionFeatures::NUM_FEATURES
+        );
     }
 }

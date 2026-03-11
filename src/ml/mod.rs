@@ -1,45 +1,22 @@
 pub mod confidence;
+pub mod config;
+pub mod evaluation;
 pub mod features;
 pub mod model;
 pub mod persistence;
 pub mod training;
 
-use std::{collections::VecDeque, path::PathBuf};
+use std::collections::VecDeque;
 
 use chrono::{DateTime, Datelike, Timelike, Utc};
 pub use confidence::{PredictionMethod, PredictionWithConfidence};
+pub use config::MlConfig;
 pub use features::{FeatureExtractor, PredictionFeatures};
 pub use model::TrainedModel;
 pub use persistence::PersistedModel;
-use serde::Deserialize;
 pub use training::TrainingResult;
 
 use crate::{db::HourlyAverage, schedule::GymSchedule, traits::Clock};
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct MlConfig {
-    pub enabled: bool,
-    pub training_window_days: i64,
-    pub retrain_interval_hours: i64,
-    pub prediction_horizon_hours: i64,
-    pub min_samples_for_training: usize,
-    pub model_path: Option<PathBuf>,
-    pub fallback_on_error: bool,
-}
-
-impl Default for MlConfig {
-    fn default() -> Self {
-        Self {
-            enabled: true,
-            training_window_days: 56,
-            retrain_interval_hours: 24,
-            prediction_horizon_hours: 6,
-            min_samples_for_training: 500,
-            model_path: None,
-            fallback_on_error: true,
-        }
-    }
-}
 
 pub struct OccupancyPredictor {
     model: Option<TrainedModel>,
@@ -307,17 +284,5 @@ mod tests {
 
         assert_abs_diff_eq!(pred.predicted_value, 45.0, epsilon = 1e-5);
         assert!(matches!(pred.method, PredictionMethod::HistoricalAverage));
-    }
-
-    #[test]
-    fn test_config_defaults() {
-        let config = MlConfig::default();
-
-        assert!(config.enabled);
-        assert_eq!(config.training_window_days, 56);
-        assert_eq!(config.retrain_interval_hours, 24);
-        assert_eq!(config.prediction_horizon_hours, 6);
-        assert_eq!(config.min_samples_for_training, 500);
-        assert!(config.fallback_on_error);
     }
 }
