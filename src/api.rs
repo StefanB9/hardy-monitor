@@ -78,6 +78,7 @@ impl GymApiClient {
 mod tests {
     use anyhow::Result;
     use approx::assert_relative_eq;
+
     use super::*;
 
     fn make_response(num_val: &str) -> GymResponse {

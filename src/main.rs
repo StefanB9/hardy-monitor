@@ -269,8 +269,8 @@ fn run_gui(rt: &tokio::runtime::Runtime, config: Arc<AppConfig>) -> Result<()> {
 
             let quit_item = MenuItem::with_id("quit", "Quit", true, None);
 
-            if let Err(e) = tray_menu
-                .append_items(&[&show_item, &PredefinedMenuItem::separator(), &quit_item])
+            if let Err(e) =
+                tray_menu.append_items(&[&show_item, &PredefinedMenuItem::separator(), &quit_item])
             {
                 tracing::error!("Failed to build menu: {e}");
             }
