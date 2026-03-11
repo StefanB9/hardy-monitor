@@ -126,6 +126,7 @@ impl<Message> canvas::Program<Message> for GaugeWidget<'_> {
 #[cfg(test)]
 mod tests {
     use anyhow::Result;
+
     use super::*;
 
     const LOW: f64 = 40.0;
@@ -211,7 +212,11 @@ mod tests {
                 "Not Busy" => assert_eq!(color, style::ACCENT_GREEN),
                 "Moderate" => assert_eq!(color, style::ACCENT_ORANGE),
                 "Crowded" => assert_eq!(color, style::ACCENT_RED),
-                _ => return Err(anyhow::anyhow!("Unexpected status text: '{text}' for value {val}")),
+                _ => {
+                    return Err(anyhow::anyhow!(
+                        "Unexpected status text: '{text}' for value {val}"
+                    ));
+                }
             }
         }
 

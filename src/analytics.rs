@@ -1252,9 +1252,7 @@ mod tests {
                 if !predictions.is_empty() {
                     let expected_weekday = day % 7;
                     let expected_pct = f64::from(expected_weekday) * 10.0 + 5.0;
-                    assert_relative_eq!(
-                        predictions[0].1, expected_pct
-                    );
+                    assert_relative_eq!(predictions[0].1, expected_pct);
                 }
             }
         }
@@ -1340,6 +1338,7 @@ mod tests {
 
     mod comparative_tests {
         use approx::assert_relative_eq;
+
         use super::*;
 
         fn make_hourly_avg(weekday: i32, hour: i32, pct: f64, samples: i64) -> HourlyAverage {
@@ -1544,6 +1543,7 @@ mod tests {
 
     mod stats_tests {
         use approx::assert_relative_eq;
+
         use super::*;
 
         fn make_hourly_avg(weekday: i32, hour: i32, pct: f64, samples: i64) -> HourlyAverage {
@@ -1564,8 +1564,7 @@ mod tests {
         #[test]
         fn test_calculate_stats_single_value() -> Result<()> {
             let data = vec![make_hourly_avg(0, 10, 50.0, 5)];
-            let result = calculate_stats(&data)
-                .ok_or_else(|| anyhow::anyhow!("Expected stats"))?;
+            let result = calculate_stats(&data).ok_or_else(|| anyhow::anyhow!("Expected stats"))?;
 
             assert_relative_eq!(result.mean, 50.0);
             assert_relative_eq!(result.median, 50.0);
@@ -1690,8 +1689,9 @@ mod tests {
         fn test_generate_insights_basic() {
             let data: Vec<HourlyAverage> = (0..7)
                 .flat_map(|weekday| {
-                    (8..20)
-                        .map(move |hour| make_hourly_avg(weekday, hour, f64::from(20 + hour * 3), 10))
+                    (8..20).map(move |hour| {
+                        make_hourly_avg(weekday, hour, f64::from(20 + hour * 3), 10)
+                    })
                 })
                 .collect();
 
@@ -1733,8 +1733,9 @@ mod tests {
         fn test_insights_sorted_by_importance() {
             let data: Vec<HourlyAverage> = (0..7)
                 .flat_map(|weekday| {
-                    (8..20)
-                        .map(move |hour| make_hourly_avg(weekday, hour, f64::from(20 + hour * 3), 10))
+                    (8..20).map(move |hour| {
+                        make_hourly_avg(weekday, hour, f64::from(20 + hour * 3), 10)
+                    })
                 })
                 .collect();
 

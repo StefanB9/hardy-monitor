@@ -141,7 +141,8 @@ mod tests {
     #[test]
     fn test_easter_2024() -> Result<()> {
         let easter = easter_date(2024).ok_or_else(|| anyhow::anyhow!("Easter date not found"))?;
-        let expected = NaiveDate::from_ymd_opt(2024, 3, 31).ok_or_else(|| anyhow::anyhow!("Invalid date"))?;
+        let expected =
+            NaiveDate::from_ymd_opt(2024, 3, 31).ok_or_else(|| anyhow::anyhow!("Invalid date"))?;
         assert_eq!(easter, expected);
         Ok(())
     }
@@ -149,7 +150,8 @@ mod tests {
     #[test]
     fn test_easter_2025() -> Result<()> {
         let easter = easter_date(2025).ok_or_else(|| anyhow::anyhow!("Easter date not found"))?;
-        let expected = NaiveDate::from_ymd_opt(2025, 4, 20).ok_or_else(|| anyhow::anyhow!("Invalid date"))?;
+        let expected =
+            NaiveDate::from_ymd_opt(2025, 4, 20).ok_or_else(|| anyhow::anyhow!("Invalid date"))?;
         assert_eq!(easter, expected);
         Ok(())
     }
@@ -157,7 +159,8 @@ mod tests {
     #[test]
     fn test_easter_2026() -> Result<()> {
         let easter = easter_date(2026).ok_or_else(|| anyhow::anyhow!("Easter date not found"))?;
-        let expected = NaiveDate::from_ymd_opt(2026, 4, 5).ok_or_else(|| anyhow::anyhow!("Invalid date"))?;
+        let expected =
+            NaiveDate::from_ymd_opt(2026, 4, 5).ok_or_else(|| anyhow::anyhow!("Invalid date"))?;
         assert_eq!(easter, expected);
         Ok(())
     }
@@ -165,7 +168,8 @@ mod tests {
     #[test]
     fn test_easter_historical_1999() -> Result<()> {
         let easter = easter_date(1999).ok_or_else(|| anyhow::anyhow!("Easter date not found"))?;
-        let expected = NaiveDate::from_ymd_opt(1999, 4, 4).ok_or_else(|| anyhow::anyhow!("Invalid date"))?;
+        let expected =
+            NaiveDate::from_ymd_opt(1999, 4, 4).ok_or_else(|| anyhow::anyhow!("Invalid date"))?;
         assert_eq!(easter, expected);
         Ok(())
     }
@@ -173,7 +177,8 @@ mod tests {
     #[test]
     fn test_easter_edge_early_march() -> Result<()> {
         let easter = easter_date(2008).ok_or_else(|| anyhow::anyhow!("Easter date not found"))?;
-        let expected = NaiveDate::from_ymd_opt(2008, 3, 23).ok_or_else(|| anyhow::anyhow!("Invalid date"))?;
+        let expected =
+            NaiveDate::from_ymd_opt(2008, 3, 23).ok_or_else(|| anyhow::anyhow!("Invalid date"))?;
         assert_eq!(easter, expected);
         Ok(())
     }
@@ -181,17 +186,23 @@ mod tests {
     #[test]
     fn test_easter_edge_late_april() -> Result<()> {
         let easter = easter_date(2038).ok_or_else(|| anyhow::anyhow!("Easter date not found"))?;
-        let expected = NaiveDate::from_ymd_opt(2038, 4, 25).ok_or_else(|| anyhow::anyhow!("Invalid date"))?;
+        let expected =
+            NaiveDate::from_ymd_opt(2038, 4, 25).ok_or_else(|| anyhow::anyhow!("Invalid date"))?;
         assert_eq!(easter, expected);
         Ok(())
     }
 
     #[test]
-    fn test_fixed_holidays() -> Result<()>  {
+    fn test_fixed_holidays() -> Result<()> {
         let holidays = [
-            (2024, 1, 1), (2024, 1, 6), (2024, 5, 1),
-            (2024, 8, 15), (2024, 10, 3), (2024, 11, 1),
-            (2024, 12, 25), (2024, 12, 26)
+            (2024, 1, 1),
+            (2024, 1, 6),
+            (2024, 5, 1),
+            (2024, 8, 15),
+            (2024, 10, 3),
+            (2024, 11, 1),
+            (2024, 12, 25),
+            (2024, 12, 26),
         ];
 
         for (y, m, d) in holidays {
@@ -205,8 +216,11 @@ mod tests {
     #[test]
     fn test_variable_holidays_2024() -> Result<()> {
         let holidays = [
-            (2024, 3, 29), (2024, 4, 1), (2024, 5, 9),
-            (2024, 5, 20), (2024, 5, 30)
+            (2024, 3, 29),
+            (2024, 4, 1),
+            (2024, 5, 9),
+            (2024, 5, 20),
+            (2024, 5, 30),
         ];
 
         for (y, m, d) in holidays {
@@ -219,12 +233,12 @@ mod tests {
 
     #[test]
     fn test_regular_weekday_not_holiday() -> Result<()> {
-        let date1 = NaiveDate::from_ymd_opt(2024, 2, 13)
-            .ok_or_else(|| anyhow::anyhow!("Invalid date"))?;
+        let date1 =
+            NaiveDate::from_ymd_opt(2024, 2, 13).ok_or_else(|| anyhow::anyhow!("Invalid date"))?;
         assert!(!is_bavarian_holiday(date1));
 
-        let date2 = NaiveDate::from_ymd_opt(2024, 7, 17)
-            .ok_or_else(|| anyhow::anyhow!("Invalid date"))?;
+        let date2 =
+            NaiveDate::from_ymd_opt(2024, 7, 17).ok_or_else(|| anyhow::anyhow!("Invalid date"))?;
         assert!(!is_bavarian_holiday(date2));
 
         Ok(())

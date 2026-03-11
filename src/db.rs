@@ -335,7 +335,8 @@ mod tests {
 
     #[test]
     fn test_timestamp_utc_fields() -> Result<()> {
-        let ts = Utc.with_ymd_and_hms(2024, 6, 15, 14, 30, 0)
+        let ts = Utc
+            .with_ymd_and_hms(2024, 6, 15, 14, 30, 0)
             .single()
             .ok_or_else(|| anyhow::anyhow!("Invalid timestamp"))?;
         let log = make_log(ts);
@@ -349,7 +350,8 @@ mod tests {
 
     #[test]
     fn test_timestamp_year_boundary() -> Result<()> {
-        let ts = Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0)
+        let ts = Utc
+            .with_ymd_and_hms(2024, 1, 1, 0, 0, 0)
             .single()
             .ok_or_else(|| anyhow::anyhow!("Invalid timestamp"))?;
         let log = make_log(ts);
@@ -361,12 +363,13 @@ mod tests {
 
     #[test]
     fn test_timestamp_roundtrips_via_rfc3339() -> Result<()> {
-        let ts = Utc.with_ymd_and_hms(2024, 6, 15, 14, 30, 0)
+        let ts = Utc
+            .with_ymd_and_hms(2024, 6, 15, 14, 30, 0)
             .single()
             .ok_or_else(|| anyhow::anyhow!("Invalid timestamp"))?;
         let log = make_log(ts);
-        let reparsed = DateTime::parse_from_rfc3339(&log.timestamp.to_rfc3339())?
-            .with_timezone(&Utc);
+        let reparsed =
+            DateTime::parse_from_rfc3339(&log.timestamp.to_rfc3339())?.with_timezone(&Utc);
         assert_eq!(log.timestamp, reparsed);
         Ok(())
     }
