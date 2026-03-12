@@ -91,6 +91,7 @@ struct MonitorState {
 
 const LOADING_DEBOUNCE_MS: u64 = 200;
 
+#[allow(clippy::struct_excessive_bools)]
 struct UiState {
     is_loading: bool,
     loading_started_at: Option<Instant>,
@@ -174,6 +175,7 @@ pub enum Message {
     RepairEndDateChanged(String),
     RepairPresetSelected(RepairPreset),
     StartRepairJob,
+    #[allow(dead_code)]
     RepairProgress(RepairProgress),
     RepairCompleted(Result<RepairSummary, AppError>),
 
@@ -197,12 +199,16 @@ impl HardyMonitorApp {
             .to_string();
 
         let schedule = GymSchedule::new(&config.schedule);
+        let ml_config = config.ml.clone();
+
+        let notif_threshold = config.notifications.threshold_percent;
+        let notif_enabled = config.notifications.enabled;
 
         let app = Self {
             db: db.clone(),
-            config: config.clone(),
+            config,
             schedule,
-            clock: clock.clone(),
+            clock,
             notifier,
             _tray_icon: tray_icon,
             error: None,
@@ -221,7 +227,7 @@ impl HardyMonitorApp {
                 quiet_hours: Vec::new(),
                 trend: None,
                 baseline_for_comparison: Vec::new(),
-                predictor: OccupancyPredictor::new(config.ml.clone()),
+                predictor: OccupancyPredictor::new(ml_config),
                 ml_predictions: Vec::new(),
                 ml_predictions_simple: Vec::new(),
                 ml_training_in_progress: false,
@@ -244,8 +250,8 @@ impl HardyMonitorApp {
                 is_window_visible: true,
             },
             notifications: NotificationState {
-                threshold: config.notifications.threshold_percent,
-                enabled: config.notifications.enabled,
+                threshold: notif_threshold,
+                enabled: notif_enabled,
                 was_below_threshold: false,
                 last_notified_at: None,
             },
@@ -259,22 +265,18 @@ impl HardyMonitorApp {
             },
         };
 
-        let prediction_days = config.analytics.prediction_window_days;
-        let clock_for_tasks = clock.clone();
+        let prediction_days = app.config.analytics.prediction_window_days;
         let initial_tasks = vec![
             Self::load_history(db.clone()),
-            Self::load_analytics(
-                db.clone(),
-                AnalyticsRange::ThisWeek,
-                clock_for_tasks.clone(),
-            ),
-            Self::load_prediction_baseline(db.clone(), prediction_days, clock_for_tasks),
+            Self::load_analytics(db.clone(), AnalyticsRange::ThisWeek, app.clock.as_ref()),
+            Self::load_prediction_baseline(db.clone(), prediction_days, app.clock.as_ref()),
         ];
 
         let seconds_to_next_minute = 60 - now.timestamp() % 60;
         let alignment_task = Task::perform(
             async move {
-                tokio::time::sleep(Duration::from_secs(seconds_to_next_minute as u64)).await;
+                tokio::time::sleep(Duration::from_secs(seconds_to_next_minute.cast_unsigned()))
+                    .await;
             },
             |()| Message::FetchAlignmentComplete,
         );
@@ -285,6 +287,7 @@ impl HardyMonitorApp {
         )
     }
 
+    #[allow(clippy::too_many_lines)]
     pub fn update(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::Tick => {
@@ -304,7 +307,7 @@ impl HardyMonitorApp {
                 self.ui.ml_predictions_chart_cache.clear();
                 Task::none()
             }
-            Message::ChartInteraction => Task::none(),
+            Message::ChartInteraction | Message::NotificationSent => Task::none(),
             Message::FetchAlignmentComplete => {
                 self.ui.is_poll_aligned = true;
                 if self.schedule.is_open(&self.clock.now_local()) {
@@ -336,12 +339,12 @@ impl HardyMonitorApp {
                     Self::load_analytics(
                         self.db.clone(),
                         self.ui.analytics_range,
-                        self.clock.clone(),
+                        self.clock.as_ref(),
                     ),
                     Self::load_prediction_baseline(
                         self.db.clone(),
                         prediction_days,
-                        self.clock.clone(),
+                        self.clock.as_ref(),
                     ),
                 ])
             }
@@ -389,11 +392,10 @@ impl HardyMonitorApp {
                     self.data.occupancy.unwrap_or(100.0) < self.notifications.threshold;
                 Task::none()
             }
-            Message::NotificationSent => Task::none(),
             Message::SwitchView(mode) => {
                 self.ui.current_view = mode;
                 if mode == ViewMode::Insights {
-                    Self::load_insights_data(self.db.clone(), self.clock.clone())
+                    Self::load_insights_data(self.db.clone(), self.clock.as_ref())
                 } else {
                     Task::none()
                 }
@@ -401,7 +403,7 @@ impl HardyMonitorApp {
             Message::SwitchAnalyticsRange(range) => {
                 self.ui.analytics_range = range;
                 self.ui.heatmap_cache.clear();
-                Self::load_analytics(self.db.clone(), range, self.clock.clone())
+                Self::load_analytics(self.db.clone(), range, self.clock.as_ref())
             }
             Message::HistoryStartDateChanged(d) => {
                 self.ui.history_start_date = d;
@@ -752,6 +754,7 @@ impl HardyMonitorApp {
         Subscription::batch(subs)
     }
 
+    #[allow(clippy::unused_self)]
     pub fn theme(&self) -> Theme {
         Theme::Dark
     }
@@ -957,7 +960,7 @@ impl HardyMonitorApp {
                     Self::load_analytics(
                         self.db.clone(),
                         self.ui.analytics_range,
-                        self.clock.clone(),
+                        self.clock.as_ref(),
                     ),
                 ];
 
@@ -1075,7 +1078,7 @@ impl HardyMonitorApp {
     fn load_analytics(
         db: Arc<Database>,
         range: AnalyticsRange,
-        clock: Arc<dyn Clock>,
+        clock: &dyn Clock,
     ) -> Task<Message> {
         let now = clock.now_utc();
         let days_since_monday = i64::from(now.weekday().num_days_from_monday());
@@ -1097,11 +1100,7 @@ impl HardyMonitorApp {
         )
     }
 
-    fn load_prediction_baseline(
-        db: Arc<Database>,
-        days: i64,
-        clock: Arc<dyn Clock>,
-    ) -> Task<Message> {
+    fn load_prediction_baseline(db: Arc<Database>, days: i64, clock: &dyn Clock) -> Task<Message> {
         let now = clock.now_utc();
         Task::perform(
             async move {
@@ -1138,7 +1137,7 @@ impl HardyMonitorApp {
         )
     }
 
-    fn load_insights_data(db: Arc<Database>, clock: Arc<dyn Clock>) -> Task<Message> {
+    fn load_insights_data(db: Arc<Database>, clock: &dyn Clock) -> Task<Message> {
         let now = clock.now_utc();
         let days_since_monday = i64::from(now.weekday().num_days_from_monday());
         let this_week_start =

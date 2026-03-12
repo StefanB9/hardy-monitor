@@ -65,8 +65,8 @@ mod tests {
             period in 0.1_f64..1000.0,
         ) {
             let (sin, cos) = cyclical_encode(value, period);
-            prop_assert!(sin >= -1.0 && sin <= 1.0, "sin out of range: {sin}");
-            prop_assert!(cos >= -1.0 && cos <= 1.0, "cos out of range: {cos}");
+            prop_assert!((-1.0..=1.0).contains(&sin), "cos out of range: {cos}");
+            prop_assert!((-1.0..=1.0).contains(&cos), "cos out of range: {cos}");
         }
 
         #[test]

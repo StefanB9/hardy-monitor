@@ -116,8 +116,7 @@ impl PersistedModel {
             self.training_samples,
             self.training_mse,
             self.validation_mse
-                .map(|v| format!("{v:.2}"))
-                .unwrap_or_else(|| "N/A".to_string()),
+                .map_or_else(|| "N/A".to_string(), |v| format!("{v:.2}")),
             self.created_at.format("%Y-%m-%d %H:%M UTC")
         )
     }

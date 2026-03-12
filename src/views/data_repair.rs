@@ -13,6 +13,7 @@ use crate::{
     views::components::{card_container, primary_btn_style, secondary_btn_style, styled_input},
 };
 
+#[derive(Clone, Copy)]
 pub struct DataRepairProps<'a> {
     pub start_date: &'a str,
     pub end_date: &'a str,
@@ -21,6 +22,7 @@ pub struct DataRepairProps<'a> {
     pub last_result: Option<&'a Result<RepairSummary, AppError>>,
 }
 
+#[allow(clippy::too_many_lines)]
 pub fn view(props: DataRepairProps<'_>) -> Element<'_, Message> {
     let preset_btn = |label: &str, preset: RepairPreset| {
         button(text(label.to_string()).size(12))
@@ -65,11 +67,16 @@ pub fn view(props: DataRepairProps<'_>) -> Element<'_, Message> {
 
     let progress_section: Element<'_, Message> = if props.is_running {
         if let Some(progress) = props.progress {
+            #[allow(clippy::cast_precision_loss)]
             let pct = if progress.total_days > 0 {
                 (progress.processed_days as f32 / progress.total_days as f32) * 100.0
             } else {
                 0.0
             };
+
+            #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+            let progress_width = (pct as u16).max(1);
+
             column![
                 text(format!(
                     "Processing: {} (Day {} of {})",
@@ -83,7 +90,7 @@ pub fn view(props: DataRepairProps<'_>) -> Element<'_, Message> {
                 container(
                     container(
                         Space::new()
-                            .width(Length::FillPortion((pct as u16).max(1)))
+                            .width(Length::FillPortion(progress_width))
                             .height(8)
                     )
                     .style(|_| container::Style {

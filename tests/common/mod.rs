@@ -93,9 +93,10 @@ impl TestDatabase {
             Err(e) => Some(e),
         };
         if let Some(e) = drop_result {
-            eprintln!(
-                "warning: failed to drop test database '{}': {e}",
-                self.db_name
+            tracing::warn!(
+                error = %e,
+                db_name = %self.db_name,
+                "failed to drop test database"
             );
         }
     }

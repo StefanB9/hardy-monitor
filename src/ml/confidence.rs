@@ -272,14 +272,14 @@ mod tests {
             let ml = PredictionMethod::MachineLearning { confidence };
             let result = ml.confidence();
             prop_assert!(
-                result >= 0.0 && result <= 1.0,
+                (0.0..=1.0).contains(&result),
                 "ML confidence out of range: {result}"
             );
 
             let avg = PredictionMethod::HistoricalAverage;
             let result = avg.confidence();
             prop_assert!(
-                result >= 0.0 && result <= 1.0,
+                (0.0..=1.0).contains(&result),
                 "Historical confidence out of range: {result}"
             );
         }

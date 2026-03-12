@@ -98,10 +98,10 @@ impl OccupancyPredictor {
         baseline: &[HourlyAverage],
         schedule: &GymSchedule,
     ) -> PredictionWithConfidence {
-        if self.can_use_ml() {
-            if let Some(pred) = self.ml_predict(target_time, hours_ahead, baseline, schedule) {
-                return pred;
-            }
+        if self.can_use_ml()
+            && let Some(pred) = self.ml_predict(target_time, hours_ahead, baseline, schedule)
+        {
+            return pred;
         }
 
         self.fallback_predict(target_time, baseline)
@@ -146,13 +146,13 @@ impl OccupancyPredictor {
         target_time: DateTime<Utc>,
         baseline: &[HourlyAverage],
     ) -> PredictionWithConfidence {
-        let target_weekday = target_time.weekday().num_days_from_monday() as i32;
-        let target_hour = target_time.hour() as i32;
+        let target_weekday = target_time.weekday().num_days_from_monday().cast_signed();
+        let target_hour = target_time.hour().cast_signed();
 
         let (predicted_value, confidence_low, confidence_high) = baseline
             .iter()
             .find(|avg| avg.weekday == target_weekday && avg.hour == target_hour)
-            .map(|avg| {
+            .map_or((50.0, 30.0, 70.0), |avg| {
                 let std_dev = self
                     .feature_extractor
                     .get_slot_std(target_weekday, target_hour)
@@ -162,8 +162,7 @@ impl OccupancyPredictor {
                     (avg.avg_percentage - std_dev).clamp(0.0, 100.0),
                     (avg.avg_percentage + std_dev).clamp(0.0, 100.0),
                 )
-            })
-            .unwrap_or((50.0, 30.0, 70.0));
+            });
 
         PredictionWithConfidence {
             timestamp: normalize_timestamp(target_time),
@@ -181,14 +180,15 @@ impl OccupancyPredictor {
         predicted_value: f64,
         hours_ahead: i64,
     ) -> (f64, f64, f64) {
-        let weekday = target_time.weekday().num_days_from_monday() as i32;
-        let hour = target_time.hour() as i32;
+        let weekday = target_time.weekday().num_days_from_monday().cast_signed();
+        let hour = target_time.hour().cast_signed();
 
         let base_std = self
             .feature_extractor
             .get_slot_std(weekday, hour)
             .unwrap_or(15.0);
 
+        #[allow(clippy::cast_precision_loss)]
         let horizon_penalty = 1.0 + (hours_ahead as f64 - 1.0) * 0.15;
         let adjusted_std = base_std * horizon_penalty;
 

@@ -68,13 +68,14 @@ impl<Message> canvas::Program<Message> for GaugeWidget<'_> {
                 let color =
                     get_status_color(self.percentage, self.low_threshold, self.high_threshold);
 
-                let angle = (self.percentage / 100.0 * 360.0).max(1.0);
+                #[allow(clippy::cast_possible_truncation)]
+                let angle = (self.percentage / 100.0 * 360.0).max(1.0) as f32;
                 let fg_arc = Path::new(|b| {
                     b.arc(canvas::path::Arc {
                         center,
                         radius,
                         start_angle: (-90.0f32).to_radians().into(),
-                        end_angle: (angle as f32 - 90.0).to_radians().into(),
+                        end_angle: (angle - 90.0).to_radians().into(),
                     });
                 });
                 frame.stroke(

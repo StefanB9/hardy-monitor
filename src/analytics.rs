@@ -183,8 +183,8 @@ pub fn calculate_predictions_with_clock<C: Clock>(
 
     for i in 1..=2 {
         let target_time = now + ChronoDuration::hours(i);
-        let target_hour = target_time.hour() as i32;
-        let target_weekday = target_time.weekday().num_days_from_monday() as i32;
+        let target_hour = target_time.hour().cast_signed();
+        let target_weekday = target_time.weekday().num_days_from_monday().cast_signed();
 
         let local_target = target_time.with_timezone(&Local);
         if !schedule.is_open(&local_target) {
@@ -216,7 +216,7 @@ pub fn find_best_time_today_with_clock<C: Clock>(
     clock: &C,
 ) -> Option<(i32, f64)> {
     let now = clock.now_local();
-    let today_idx = now.weekday().num_days_from_monday() as i32;
+    let today_idx = now.weekday().num_days_from_monday().cast_signed();
 
     let offset_seconds = now.offset().fix().local_minus_utc();
     let seconds_per_week = 7 * 24 * 3600;
@@ -229,10 +229,10 @@ pub fn find_best_time_today_with_clock<C: Clock>(
             let wrapped_local =
                 ((local_seconds % seconds_per_week) + seconds_per_week) % seconds_per_week;
 
-            let local_w = (wrapped_local / 3600) / 24;
-            let local_h = (wrapped_local / 3600) % 24;
+            let local_w = i32::try_from((wrapped_local / 3600) / 24).unwrap_or_default();
+            let local_h = i32::try_from((wrapped_local / 3600) % 24).unwrap_or_default();
 
-            (local_w as i32, local_h as i32, d.avg_percentage)
+            (local_w, local_h, d.avg_percentage)
         })
         .filter(|(w, _, _)| *w == today_idx)
         .min_by(|a, b| a.2.partial_cmp(&b.2).unwrap_or(std::cmp::Ordering::Equal))
@@ -304,10 +304,22 @@ pub fn compare_periods(
     } else {
         let total: f64 = baseline
             .iter()
-            .map(|h| h.avg_percentage * h.sample_count as f64)
+            .map(|h|
+                     {
+                         #[allow(clippy::cast_precision_loss)]
+                         let count_f64 = h.sample_count as f64;
+
+                         h.avg_percentage * count_f64
+                     }
+                )
             .sum();
         let count: i64 = baseline.iter().map(|h| h.sample_count).sum();
-        if count > 0 { total / count as f64 } else { 0.0 }
+        if count > 0 {
+            #[allow(clippy::cast_precision_loss)]
+            let count_f64 = count as f64;
+
+            total / count_f64
+        } else { 0.0 }
     };
 
     let current_overall_avg = if current.is_empty() {
@@ -315,10 +327,22 @@ pub fn compare_periods(
     } else {
         let total: f64 = current
             .iter()
-            .map(|h| h.avg_percentage * h.sample_count as f64)
+            .map(|h|
+                     {
+                         #[allow(clippy::cast_precision_loss)]
+                         let count_f64 = h.sample_count as f64;
+
+                         h.avg_percentage * count_f64
+                     }
+                )
             .sum();
         let count: i64 = current.iter().map(|h| h.sample_count).sum();
-        if count > 0 { total / count as f64 } else { 0.0 }
+        if count > 0 {
+            #[allow(clippy::cast_precision_loss)]
+            let count_f64 = count as f64;
+
+            total / count_f64
+        } else { 0.0 }
     };
 
     let overall_change_percent = if baseline_overall_avg > 0.0 {
@@ -372,11 +396,14 @@ pub fn determine_trend(comparisons: &[HourlyComparison]) -> TrendDirection {
         return TrendDirection::Insufficient;
     }
 
+    #[allow(clippy::cast_precision_loss)]
+    let valid_comparisons_f64 = valid_comparisons.len() as f64;
+
     let avg_change: f64 = valid_comparisons
         .iter()
         .map(|c| c.percent_change)
         .sum::<f64>()
-        / valid_comparisons.len() as f64;
+        / valid_comparisons_f64;
 
     if avg_change > 3.0 {
         TrendDirection::Increasing
@@ -395,7 +422,10 @@ pub fn calculate_stats(data: &[HourlyAverage]) -> Option<OccupancyStats> {
 
     let n = data.len();
 
-    let mean = data.iter().map(|h| h.avg_percentage).sum::<f64>() / n as f64;
+    #[allow(clippy::cast_precision_loss)]
+    let n_f64 = n as f64;
+
+    let mean = data.iter().map(|h| h.avg_percentage).sum::<f64>() / n_f64;
 
     let mut sorted: Vec<f64> = data.iter().map(|h| h.avg_percentage).collect();
     sorted.sort_by(f64::total_cmp);
@@ -409,7 +439,7 @@ pub fn calculate_stats(data: &[HourlyAverage]) -> Option<OccupancyStats> {
         .iter()
         .map(|h| (h.avg_percentage - mean).powi(2))
         .sum::<f64>()
-        / n as f64;
+        / n_f64;
     let std_dev = variance.sqrt();
 
     let min = sorted[0];
@@ -437,10 +467,17 @@ pub fn analyze_days(data: &[HourlyAverage]) -> Vec<DayAnalysis> {
             let total_samples: i64 = day_data.iter().map(|h| h.sample_count).sum();
             let weighted_sum: f64 = day_data
                 .iter()
-                .map(|h| h.avg_percentage * h.sample_count as f64)
+                .map(|h| {
+                    #[allow(clippy::cast_precision_loss)]
+                    let count_f64 = h.sample_count as f64;
+                    h.avg_percentage * count_f64
+                })
                 .sum();
             let avg_occupancy = if total_samples > 0 {
-                weighted_sum / total_samples as f64
+                #[allow(clippy::cast_precision_loss)]
+                let total_samples_f64 = total_samples as f64;
+
+                weighted_sum / total_samples_f64
             } else {
                 0.0
             };
@@ -453,9 +490,10 @@ pub fn analyze_days(data: &[HourlyAverage]) -> Vec<DayAnalysis> {
                 .iter()
                 .min_by(|a, b| a.avg_percentage.total_cmp(&b.avg_percentage));
 
+            let weekday_idx = usize::try_from(weekday).unwrap_or(0);
             DayAnalysis {
                 weekday,
-                day_name: DAY_NAMES_LONG[weekday as usize],
+                day_name: DAY_NAMES_LONG[weekday_idx],
                 avg_occupancy,
                 peak_hour: peak.map(|h| h.hour),
                 peak_occupancy: peak.map_or(0.0, |h| h.avg_percentage),
@@ -523,11 +561,14 @@ pub fn find_quiet_windows(
                 if let Some(start) = window_start
                     && window_count >= min_hours
                 {
+                    #[allow(clippy::cast_precision_loss)]
+                    let window_count_f64 = window_count as f64;
+
                     windows.push(TimePeriod {
                         weekday,
                         start_hour: start,
                         end_hour: h.hour,
-                        avg_occupancy: window_sum / window_count as f64,
+                        avg_occupancy: window_sum / window_count_f64,
                     });
                 }
                 window_start = None;
@@ -537,11 +578,14 @@ pub fn find_quiet_windows(
         if let Some(start) = window_start
             && window_count >= min_hours
         {
+            #[allow(clippy::cast_precision_loss)]
+            let window_count_f64 = window_count as f64;
+
             windows.push(TimePeriod {
                 weekday,
                 start_hour: start,
                 end_hour: 24,
-                avg_occupancy: window_sum / window_count as f64,
+                avg_occupancy: window_sum / window_count_f64,
             });
         }
     }
@@ -550,6 +594,7 @@ pub fn find_quiet_windows(
     windows
 }
 
+#[allow(clippy::too_many_lines)]
 #[tracing::instrument(skip_all, fields(current.len = current.len(), has_baseline = baseline.is_some()))]
 pub fn generate_insights(
     current: &[HourlyAverage],
@@ -747,13 +792,15 @@ pub fn weekday_short(weekday: i32) -> &'static str {
 #[cfg(test)]
 mod tests {
     use anyhow::Result;
+    use approx::assert_relative_eq;
     use chrono::{Datelike, NaiveDate, Timelike};
 
     use super::*;
 
     #[test]
-    fn test_midnight_utc_basic() {
-        let date = NaiveDate::from_ymd_opt(2024, 6, 15).unwrap();
+    fn test_midnight_utc_basic() -> Result<()> {
+        let date =
+            NaiveDate::from_ymd_opt(2024, 6, 15).ok_or_else(|| anyhow::anyhow!("Invalid date"))?;
         let result = midnight_utc(date);
 
         assert_eq!(result.year(), 2024);
@@ -762,25 +809,30 @@ mod tests {
         assert_eq!(result.hour(), 0);
         assert_eq!(result.minute(), 0);
         assert_eq!(result.second(), 0);
+        Ok(())
     }
 
     #[test]
-    fn test_midnight_utc_leap_year() {
-        let date = NaiveDate::from_ymd_opt(2024, 2, 29).unwrap();
+    fn test_midnight_utc_leap_year() -> Result<()> {
+        let date =
+            NaiveDate::from_ymd_opt(2024, 6, 15).ok_or_else(|| anyhow::anyhow!("Invalid date"))?;
         let result = midnight_utc(date);
 
         assert_eq!(result.month(), 2);
         assert_eq!(result.day(), 29);
+        Ok(())
     }
 
     #[test]
-    fn test_midnight_utc_year_boundary() {
-        let date = NaiveDate::from_ymd_opt(2024, 12, 31).unwrap();
+    fn test_midnight_utc_year_boundary() -> Result<()> {
+        let date =
+            NaiveDate::from_ymd_opt(2024, 6, 15).ok_or_else(|| anyhow::anyhow!("Invalid date"))?;
         let result = midnight_utc(date);
 
         assert_eq!(result.year(), 2024);
         assert_eq!(result.month(), 12);
         assert_eq!(result.day(), 31);
+        Ok(())
     }
 
     #[test]
@@ -839,8 +891,8 @@ mod tests {
     }
 
     #[test]
-    fn test_find_best_time_returns_lowest_percentage() {
-        let today_idx = Local::now().weekday().num_days_from_monday() as i32;
+    fn test_find_best_time_returns_lowest_percentage() -> Result<()> {
+        let today_idx = i32::try_from(Local::now().weekday().num_days_from_monday()).unwrap_or(0);
 
         let data = vec![
             HourlyAverage {
@@ -865,13 +917,14 @@ mod tests {
 
         let result = find_best_time_today(&data);
         assert!(result.is_some());
-        let (_hour, avg) = result.unwrap();
-        assert_eq!(avg, 20.0);
+        let (_hour, avg) = result.ok_or_else(|| anyhow::anyhow!("Expected to find a best time"))?;
+        assert_relative_eq!(avg, 20.0);
+        Ok(())
     }
 
     #[test]
     fn test_find_best_time_filters_by_today() {
-        let today_idx = Local::now().weekday().num_days_from_monday() as i32;
+        let today_idx = i32::try_from(Local::now().weekday().num_days_from_monday()).unwrap_or(0);
         let other_day = (today_idx + 1) % 7;
 
         let data = vec![
@@ -903,7 +956,7 @@ mod tests {
                 baseline.push(HourlyAverage {
                     weekday,
                     hour,
-                    avg_percentage: (hour as f64) * 2.0,
+                    avg_percentage: f64::from(hour) * 2.0,
                     sample_count: 10,
                 });
             }
@@ -914,6 +967,7 @@ mod tests {
     }
 
     mod clock_tests {
+        use approx::assert_relative_eq;
         use chrono::TimeZone;
 
         use super::*;
@@ -943,8 +997,8 @@ mod tests {
             let predictions = calculate_predictions_with_clock(&baseline, &schedule, &clock);
 
             assert_eq!(predictions.len(), 2);
-            assert_eq!(predictions[0].1, 30.0);
-            assert_eq!(predictions[1].1, 50.0);
+            assert_relative_eq!(predictions[0].1, 30.0);
+            assert_relative_eq!(predictions[1].1, 50.0);
         }
 
         #[test]
@@ -975,19 +1029,19 @@ mod tests {
 
             let predictions1 = calculate_predictions_with_clock(&baseline, &schedule, &clock);
             assert_eq!(predictions1.len(), 2);
-            assert_eq!(predictions1[0].1, 25.0);
-            assert_eq!(predictions1[1].1, 45.0);
+            assert_relative_eq!(predictions1[0].1, 25.0);
+            assert_relative_eq!(predictions1[1].1, 45.0);
 
             clock.advance(ChronoDuration::hours(1));
 
             let predictions2 = calculate_predictions_with_clock(&baseline, &schedule, &clock);
             assert_eq!(predictions2.len(), 2);
-            assert_eq!(predictions2[0].1, 45.0);
-            assert_eq!(predictions2[1].1, 65.0);
+            assert_relative_eq!(predictions2[0].1, 45.0);
+            assert_relative_eq!(predictions2[1].1, 65.0);
         }
 
         #[test]
-        fn test_find_best_time_with_mock_clock() {
+        fn test_find_best_time_with_mock_clock() -> Result<()> {
             let fixed_time = Utc.with_ymd_and_hms(2024, 6, 17, 10, 0, 0).unwrap();
             let clock = MockClock::new(fixed_time);
 
@@ -1014,8 +1068,9 @@ mod tests {
 
             let result = find_best_time_today_with_clock(&data, &clock);
             assert!(result.is_some());
-            let (_, avg) = result.unwrap();
-            assert_eq!(avg, 15.0);
+            let (_, avg) = result.ok_or_else(|| anyhow::anyhow!("Expected to find a best time"))?;
+            assert_relative_eq!(avg, 15.0);
+            Ok(())
         }
     }
 
@@ -1050,8 +1105,8 @@ mod tests {
             let predictions = calculate_predictions_with_clock(&baseline, &schedule, &clock);
 
             assert_eq!(predictions.len(), 2);
-            assert_eq!(predictions[0].1, 25.0);
-            assert_eq!(predictions[1].1, 30.0);
+            assert_relative_eq!(predictions[0].1, 25.0);
+            assert_relative_eq!(predictions[1].1, 30.0);
         }
 
         #[test]
@@ -1078,8 +1133,8 @@ mod tests {
             let predictions = calculate_predictions_with_clock(&baseline, &schedule, &clock);
 
             assert_eq!(predictions.len(), 2);
-            assert_eq!(predictions[0].1, 40.0);
-            assert_eq!(predictions[1].1, 15.0);
+            assert_relative_eq!(predictions[0].1, 40.0);
+            assert_relative_eq!(predictions[1].1, 15.0);
         }
 
         #[test]
@@ -1106,12 +1161,12 @@ mod tests {
             let predictions = calculate_predictions_with_clock(&baseline, &schedule, &clock);
 
             assert_eq!(predictions.len(), 2);
-            assert_eq!(predictions[0].1, 10.0);
-            assert_eq!(predictions[1].1, 20.0);
+            assert_relative_eq!(predictions[0].1, 10.0);
+            assert_relative_eq!(predictions[1].1, 20.0);
         }
 
         #[test]
-        fn test_find_best_time_near_midnight_start_of_week() {
+        fn test_find_best_time_near_midnight_start_of_week() -> Result<()> {
             let fixed_time = Utc.with_ymd_and_hms(2024, 6, 17, 0, 30, 0).unwrap();
             let clock = MockClock::new(fixed_time);
 
@@ -1132,12 +1187,13 @@ mod tests {
 
             let result = find_best_time_today_with_clock(&data, &clock);
             assert!(result.is_some());
-            let (_, avg) = result.unwrap();
-            assert_eq!(avg, 5.0);
+            let (_, avg) = result.ok_or_else(|| anyhow::anyhow!("Expected to find a best time"))?;
+            assert_relative_eq!(avg, 5.0);
+            Ok(())
         }
 
         #[test]
-        fn test_find_best_time_near_midnight_end_of_week() {
+        fn test_find_best_time_near_midnight_end_of_week() -> Result<()> {
             let fixed_time = Utc.with_ymd_and_hms(2024, 6, 16, 23, 30, 0).unwrap();
             let clock = MockClock::new(fixed_time);
 
@@ -1158,8 +1214,10 @@ mod tests {
 
             let result = find_best_time_today_with_clock(&data, &clock);
             assert!(result.is_some());
-            let (_, avg) = result.unwrap();
-            assert_eq!(avg, 8.0);
+            let (_, avg) =
+                result.ok_or_else(|| anyhow::anyhow!("Expected to find a best time today"))?;
+            assert_relative_eq!(avg, 8.0);
+            Ok(())
         }
 
         #[test]
@@ -1178,7 +1236,7 @@ mod tests {
             let predictions = calculate_predictions_with_clock(&baseline, &schedule, &clock);
 
             assert_eq!(predictions.len(), 1);
-            assert_eq!(predictions[0].1, 45.0);
+            assert_relative_eq!(predictions[0].1, 45.0);
         }
 
         #[test]

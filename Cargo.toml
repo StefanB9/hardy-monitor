@@ -21,7 +21,7 @@ dirs = { version = "6.0.0", default-features = false }
 dotenvy = { version = "0.15.7", default-features = false }
 futures = { version = "0.3.32", default-features = false }
 iced = { version = "0.14.0", default-features = false, features = ["advanced", "canvas", "crisp", "tokio", "wgpu"], optional = true }
-image = { version = "0.25.9", default-features = false, features = ["jpeg", "png"], optional = true }
+image = { version = "0.25.10", default-features = false, features = ["jpeg", "png"], optional = true }
 linfa = { version = "0.8.1", default-features = false, optional = true }
 linfa-linear = { version = "0.8.1", default-features = false, optional = true }
 muda = { version = "0.17.1", default-features = false, optional = true }
@@ -40,7 +40,7 @@ tray-icon = { version = "0.21.3", default-features = false, optional = true }
 [dev-dependencies]
 proptest = "1.10.0"
 temp-env = "0.3.6"
-tempfile = "3.26.0"
+tempfile = "3.27.0"
 wiremock = "0.6.5"
 
 [profile.release]

@@ -12,7 +12,10 @@ pub fn mse(predictions: &[f64], targets: &[f64]) -> Option<f64> {
         .map(|(p, t)| (p - t).powi(2))
         .sum();
 
-    Some(sum_sq / predictions.len() as f64)
+    #[allow(clippy::cast_precision_loss)]
+    let predictions_count_f64 = predictions.len() as f64;
+
+    Some(sum_sq / predictions_count_f64)
 }
 
 /// Root Mean Squared Error.
@@ -36,7 +39,10 @@ pub fn mae(predictions: &[f64], targets: &[f64]) -> Option<f64> {
         .map(|(p, t)| (p - t).abs())
         .sum();
 
-    Some(sum_abs / predictions.len() as f64)
+    #[allow(clippy::cast_precision_loss)]
+    let predictions_count_f64 = predictions.len() as f64;
+
+    Some(sum_abs / predictions_count_f64)
 }
 
 /// Mean Absolute Percentage Error.
@@ -60,19 +66,24 @@ pub fn mape(predictions: &[f64], targets: &[f64]) -> Option<f64> {
         return None;
     }
 
-    Some(sum / count as f64 * 100.0)
+    #[allow(clippy::cast_precision_loss)]
+    let count_f64 = count as f64;
+
+    Some(sum / count_f64 * 100.0)
 }
 
 /// Coefficient of determination (R²).
 ///
-/// Returns `None` if SS_tot ≈ 0 (all targets identical), inputs are empty, or
+/// Returns `None` if `SS_tot` ≈ 0 (all targets identical), inputs are empty, or
 /// lengths mismatch.
 pub fn r_squared(predictions: &[f64], targets: &[f64]) -> Option<f64> {
     if predictions.is_empty() || predictions.len() != targets.len() {
         return None;
     }
+    #[allow(clippy::cast_precision_loss)]
+    let targets_count_f64 = targets.len() as f64;
 
-    let mean_target = targets.iter().sum::<f64>() / targets.len() as f64;
+    let mean_target = targets.iter().sum::<f64>() / targets_count_f64;
 
     let ss_tot: f64 = targets.iter().map(|t| (t - mean_target).powi(2)).sum();
 
@@ -319,8 +330,8 @@ mod tests {
             values in proptest::collection::vec(-1000.0_f64..1000.0, 10),
         ) {
             // Only test when targets aren't constant
-            let min = values.iter().cloned().fold(f64::INFINITY, f64::min);
-            let max = values.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+            let min = values.iter().copied().fold(f64::INFINITY, f64::min);
+            let max = values.iter().copied().fold(f64::NEG_INFINITY, f64::max);
             if max - min > 1e-6 {
                 let result = r_squared(&values, &values);
                 if let Some(r2) = result {

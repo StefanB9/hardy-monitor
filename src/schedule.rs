@@ -112,6 +112,7 @@ pub fn is_bavarian_holiday(date: NaiveDate) -> bool {
     false
 }
 
+#[allow(clippy::many_single_char_names)]
 fn easter_date(year: i32) -> Option<NaiveDate> {
     let a = year % 19;
     let b = year / 100;
@@ -128,7 +129,7 @@ fn easter_date(year: i32) -> Option<NaiveDate> {
     let month = (h + l - 7 * m + 114) / 31;
     let day = ((h + l - 7 * m + 114) % 31) + 1;
 
-    NaiveDate::from_ymd_opt(year, month as u32, day as u32)
+    NaiveDate::from_ymd_opt(year, month.cast_unsigned(), day.cast_unsigned())
 }
 
 #[cfg(test)]

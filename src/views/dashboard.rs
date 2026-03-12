@@ -22,6 +22,7 @@ use crate::{
     },
 };
 
+#[derive(Clone, Copy)]
 pub struct DashboardProps<'a> {
     pub occupancy: Option<f64>,
     pub history: &'a [OccupancyLog],
@@ -43,6 +44,7 @@ pub struct DashboardProps<'a> {
     pub ml_has_model: bool,
 }
 
+#[allow(clippy::too_many_lines)]
 pub fn view(props: DashboardProps<'_>) -> Element<'_, Message> {
     let gauge = Canvas::new(GaugeWidget {
         percentage: props.occupancy.unwrap_or(0.0),

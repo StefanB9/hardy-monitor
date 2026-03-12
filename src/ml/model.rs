@@ -47,7 +47,10 @@ impl TrainedModel {
         let n_samples = features.len();
         let n_features = PredictionFeatures::NUM_FEATURES;
 
-        let flat: Vec<f64> = features.iter().flat_map(|f| f.to_vec()).collect();
+        let flat: Vec<f64> = features
+            .iter()
+            .flat_map(PredictionFeatures::to_vec)
+            .collect();
 
         match Array2::from_shape_vec((n_samples, n_features), flat) {
             Ok(array) => self.model.predict(&array).to_vec(),
@@ -61,8 +64,7 @@ impl TrainedModel {
             self.training_samples,
             self.training_mse,
             self.validation_mse
-                .map(|v| format!("{v:.2}"))
-                .unwrap_or_else(|| "N/A".to_string()),
+                .map_or_else(|| "N/A".to_string(), |v| format!("{v:.2}")),
             self.created_at.format("%Y-%m-%d %H:%M")
         )
     }
@@ -95,24 +97,29 @@ impl ModelBuilder {
         Self::default()
     }
 
+    #[must_use]
     pub fn fit_intercept(mut self, fit: bool) -> Self {
         self.fit_intercept = fit;
         self
     }
 
+    #[must_use]
     pub fn ridge_lambda(mut self, lambda: f64) -> Self {
         self.ridge_lambda = lambda;
         self
     }
 
+    #[must_use]
     pub fn max_depth(self, _depth: usize) -> Self {
         self
     }
 
+    #[must_use]
     pub fn min_samples_split(self, _samples: usize) -> Self {
         self
     }
 
+    #[must_use]
     pub fn min_samples_leaf(self, _samples: usize) -> Self {
         self
     }
@@ -136,7 +143,10 @@ impl ModelBuilder {
         let n_samples = features.len();
         let n_features = PredictionFeatures::NUM_FEATURES;
 
-        let flat_features: Vec<f64> = features.iter().flat_map(|f| f.to_vec()).collect();
+        let flat_features: Vec<f64> = features
+            .iter()
+            .flat_map(PredictionFeatures::to_vec)
+            .collect();
         let x = Array2::from_shape_vec((n_samples, n_features), flat_features)
             .map_err(|e| TrainingError::ArrayError(e.to_string()))?;
         let y = Array1::from_vec(targets.to_vec());
@@ -175,6 +185,11 @@ impl ModelBuilder {
             return Err(TrainingError::InsufficientData(features.len()));
         }
 
+        #[allow(
+            clippy::cast_precision_loss,
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss
+        )]
         let split_idx = ((1.0 - validation_split) * features.len() as f64) as usize;
 
         let train_features = &features[..split_idx];

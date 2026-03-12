@@ -12,7 +12,7 @@ pub(super) fn extract_momentum(recent_data: &VecDeque<(DateTime<Utc>, f64)>) -> 
         return (50.0, 50.0, 0.0);
     }
 
-    let now = recent_data.back().map(|(t, _)| *t).unwrap_or_else(Utc::now);
+    let now = recent_data.back().map_or_else(Utc::now, |(t, _)| *t);
     let one_hour_ago = now - chrono::Duration::hours(1);
     let three_hours_ago = now - chrono::Duration::hours(3);
 
@@ -24,7 +24,10 @@ pub(super) fn extract_momentum(recent_data: &VecDeque<(DateTime<Utc>, f64)>) -> 
     let recent_avg_1h = if recent_1h.is_empty() {
         50.0
     } else {
-        recent_1h.iter().sum::<f64>() / recent_1h.len() as f64
+        #[allow(clippy::cast_precision_loss)]
+        let recent_1h_count_f64 = recent_1h.len() as f64;
+
+        recent_1h.iter().sum::<f64>() / recent_1h_count_f64
     };
 
     let recent_3h: Vec<f64> = recent_data
@@ -35,7 +38,10 @@ pub(super) fn extract_momentum(recent_data: &VecDeque<(DateTime<Utc>, f64)>) -> 
     let recent_avg_3h = if recent_3h.is_empty() {
         50.0
     } else {
-        recent_3h.iter().sum::<f64>() / recent_3h.len() as f64
+        #[allow(clippy::cast_precision_loss)]
+        let recent_3h_count_f64 = recent_3h.len() as f64;
+
+        recent_3h.iter().sum::<f64>() / recent_3h_count_f64
     };
 
     let recent_trend = calculate_trend(&recent_3h);
@@ -52,6 +58,7 @@ pub(super) fn calculate_trend(values: &[f64]) -> f64 {
         return 0.0;
     }
 
+    #[allow(clippy::cast_precision_loss)]
     let n = values.len() as f64;
     let x_mean = (n - 1.0) / 2.0;
     let y_mean = values.iter().sum::<f64>() / n;
@@ -59,6 +66,7 @@ pub(super) fn calculate_trend(values: &[f64]) -> f64 {
     let mut numerator = 0.0;
     let mut denominator = 0.0;
 
+    #[allow(clippy::cast_precision_loss)]
     for (i, &y) in values.iter().enumerate() {
         let x = i as f64;
         numerator += (x - x_mean) * (y - y_mean);
@@ -100,13 +108,17 @@ pub(super) fn extract_day_features(
     let day_avg_so_far = if today_values.is_empty() {
         50.0
     } else {
-        today_values.iter().sum::<f64>() / today_values.len() as f64
+        #[allow(clippy::cast_precision_loss)]
+        let today_count_f64 = today_values.len() as f64;
+        today_values.iter().sum::<f64>() / today_count_f64
     };
 
     let prev_day_avg = if yesterday_values.is_empty() {
         50.0
     } else {
-        yesterday_values.iter().sum::<f64>() / yesterday_values.len() as f64
+        #[allow(clippy::cast_precision_loss)]
+        let yesterday_count_f64 = yesterday_values.len() as f64;
+        yesterday_values.iter().sum::<f64>() / yesterday_count_f64
     };
 
     (day_avg_so_far, prev_day_avg)
@@ -198,21 +210,25 @@ mod tests {
             prop_assert!(trend.is_finite(), "Trend should be finite, got {trend}");
         }
 
-        #[test]
-        fn prop_calculate_trend_sign(
-            base in 0.0_f64..100.0,
-            step in 0.1_f64..10.0,
-            len in 3_usize..20,
-        ) {
-            // Strictly increasing
-            let increasing: Vec<f64> = (0..len).map(|i| base + step * i as f64).collect();
-            let trend_inc = calculate_trend(&increasing);
-            prop_assert!(trend_inc > 0.0, "Increasing series should have positive trend, got {trend_inc}");
+    #[test]
+    fn prop_calculate_trend_sign(
+        base in 0.0_f64..100.0,
+        step in 0.1_f64..10.0,
+        len in 3_u32..20_u32, // Changed to u32
+    ) {
+        // Strictly increasing
+        let increasing: Vec<f64> = (0..len)
+            .map(|i| base + step * f64::from(i)) // Clean conversion
+            .collect();
+        let trend_inc = calculate_trend(&increasing);
+        prop_assert!(trend_inc > 0.0, "Increasing series should have positive trend, got {trend_inc}");
 
-            // Strictly decreasing
-            let decreasing: Vec<f64> = (0..len).map(|i| base - step * i as f64).collect();
-            let trend_dec = calculate_trend(&decreasing);
-            prop_assert!(trend_dec < 0.0, "Decreasing series should have negative trend, got {trend_dec}");
-        }
+        // Strictly decreasing
+        let decreasing: Vec<f64> = (0..len)
+            .map(|i| base - step * f64::from(i)) // Clean conversion
+            .collect();
+        let trend_dec = calculate_trend(&decreasing);
+        prop_assert!(trend_dec < 0.0, "Decreasing series should have negative trend, got {trend_dec}");
+    }
     }
 }

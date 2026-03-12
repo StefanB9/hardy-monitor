@@ -105,6 +105,7 @@ impl AppError {
         AppError::Database(db_error)
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     pub fn from_anyhow_db(err: anyhow::Error, context: &str) -> Self {
         AppError::Database(DatabaseError::QueryFailed {
             query_context: context.to_string(),
@@ -112,6 +113,7 @@ impl AppError {
         })
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     pub fn from_reqwest(err: reqwest::Error) -> Self {
         let kind = if err.is_timeout() {
             NetworkErrorKind::Timeout

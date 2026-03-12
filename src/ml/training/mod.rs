@@ -113,8 +113,8 @@ pub async fn train_model(
     let slot_stats: Vec<SerializedSlotStats> = baseline
         .iter()
         .map(|avg| SerializedSlotStats {
-            weekday: avg.weekday as u32,
-            hour: avg.hour as u32,
+            weekday: avg.weekday.cast_unsigned(),
+            hour: avg.hour.cast_unsigned(),
             mean: avg.avg_percentage,
             std_dev: 10.0,
             sample_count: avg.sample_count,
@@ -168,8 +168,8 @@ pub fn train_model_sync(
     let slot_stats: Vec<SerializedSlotStats> = baseline
         .iter()
         .map(|avg| SerializedSlotStats {
-            weekday: avg.weekday as u32,
-            hour: avg.hour as u32,
+            weekday: avg.weekday.cast_unsigned(),
+            hour: avg.hour.cast_unsigned(),
             mean: avg.avg_percentage,
             std_dev: 10.0,
             sample_count: avg.sample_count,

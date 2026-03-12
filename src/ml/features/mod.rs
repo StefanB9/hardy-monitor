@@ -111,9 +111,15 @@ impl FeatureExtractor {
         }
 
         for (key, values) in groups {
-            let mean = values.iter().sum::<f64>() / values.len() as f64;
+            #[allow(clippy::cast_precision_loss)]
+            let count_f64 = values.len() as f64;
+
+            let mean = values.iter().sum::<f64>() / count_f64;
+
+            #[allow(clippy::cast_precision_loss)]
+            let degrees_of_freedom = (values.len() - 1) as f64;
             let variance = if values.len() > 1 {
-                values.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / (values.len() - 1) as f64
+                values.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / degrees_of_freedom
             } else {
                 0.0
             };
@@ -123,7 +129,7 @@ impl FeatureExtractor {
                 SlotStats {
                     mean,
                     std_dev: variance.sqrt(),
-                    sample_count: values.len() as i64,
+                    sample_count: i64::try_from(values.len()).unwrap_or_default(),
                 },
             );
         }
@@ -148,8 +154,8 @@ impl FeatureExtractor {
         _schedule: &GymSchedule,
     ) -> PredictionFeatures {
         let local_time = target_time.with_timezone(&Local);
-        let hour = local_time.hour() as i32;
-        let weekday = local_time.weekday().num_days_from_monday() as i32;
+        let hour = local_time.hour().cast_signed();
+        let weekday = local_time.weekday().num_days_from_monday().cast_signed();
         let week_of_year = local_time.iso_week().week();
 
         let (hour_sin, hour_cos) = cyclical::cyclical_encode(f64::from(hour), 24.0);
@@ -181,6 +187,9 @@ impl FeatureExtractor {
             0.0
         };
 
+        #[allow(clippy::cast_precision_loss)]
+        let hours_ahead_f64 = hours_ahead as f64;
+
         PredictionFeatures {
             hour_sin,
             hour_cos,
@@ -197,7 +206,7 @@ impl FeatureExtractor {
             is_holiday,
             week_of_year_sin,
             week_of_year_cos,
-            hours_ahead: hours_ahead as f64,
+            hours_ahead: hours_ahead_f64,
         }
     }
 }

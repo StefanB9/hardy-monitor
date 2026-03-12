@@ -10,6 +10,7 @@ use iced::{
 
 use crate::{app::Message, views::components::card_container};
 
+#[derive(Clone, Copy)]
 pub struct InsightsProps<'a> {
     pub trend: Option<TrendDirection>,
     pub stats: Option<&'a OccupancyStats>,
@@ -22,6 +23,7 @@ pub struct InsightsProps<'a> {
     pub ml_last_trained: Option<DateTime<Utc>>,
 }
 
+#[allow(clippy::too_many_lines)]
 pub fn view(props: InsightsProps<'_>) -> Element<'_, Message> {
     let trend_card = {
         let (trend_icon, trend_text, trend_color) = match props.trend {
@@ -172,7 +174,8 @@ pub fn view(props: InsightsProps<'_>) -> Element<'_, Message> {
             let mut days_row = row![].spacing(30);
             for day in props.day_analysis {
                 if day.sample_count > 0 {
-                    let bar_height = (day.avg_occupancy * 1.5).max(5.0);
+                    #[allow(clippy::cast_possible_truncation)]
+                    let bar_height = (day.avg_occupancy * 1.5).max(5.0) as f32;
                     let color = if day.avg_occupancy < 40.0 {
                         style::ACCENT_GREEN
                     } else if day.avg_occupancy < 60.0 {
@@ -183,19 +186,15 @@ pub fn view(props: InsightsProps<'_>) -> Element<'_, Message> {
 
                     days_row = days_row.push(
                         column![
-                            container(
-                                Space::new()
-                                    .width(30)
-                                    .height(Length::Fixed(bar_height as f32))
-                            )
-                            .style(move |_| container::Style {
-                                background: Some(color.into()),
-                                border: Border {
-                                    radius: 4.0.into(),
+                            container(Space::new().width(30).height(Length::Fixed(bar_height)))
+                                .style(move |_| container::Style {
+                                    background: Some(color.into()),
+                                    border: Border {
+                                        radius: 4.0.into(),
+                                        ..Default::default()
+                                    },
                                     ..Default::default()
-                                },
-                                ..Default::default()
-                            }),
+                                }),
                             Space::new().height(8),
                             text(&day.day_name[..3]).size(12).color(style::TEXT_MUTED),
                             text(format!("{:.0}%", day.avg_occupancy))
@@ -284,10 +283,10 @@ pub fn view(props: InsightsProps<'_>) -> Element<'_, Message> {
             ("Collecting data", style::TEXT_MUTED)
         };
 
-        let trained_str = props
-            .ml_last_trained
-            .map(|t| t.with_timezone(&Local).format("%Y-%m-%d %H:%M").to_string())
-            .unwrap_or_else(|| "N/A".to_string());
+        let trained_str = props.ml_last_trained.map_or_else(
+            || "N/A".to_string(),
+            |t| t.with_timezone(&Local).format("%Y-%m-%d %H:%M").to_string(),
+        );
 
         card_container(column![
             text("ML Prediction Model")

@@ -20,6 +20,7 @@ pub struct MLPredictionsProps<'a> {
     pub now: DateTime<Utc>,
 }
 
+#[allow(clippy::too_many_lines)]
 pub fn view(props: MLPredictionsProps<'_>) -> Element<'_, Message> {
     let (status_text, status_color) = if props.ml_training_in_progress {
         ("Training...", style::ACCENT_ORANGE)

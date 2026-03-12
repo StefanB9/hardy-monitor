@@ -15,6 +15,7 @@ pub struct HeatmapWidget<'a> {
 impl<Message> canvas::Program<Message> for HeatmapWidget<'_> {
     type State = ();
 
+    #[allow(clippy::too_many_lines)]
     fn draw(
         &self,
         (): &Self::State,
@@ -36,9 +37,12 @@ impl<Message> canvas::Program<Message> for HeatmapWidget<'_> {
             let seconds_per_week = 7 * 24 * 3600;
 
             for (d_idx, day) in days.iter().enumerate() {
+                #[allow(clippy::cast_precision_loss)]
+                let label_y = d_idx as f32 * cell_h + cell_h / 2.0;
+
                 frame.fill_text(Text {
                     content: day.to_string(),
-                    position: Point::new(0.0, d_idx as f32 * cell_h + cell_h / 2.0),
+                    position: Point::new(0.0, label_y),
                     color: style::TEXT_MUTED,
                     size: 10.0.into(),
                     align_y: iced::alignment::Vertical::Center,
@@ -46,7 +50,10 @@ impl<Message> canvas::Program<Message> for HeatmapWidget<'_> {
                 });
 
                 for hour in 0..24 {
+                    #[allow(clippy::cast_precision_loss)]
                     let x = pad_left + hour as f32 * cell_w;
+
+                    #[allow(clippy::cast_precision_loss)]
                     let y = d_idx as f32 * cell_h;
 
                     let is_open_hour = if d_idx >= 5 {
@@ -62,18 +69,19 @@ impl<Message> canvas::Program<Message> for HeatmapWidget<'_> {
                     );
 
                     if is_open_hour {
-                        let local_seconds = (d_idx as i64 * 24 + i64::from(hour)) * 3600;
+                        let d_idx_i64 = i64::try_from(d_idx).unwrap_or_default();
+                        let local_seconds = (d_idx_i64 * 24 + i64::from(hour)) * 3600;
                         let utc_seconds = local_seconds - i64::from(offset_seconds);
                         let wrapped_utc = ((utc_seconds % seconds_per_week) + seconds_per_week)
                             % seconds_per_week;
 
-                        let target_w = (wrapped_utc / 3600) / 24;
-                        let target_h = (wrapped_utc / 3600) % 24;
+                        let target_w = i32::try_from((wrapped_utc / 3600) / 24).unwrap_or_default();
+                        let target_h = i32::try_from((wrapped_utc / 3600) % 24).unwrap_or_default();
 
                         let val = self
                             .data
                             .iter()
-                            .find(|x| x.weekday == target_w as i32 && x.hour == target_h as i32)
+                            .find(|x| x.weekday == target_w && x.hour == target_h)
                             .map_or(0.0, |x| x.avg_percentage);
 
                         let color = if val == 0.0 {
@@ -105,53 +113,57 @@ impl<Message> canvas::Program<Message> for HeatmapWidget<'_> {
         self.tooltip_cache.clear();
 
         let overlay_geo = self.tooltip_cache.draw(renderer, bounds.size(), |frame| {
-            if let Some(cursor_pos) = cursor.position_in(bounds) {
-                if cursor_pos.x > pad_left && cursor_pos.y < h {
-                    let col = ((cursor_pos.x - pad_left) / cell_w).floor() as i64;
-                    let row = (cursor_pos.y / cell_h).floor() as i64;
+            if let Some(cursor_pos) = cursor.position_in(bounds)
+                && cursor_pos.x > pad_left
+                && cursor_pos.y < h
+            {
+                #[allow(clippy::cast_possible_truncation)]
+                let col = ((cursor_pos.x - pad_left) / cell_w).floor() as i64;
 
-                    if (0..24).contains(&col) && (0..7).contains(&row) {
-                        let offset_seconds = Local::now().offset().fix().local_minus_utc();
-                        let seconds_per_week = 7 * 24 * 3600;
+                #[allow(clippy::cast_possible_truncation)]
+                let row = (cursor_pos.y / cell_h).floor() as i64;
 
-                        let local_seconds = (row * 24 + col) * 3600;
-                        let utc_seconds = local_seconds - i64::from(offset_seconds);
-                        let wrapped_utc = ((utc_seconds % seconds_per_week) + seconds_per_week)
-                            % seconds_per_week;
+                if (0..24).contains(&col) && (0..7).contains(&row) {
+                    let offset_seconds = Local::now().offset().fix().local_minus_utc();
+                    let seconds_per_week = 7 * 24 * 3600;
 
-                        let target_w = (wrapped_utc / 3600) / 24;
-                        let target_h = (wrapped_utc / 3600) % 24;
+                    let local_seconds = (row * 24 + col) * 3600;
+                    let utc_seconds = local_seconds - i64::from(offset_seconds);
+                    let wrapped_utc =
+                        ((utc_seconds % seconds_per_week) + seconds_per_week) % seconds_per_week;
 
-                        let val = self
-                            .data
-                            .iter()
-                            .find(|x| x.weekday == target_w as i32 && x.hour == target_h as i32)
-                            .map(|x| x.avg_percentage);
+                    let target_w = i32::try_from((wrapped_utc / 3600) / 24).unwrap_or_default();
+                    let target_h = i32::try_from((wrapped_utc / 3600) % 24).unwrap_or_default();
 
-                        if let Some(v) = val {
-                            let text = format!("{v:.1}%");
-                            let pos = Point::new(cursor_pos.x + 10.0, cursor_pos.y - 20.0);
+                    let val = self
+                        .data
+                        .iter()
+                        .find(|x| x.weekday == target_w && x.hour == target_h)
+                        .map(|x| x.avg_percentage);
 
-                            let tooltip_bg =
-                                Path::rounded_rectangle(pos, Size::new(50.0, 24.0), 4.0.into());
-                            frame.fill(&tooltip_bg, style::BG_CARD);
-                            frame.stroke(
-                                &tooltip_bg,
-                                Stroke::default()
-                                    .with_color(style::STROKE_DIM)
-                                    .with_width(1.0),
-                            );
+                    if let Some(v) = val {
+                        let text = format!("{v:.1}%");
+                        let pos = Point::new(cursor_pos.x + 10.0, cursor_pos.y - 20.0);
 
-                            frame.fill_text(Text {
-                                content: text,
-                                position: Point::new(pos.x + 25.0, pos.y + 12.0),
-                                color: style::TEXT_BRIGHT,
-                                size: 12.0.into(),
-                                align_x: iced::alignment::Horizontal::Center.into(),
-                                align_y: iced::alignment::Vertical::Center,
-                                ..Default::default()
-                            });
-                        }
+                        let tooltip_bg =
+                            Path::rounded_rectangle(pos, Size::new(50.0, 24.0), 4.0.into());
+                        frame.fill(&tooltip_bg, style::BG_CARD);
+                        frame.stroke(
+                            &tooltip_bg,
+                            Stroke::default()
+                                .with_color(style::STROKE_DIM)
+                                .with_width(1.0),
+                        );
+
+                        frame.fill_text(Text {
+                            content: text,
+                            position: Point::new(pos.x + 25.0, pos.y + 12.0),
+                            color: style::TEXT_BRIGHT,
+                            size: 12.0.into(),
+                            align_x: iced::alignment::Horizontal::Center.into(),
+                            align_y: iced::alignment::Vertical::Center,
+                            ..Default::default()
+                        });
                     }
                 }
             }
@@ -169,11 +181,13 @@ fn calculate_gradient_color(percentage: f64) -> Color {
     let high = Color::from_rgb(0.9, 0.2, 0.2);
 
     if p < 0.5 {
-        let factor = p * 2.0;
-        interpolate_color(low, mid, factor as f32)
+        #[allow(clippy::cast_possible_truncation)]
+        let factor = (p * 2.0) as f32;
+        interpolate_color(low, mid, factor)
     } else {
-        let factor = (p - 0.5) * 2.0;
-        interpolate_color(mid, high, factor as f32)
+        #[allow(clippy::cast_possible_truncation)]
+        let factor = ((p - 0.5) * 2.0) as f32;
+        interpolate_color(mid, high, factor)
     }
 }
 

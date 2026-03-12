@@ -38,6 +38,7 @@ impl canvas::Program<Interaction> for HistoryChart<'_> {
         None
     }
 
+    #[allow(clippy::too_many_lines)]
     fn draw(
         &self,
         (): &Self::State,
@@ -55,6 +56,7 @@ impl canvas::Program<Interaction> for HistoryChart<'_> {
             let h = bounds.height - pad_bottom - pad_top;
 
             for i in 0..=4 {
+                #[allow(clippy::cast_precision_loss)]
                 let pct = i as f32 * 25.0;
                 let y = pad_top + h - (pct / 100.0 * h);
                 let line = Path::line(Point::new(pad_left, y), Point::new(pad_left + w, y));
@@ -100,9 +102,12 @@ impl canvas::Program<Interaction> for HistoryChart<'_> {
                 }
 
                 while current < self.range_end {
+                    #[allow(clippy::cast_precision_loss)]
                     let offset = current
                         .signed_duration_since(self.range_start)
                         .num_seconds() as f32;
+
+                    #[allow(clippy::cast_precision_loss)]
                     let x = pad_left + (offset / dur as f32) * w;
                     frame.stroke(
                         &Path::line(Point::new(x, pad_top), Point::new(x, pad_top + h)),
@@ -128,10 +133,13 @@ impl canvas::Program<Interaction> for HistoryChart<'_> {
                 }
             }
 
+            #[allow(clippy::cast_precision_loss)]
             let dur_f = dur as f32;
             let to_pt = |dt: DateTime<Utc>, val: f64| {
+                #[allow(clippy::cast_precision_loss)]
                 let offset = dt.signed_duration_since(self.range_start).num_seconds() as f32;
                 let x = pad_left + (offset / dur_f) * w;
+                #[allow(clippy::cast_possible_truncation)]
                 let y = pad_top + h - (val as f32 / 100.0 * h);
                 Point::new(x, y)
             };
@@ -248,11 +256,13 @@ impl canvas::Program<Interaction> for HistoryChart<'_> {
         {
             let pad_left = 35.0;
             let w = bounds.width - pad_left - 10.0;
+            #[allow(clippy::cast_precision_loss)]
             let dur = (self.range_end - self.range_start).num_seconds() as f32;
             let ratio = (cursor_pos.x - pad_left) / w;
 
             if (0.0..=1.0).contains(&ratio) {
                 let time_offset = ratio * dur;
+                #[allow(clippy::cast_possible_truncation)]
                 let hover_time = self.range_start + ChronoDuration::seconds(time_offset as i64);
                 let closest = self
                     .history
@@ -266,9 +276,11 @@ impl canvas::Program<Interaction> for HistoryChart<'_> {
                 {
                     let pad_top = 10.0;
                     let h = bounds.height - 25.0 - pad_top;
+                    #[allow(clippy::cast_precision_loss)]
                     let x = pad_left
                         + (d.signed_duration_since(self.range_start).num_seconds() as f32 / dur)
                             * w;
+                    #[allow(clippy::cast_possible_truncation)]
                     let y = pad_top + h - (val as f32 / 100.0 * h);
 
                     let mut frame = Frame::new(renderer, bounds.size());

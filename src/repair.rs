@@ -175,11 +175,11 @@ impl DataRepairer {
             if local_time < open_time || local_time > close_time {
                 self.db.delete_record(record.id).await?;
                 deleted_count += 1;
-            } else if local_time == open_time || local_time == close_time {
-                if record.percentage != 0.0 {
-                    self.db.update_percentage(record.id, 0.0).await?;
-                    zeroed_count += 1;
-                }
+            } else if (local_time == open_time || local_time == close_time)
+                && record.percentage != 0.0
+            {
+                self.db.update_percentage(record.id, 0.0).await?;
+                zeroed_count += 1;
             }
         }
 
@@ -280,11 +280,12 @@ impl DataRepairer {
                 && m2 <= close_minute
             {
                 for m in (m1 + 1)..m2 {
+                    #[allow(clippy::cast_precision_loss)]
                     let t = (m - m1) as f64 / gap_minutes as f64;
                     let interpolated = v1 + t * (v2 - v1);
 
-                    let hour = (m / 60) as u32;
-                    let minute = (m % 60) as u32;
+                    let hour = u32::try_from(m / 60).unwrap_or(0);
+                    let minute = u32::try_from(m % 60).unwrap_or(0);
                     let local_time = NaiveTime::from_hms_opt(hour, minute, 0)
                         .ok_or_else(|| anyhow::anyhow!("invalid time {hour}:{minute}"))?;
                     let local_dt = local_tz
