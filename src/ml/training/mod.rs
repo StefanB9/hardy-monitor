@@ -1,12 +1,19 @@
 pub mod cross_validation;
+pub(crate) mod data_prep;
+pub(crate) mod hyperparameter;
 
-use std::collections::VecDeque;
+use chrono::Duration;
 
-use chrono::{DateTime, Duration, Utc};
-
+use self::{
+    cross_validation::{CrossValidationScores, FoldScores, TimeSeriesSplit},
+    data_prep::{TrainingDataPreparer, estimate_samples_per_hour},
+    hyperparameter::{GridSearchResult, HyperparameterSet, grid_search_with_grid},
+};
 use super::{
     MlConfig,
-    features::{FeatureExtractor, PredictionFeatures},
+    config::MlAlgorithm,
+    evaluation,
+    features::FeatureExtractor,
     model::{ModelBuilder, TrainedModel, TrainingError},
     persistence::{ModelSummary, PersistedModel, SerializedSlotStats},
 };
@@ -21,56 +28,162 @@ pub struct TrainingResult {
     pub model: TrainedModel,
     pub feature_extractor: FeatureExtractor,
     pub persisted: PersistedModel,
+    pub cv_scores: Option<CrossValidationScores>,
+    pub best_hyperparameters: Option<HyperparameterSet>,
+    pub feature_importance: Option<Vec<(String, f64)>>,
+    pub oob_error: Option<f64>,
 }
 
-pub struct TrainingDataPreparer {
-    config: MlConfig,
+/// Build `PersistedModel` and `FeatureExtractor` from training artifacts.
+fn build_training_result(
+    model: TrainedModel,
+    baseline: &[HourlyAverage],
+    config: &MlConfig,
+    cv_scores: Option<CrossValidationScores>,
+    best_hyperparameters: Option<HyperparameterSet>,
+) -> TrainingResult {
+    let mut feature_extractor = FeatureExtractor::new();
+    feature_extractor.update_historical_stats(baseline);
+
+    let slot_stats: Vec<SerializedSlotStats> = baseline
+        .iter()
+        .map(|avg| SerializedSlotStats {
+            weekday: avg.weekday.cast_unsigned(),
+            hour: avg.hour.cast_unsigned(),
+            mean: avg.avg_percentage,
+            std_dev: 10.0,
+            sample_count: avg.sample_count,
+        })
+        .collect();
+
+    let persisted = PersistedModel::new(
+        config.training_window_days,
+        model.training_samples,
+        model.training_mse,
+        model.validation_mse,
+        slot_stats,
+        ModelSummary {
+            model_type: model.model_type().to_string(),
+            max_depth: best_hyperparameters
+                .as_ref()
+                .map(|p| p.max_depth)
+                .or(Some(10)),
+            feature_importance: model.feature_importance(),
+        },
+    );
+
+    TrainingResult {
+        model,
+        feature_extractor,
+        persisted,
+        cv_scores,
+        best_hyperparameters,
+        feature_importance: None,
+        oob_error: None,
+    }
 }
 
-impl TrainingDataPreparer {
-    pub fn new(config: MlConfig) -> Self {
-        Self { config }
+/// Train a Random Forest model with optional grid-search hyperparameter
+/// tuning.
+fn train_rf_with_tuning(
+    features: &[super::features::PredictionFeatures],
+    targets: &[f64],
+    config: &MlConfig,
+    logs: &[OccupancyLog],
+    grid: &[HyperparameterSet],
+) -> Result<
+    (
+        TrainedModel,
+        Option<CrossValidationScores>,
+        Option<HyperparameterSet>,
+    ),
+    TrainingError,
+> {
+    if config.tune_hyperparameters {
+        let sph = estimate_samples_per_hour(logs);
+        #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+        let gap_samples = (config.cv_gap_hours.unsigned_abs() as usize) * sph;
+        let splitter = TimeSeriesSplit::new(config.cv_folds, gap_samples);
+        let folds = splitter.and_then(|s| s.split(features.len()));
+
+        if let Some(folds) = folds {
+            let GridSearchResult {
+                best_params,
+                best_cv_scores,
+                ..
+            } = grid_search_with_grid(features, targets, &folds, grid)?;
+
+            // Retrain on full data with best params
+            let builder = ModelBuilder::new()
+                .n_trees(best_params.n_trees)
+                .max_depth(best_params.max_depth)
+                .min_samples_leaf(best_params.min_samples_leaf)
+                .max_features(best_params.max_features);
+
+            let model = builder.train_rf(features, targets)?;
+            Ok((model, Some(best_cv_scores), Some(best_params)))
+        } else {
+            // Not enough data for CV — train with defaults
+            let model = ModelBuilder::new()
+                .n_trees(100)
+                .max_depth(10)
+                .min_samples_leaf(2)
+                .train_rf(features, targets)?;
+            Ok((model, None, None))
+        }
+    } else {
+        // No tuning — train RF with defaults
+        let model = ModelBuilder::new()
+            .n_trees(100)
+            .max_depth(10)
+            .min_samples_leaf(2)
+            .train_rf(features, targets)?;
+        Ok((model, None, None))
+    }
+}
+
+/// Run cross-validation for linear regression (no grid search).
+#[allow(clippy::similar_names)]
+fn compute_lr_cv_scores(
+    features: &[super::features::PredictionFeatures],
+    targets: &[f64],
+    config: &MlConfig,
+    logs: &[OccupancyLog],
+) -> Option<CrossValidationScores> {
+    let sph = estimate_samples_per_hour(logs);
+    #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+    let gap_samples = (config.cv_gap_hours.unsigned_abs() as usize) * sph;
+    let splitter = TimeSeriesSplit::new(config.cv_folds, gap_samples)?;
+    let folds = splitter.split(features.len())?;
+
+    let mut mse_scores = Vec::with_capacity(folds.len());
+    let mut rmse_scores = Vec::with_capacity(folds.len());
+    let mut mae_scores = Vec::with_capacity(folds.len());
+    let mut r2_scores = Vec::with_capacity(folds.len());
+
+    for fold in &folds {
+        let train_features = &features[fold.train_start..fold.train_end];
+        let train_targets = &targets[fold.train_start..fold.train_end];
+        let val_features = &features[fold.val_start..fold.val_end];
+        let val_targets = &targets[fold.val_start..fold.val_end];
+
+        let builder = ModelBuilder::new().ridge_lambda(1e-3);
+        let model = builder.train(train_features, train_targets).ok()?;
+        let predictions = model.predict_batch(val_features);
+
+        mse_scores.push(evaluation::mse(&predictions, val_targets).unwrap_or(f64::MAX));
+        rmse_scores.push(evaluation::rmse(&predictions, val_targets).unwrap_or(f64::MAX));
+        mae_scores.push(evaluation::mae(&predictions, val_targets).unwrap_or(f64::MAX));
+        r2_scores
+            .push(evaluation::r_squared(&predictions, val_targets).unwrap_or(f64::NEG_INFINITY));
     }
 
-    pub fn prepare(
-        &self,
-        logs: &[OccupancyLog],
-        baseline: &[HourlyAverage],
-        schedule: &GymSchedule,
-    ) -> Result<(Vec<PredictionFeatures>, Vec<f64>), TrainingError> {
-        if logs.len() < self.config.min_samples_for_training {
-            return Err(TrainingError::InsufficientData(logs.len()));
-        }
-
-        let mut feature_extractor = FeatureExtractor::new();
-        feature_extractor.update_historical_stats(baseline);
-
-        let mut features = Vec::with_capacity(logs.len());
-        let mut targets = Vec::with_capacity(logs.len());
-
-        let mut recent_window: VecDeque<(DateTime<Utc>, f64)> = VecDeque::with_capacity(180);
-
-        for log in logs {
-            let timestamp = log.timestamp;
-
-            while recent_window.len() >= 180 {
-                recent_window.pop_front();
-            }
-            recent_window.push_back((timestamp, log.percentage));
-
-            let feature =
-                feature_extractor.extract(timestamp, 0, &recent_window, baseline, schedule);
-
-            features.push(feature);
-            targets.push(log.percentage);
-        }
-
-        if features.len() < self.config.min_samples_for_training {
-            return Err(TrainingError::InsufficientData(features.len()));
-        }
-
-        Ok((features, targets))
-    }
+    Some(CrossValidationScores {
+        mse: FoldScores::from_scores(mse_scores),
+        rmse: FoldScores::from_scores(rmse_scores),
+        mae: FoldScores::from_scores(mae_scores),
+        r_squared: FoldScores::from_scores(r2_scores),
+    })
 }
 
 pub async fn train_model(
@@ -96,49 +209,12 @@ pub async fn train_model(
         .await
         .map_err(|e| TrainingError::FitError(format!("Database error: {e}")))?;
 
-    let preparer = TrainingDataPreparer::new(config.clone());
-    let (features, targets) = preparer.prepare(&logs, &baseline, schedule)?;
+    let schedule = schedule.clone();
+    let config = config.clone();
 
-    let builder = ModelBuilder::new()
-        .max_depth(10)
-        .min_samples_split(5)
-        .min_samples_leaf(2)
-        .ridge_lambda(1e-3);
-
-    let model = builder.train_with_validation(&features, &targets, 0.2)?;
-
-    let mut feature_extractor = FeatureExtractor::new();
-    feature_extractor.update_historical_stats(&baseline);
-
-    let slot_stats: Vec<SerializedSlotStats> = baseline
-        .iter()
-        .map(|avg| SerializedSlotStats {
-            weekday: avg.weekday.cast_unsigned(),
-            hour: avg.hour.cast_unsigned(),
-            mean: avg.avg_percentage,
-            std_dev: 10.0,
-            sample_count: avg.sample_count,
-        })
-        .collect();
-
-    let persisted = PersistedModel::new(
-        config.training_window_days,
-        model.training_samples,
-        model.training_mse,
-        model.validation_mse,
-        slot_stats,
-        ModelSummary {
-            model_type: model.model_type().to_string(),
-            max_depth: Some(10),
-            feature_importance: model.feature_importance(),
-        },
-    );
-
-    Ok(TrainingResult {
-        model,
-        feature_extractor,
-        persisted,
-    })
+    tokio::task::spawn_blocking(move || train_model_sync(&logs, &baseline, &schedule, &config))
+        .await
+        .map_err(|e| TrainingError::FitError(format!("Task join error: {e}")))?
 }
 
 pub fn train_model_sync(
@@ -154,54 +230,35 @@ pub fn train_model_sync(
     let preparer = TrainingDataPreparer::new(config.clone());
     let (features, targets) = preparer.prepare(logs, baseline, schedule)?;
 
-    let builder = ModelBuilder::new()
-        .max_depth(10)
-        .min_samples_split(5)
-        .min_samples_leaf(2)
-        .ridge_lambda(1e-3);
+    let default_grid = HyperparameterSet::default_grid();
+    let (model, cv_scores, best_params) = match config.algorithm {
+        MlAlgorithm::RandomForest => {
+            train_rf_with_tuning(&features, &targets, config, logs, &default_grid)?
+        }
+        MlAlgorithm::LinearRegression => {
+            let builder = ModelBuilder::new().ridge_lambda(1e-3);
+            let model = builder.train_with_validation(&features, &targets, 0.2)?;
+            let cv_scores = compute_lr_cv_scores(&features, &targets, config, logs);
+            (model, cv_scores, None)
+        }
+    };
 
-    let model = builder.train_with_validation(&features, &targets, 0.2)?;
-
-    let mut feature_extractor = FeatureExtractor::new();
-    feature_extractor.update_historical_stats(baseline);
-
-    let slot_stats: Vec<SerializedSlotStats> = baseline
-        .iter()
-        .map(|avg| SerializedSlotStats {
-            weekday: avg.weekday.cast_unsigned(),
-            hour: avg.hour.cast_unsigned(),
-            mean: avg.avg_percentage,
-            std_dev: 10.0,
-            sample_count: avg.sample_count,
-        })
-        .collect();
-
-    let persisted = PersistedModel::new(
-        config.training_window_days,
-        model.training_samples,
-        model.training_mse,
-        model.validation_mse,
-        slot_stats,
-        ModelSummary {
-            model_type: model.model_type().to_string(),
-            max_depth: Some(10),
-            feature_importance: model.feature_importance(),
-        },
-    );
-
-    Ok(TrainingResult {
+    Ok(build_training_result(
         model,
-        feature_extractor,
-        persisted,
-    })
+        baseline,
+        config,
+        cv_scores,
+        best_params,
+    ))
 }
 
 #[cfg(test)]
 mod tests {
     use anyhow::Result;
-    use chrono::TimeZone;
+    use chrono::{TimeZone, Utc};
 
     use super::*;
+    use crate::ml::config::MlAlgorithm;
 
     fn create_test_logs(n: i32) -> Vec<OccupancyLog> {
         let base_time = Utc.with_ymd_and_hms(2024, 6, 1, 6, 0, 0).unwrap();
@@ -237,49 +294,17 @@ mod tests {
         baseline
     }
 
-    #[test]
-    fn test_training_data_preparer_insufficient_data() {
-        let config = MlConfig {
-            min_samples_for_training: 100,
-            ..Default::default()
-        };
-
-        let preparer = TrainingDataPreparer::new(config);
-        let logs = create_test_logs(50);
-        let baseline = create_test_baseline();
-        let schedule = GymSchedule::default();
-
-        let result = preparer.prepare(&logs, &baseline, &schedule);
-
-        assert!(matches!(result, Err(TrainingError::InsufficientData(50))));
-    }
+    // ── train_model_sync — RF path ───────────────────────────────────
 
     #[test]
-    fn test_training_data_preparer_success() -> Result<()> {
-        let config = MlConfig {
-            min_samples_for_training: 100,
-            ..Default::default()
-        };
-
-        let preparer = TrainingDataPreparer::new(config);
-        let logs = create_test_logs(200);
-        let baseline = create_test_baseline();
-        let schedule = GymSchedule::default();
-
-        let result = preparer.prepare(&logs, &baseline, &schedule);
-
-        assert!(result.is_ok());
-        let (features, targets) = result?;
-        assert_eq!(features.len(), targets.len());
-        assert!(features.len() >= 100);
-        Ok(())
-    }
-
-    #[test]
-    fn test_train_model_sync() -> Result<()> {
+    fn test_train_rf_with_tuning_small_grid() -> Result<()> {
         let config = MlConfig {
             min_samples_for_training: 100,
             training_window_days: 28,
+            algorithm: MlAlgorithm::RandomForest,
+            tune_hyperparameters: true,
+            cv_folds: 3,
+            cv_gap_hours: 0,
             ..Default::default()
         };
 
@@ -287,17 +312,79 @@ mod tests {
         let baseline = create_test_baseline();
         let schedule = GymSchedule::default();
 
-        let result = train_model_sync(&logs, &baseline, &schedule, &config);
+        let preparer = TrainingDataPreparer::new(config.clone());
+        let (features, targets) = preparer.prepare(&logs, &baseline, &schedule)?;
 
-        match result {
-            Ok(training_result) => {
-                assert!(training_result.model.training_samples >= 100);
-                assert!(training_result.persisted.training_mse >= 0.0);
-                Ok(())
-            }
-            Err(e) => Err(e.into()),
-        }
+        let small_grid = HyperparameterSet::small_grid();
+        let (model, cv_scores, best_params) =
+            train_rf_with_tuning(&features, &targets, &config, &logs, &small_grid)?;
+
+        assert!(model.training_samples >= 100);
+        assert_eq!(model.model_type(), "RandomForest");
+        assert!(cv_scores.is_some());
+        assert!(best_params.is_some());
+
+        // Wrap in full TrainingResult to verify field integration
+        let result = build_training_result(model, &baseline, &config, cv_scores, best_params);
+        assert!(result.cv_scores.is_some());
+        assert!(result.best_hyperparameters.is_some());
+        assert!(result.feature_importance.is_none());
+        assert!(result.oob_error.is_none());
+
+        Ok(())
     }
+
+    #[test]
+    fn test_train_model_sync_rf_no_tuning() -> Result<()> {
+        let config = MlConfig {
+            min_samples_for_training: 100,
+            training_window_days: 28,
+            algorithm: MlAlgorithm::RandomForest,
+            tune_hyperparameters: false,
+            ..Default::default()
+        };
+
+        let logs = create_test_logs(1000);
+        let baseline = create_test_baseline();
+        let schedule = GymSchedule::default();
+
+        let result = train_model_sync(&logs, &baseline, &schedule, &config)?;
+
+        assert_eq!(result.model.model_type(), "RandomForest");
+        assert!(result.cv_scores.is_none());
+        assert!(result.best_hyperparameters.is_none());
+
+        Ok(())
+    }
+
+    // ── train_model_sync — LR path ───────────────────────────────────
+
+    #[test]
+    fn test_train_model_sync_lr_path() -> Result<()> {
+        let config = MlConfig {
+            min_samples_for_training: 100,
+            training_window_days: 28,
+            algorithm: MlAlgorithm::LinearRegression,
+            cv_folds: 3,
+            cv_gap_hours: 0,
+            ..Default::default()
+        };
+
+        let logs = create_test_logs(1000);
+        let baseline = create_test_baseline();
+        let schedule = GymSchedule::default();
+
+        let result = train_model_sync(&logs, &baseline, &schedule, &config)?;
+
+        assert_eq!(result.model.model_type(), "LinearRegression");
+        // LR path should produce CV scores but no best_hyperparameters
+        assert!(result.cv_scores.is_some());
+        assert!(result.best_hyperparameters.is_none());
+
+        Ok(())
+    }
+
+    // ── train_model_sync — insufficient data ─────────────────────────
 
     #[test]
     fn test_train_model_sync_insufficient_data() {
@@ -313,5 +400,88 @@ mod tests {
         let result = train_model_sync(&logs, &baseline, &schedule, &config);
 
         assert!(matches!(result, Err(TrainingError::InsufficientData(_))));
+    }
+
+    #[test]
+    fn test_train_model_sync_insufficient_for_cv() -> Result<()> {
+        let config = MlConfig {
+            min_samples_for_training: 5,
+            training_window_days: 28,
+            algorithm: MlAlgorithm::RandomForest,
+            tune_hyperparameters: true,
+            cv_folds: 4,
+            cv_gap_hours: 24,
+            ..Default::default()
+        };
+
+        // Only 10 logs — enough to train but not enough for 4-fold CV with gap
+        let logs = create_test_logs(10);
+        let baseline = create_test_baseline();
+        let schedule = GymSchedule::default();
+
+        let result = train_model_sync(&logs, &baseline, &schedule, &config)?;
+
+        // Falls back to default RF training, no CV
+        assert_eq!(result.model.model_type(), "RandomForest");
+        assert!(result.cv_scores.is_none());
+        assert!(result.best_hyperparameters.is_none());
+
+        Ok(())
+    }
+
+    // ── LR CV scores ─────────────────────────────────────────────────
+
+    #[test]
+    fn test_lr_cv_scores_basic() {
+        let config = MlConfig {
+            min_samples_for_training: 100,
+            cv_folds: 3,
+            cv_gap_hours: 0,
+            ..Default::default()
+        };
+
+        let logs = create_test_logs(1000);
+        let baseline = create_test_baseline();
+        let schedule = GymSchedule::default();
+
+        let preparer = TrainingDataPreparer::new(config.clone());
+        let (features, targets) = preparer
+            .prepare(&logs, &baseline, &schedule)
+            .unwrap_or_default();
+
+        let scores = compute_lr_cv_scores(&features, &targets, &config, &logs);
+        assert!(scores.is_some());
+
+        let scores = scores.unwrap_or_else(|| CrossValidationScores {
+            mse: FoldScores::from_scores(vec![]),
+            rmse: FoldScores::from_scores(vec![]),
+            mae: FoldScores::from_scores(vec![]),
+            r_squared: FoldScores::from_scores(vec![]),
+        });
+        assert_eq!(scores.mse.per_fold.len(), 3);
+        assert!(scores.mse.mean >= 0.0);
+    }
+
+    #[test]
+    fn test_lr_cv_scores_insufficient_data() {
+        let config = MlConfig {
+            min_samples_for_training: 5,
+            cv_folds: 4,
+            cv_gap_hours: 24,
+            ..Default::default()
+        };
+
+        let logs = create_test_logs(10);
+        let baseline = create_test_baseline();
+        let schedule = GymSchedule::default();
+
+        let preparer = TrainingDataPreparer::new(config.clone());
+        let result = preparer.prepare(&logs, &baseline, &schedule);
+
+        if let Ok((features, targets)) = result {
+            let scores = compute_lr_cv_scores(&features, &targets, &config, &logs);
+            assert!(scores.is_none());
+        }
+        // Err is also acceptable — insufficient data at prep stage
     }
 }
