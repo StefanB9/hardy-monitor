@@ -153,32 +153,61 @@ impl canvas::Program<Interaction> for HistoryChart<'_> {
                 .collect();
 
             if !points.is_empty() {
-                let mut builder = canvas::path::Builder::new();
-                let first = points[0];
-                builder.move_to(to_pt(first.0, first.1));
-                for (d, v) in &points {
-                    builder.line_to(to_pt(*d, *v));
-                }
-                let line_path = builder.build();
+                // Group points into segments to avoid drawing lines across large gaps (e.g.,
+                // overnight)
+                let mut segments: Vec<Vec<(DateTime<Utc>, f64)>> = Vec::new();
+                let mut current_segment = vec![points[0]];
 
-                let mut fill = canvas::path::Builder::new();
-                fill.move_to(Point::new(to_pt(first.0, 0.0).x, pad_top + h));
-                for (d, v) in &points {
-                    fill.line_to(to_pt(*d, *v));
+                for window in points.windows(2) {
+                    let p1 = window[0];
+                    let p2 = window[1];
+
+                    // Break the segment if the gap between points is larger than 2 hours
+                    if p2.0 - p1.0 > ChronoDuration::hours(2) {
+                        segments.push(current_segment);
+                        current_segment = vec![p2];
+                    } else {
+                        current_segment.push(p2);
+                    }
                 }
+                segments.push(current_segment);
+
+                // Draw each segment individually
+                for segment in segments {
+                    if segment.is_empty() {
+                        continue;
+                    }
+
+                    let mut builder = canvas::path::Builder::new();
+                    let first = segment[0];
+                    builder.move_to(to_pt(first.0, first.1));
+                    for (d, v) in &segment {
+                        builder.line_to(to_pt(*d, *v));
+                    }
+                    let line_path = builder.build();
+
+                    let mut fill = canvas::path::Builder::new();
+                    fill.move_to(Point::new(to_pt(first.0, 0.0).x, pad_top + h));
+                    for (d, v) in &segment {
+                        fill.line_to(to_pt(*d, *v));
+                    }
+                    if let Some(last) = segment.last() {
+                        fill.line_to(Point::new(to_pt(last.0, 0.0).x, pad_top + h));
+                    }
+                    fill.close();
+
+                    frame.fill(&fill.build(), Color::from_rgba(0.35, 0.65, 0.95, 0.1));
+                    frame.stroke(
+                        &line_path,
+                        Stroke::default()
+                            .with_color(style::ACCENT_BLUE)
+                            .with_width(2.0),
+                    );
+                }
+
                 if let Some(last) = points.last() {
-                    fill.line_to(Point::new(to_pt(last.0, 0.0).x, pad_top + h));
                     last_history_point = Some((to_pt(last.0, last.1), last.0));
                 }
-                fill.close();
-
-                frame.fill(&fill.build(), Color::from_rgba(0.35, 0.65, 0.95, 0.1));
-                frame.stroke(
-                    &line_path,
-                    Stroke::default()
-                        .with_color(style::ACCENT_BLUE)
-                        .with_width(2.0),
-                );
             }
 
             if !self.confidence_band.is_empty() {

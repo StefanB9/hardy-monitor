@@ -304,14 +304,12 @@ pub fn compare_periods(
     } else {
         let total: f64 = baseline
             .iter()
-            .map(|h|
-                     {
-                         #[allow(clippy::cast_precision_loss)]
-                         let count_f64 = h.sample_count as f64;
+            .map(|h| {
+                #[allow(clippy::cast_precision_loss)]
+                let count_f64 = h.sample_count as f64;
 
-                         h.avg_percentage * count_f64
-                     }
-                )
+                h.avg_percentage * count_f64
+            })
             .sum();
         let count: i64 = baseline.iter().map(|h| h.sample_count).sum();
         if count > 0 {
@@ -319,7 +317,9 @@ pub fn compare_periods(
             let count_f64 = count as f64;
 
             total / count_f64
-        } else { 0.0 }
+        } else {
+            0.0
+        }
     };
 
     let current_overall_avg = if current.is_empty() {
@@ -327,14 +327,12 @@ pub fn compare_periods(
     } else {
         let total: f64 = current
             .iter()
-            .map(|h|
-                     {
-                         #[allow(clippy::cast_precision_loss)]
-                         let count_f64 = h.sample_count as f64;
+            .map(|h| {
+                #[allow(clippy::cast_precision_loss)]
+                let count_f64 = h.sample_count as f64;
 
-                         h.avg_percentage * count_f64
-                     }
-                )
+                h.avg_percentage * count_f64
+            })
             .sum();
         let count: i64 = current.iter().map(|h| h.sample_count).sum();
         if count > 0 {
@@ -342,7 +340,9 @@ pub fn compare_periods(
             let count_f64 = count as f64;
 
             total / count_f64
-        } else { 0.0 }
+        } else {
+            0.0
+        }
     };
 
     let overall_change_percent = if baseline_overall_avg > 0.0 {
