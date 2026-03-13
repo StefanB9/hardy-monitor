@@ -7,7 +7,7 @@ edition = "2024"
 
 [features]
 default = ["gui"]
-gui = ["dep:approx", "dep:bincode", "dep:iced", "dep:image", "dep:linfa", "dep:linfa-linear", "dep:muda", "dep:ndarray", "dep:notify-rust", "dep:tray-icon"]
+gui = ["dep:approx", "dep:bincode", "dep:iced", "dep:image", "dep:linfa", "dep:linfa-linear", "dep:muda", "dep:ndarray", "dep:notify-rust", "dep:smartcore", "dep:tray-icon"]
 
 [dependencies]
 anyhow = { version = "1.0.102", default-features = false, features = ["std"] }
@@ -29,6 +29,7 @@ ndarray = { version = "0.16.1", default-features = false, optional = true }
 notify-rust = { version = "4.12.0", default-features = false, optional = true }
 reqwest = { version = "0.13.2", default-features = false, features = ["json", "native-tls"] }
 serde = { version = "1.0.228", default-features = false, features = ["derive"] }
+smartcore = { version = "0.4.9", default-features = false, optional = true }
 sqlx = { version = "0.9.0-alpha.1", default-features = false, features = ["chrono", "macros", "migrate", "postgres", "runtime-tokio", "tls-rustls"] }
 thiserror = { version = "2.0.18", default-features = false }
 tokio = { version = "1.50.0", default-features = false, features = ["macros", "rt-multi-thread"] }
@@ -38,6 +39,7 @@ tracing-subscriber = { version = "0.3.22", default-features = false, features = 
 tray-icon = { version = "0.21.3", default-features = false, optional = true }
 
 [dev-dependencies]
+approx = "0.5.1"
 proptest = "1.10.0"
 temp-env = "0.3.6"
 tempfile = "3.27.0"

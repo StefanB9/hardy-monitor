@@ -128,9 +128,9 @@ pub async fn train_model(
         model.validation_mse,
         slot_stats,
         ModelSummary {
-            model_type: "LinearRegression".to_string(),
+            model_type: model.model_type().to_string(),
             max_depth: Some(10),
-            feature_importance: None,
+            feature_importance: model.feature_importance(),
         },
     );
 
@@ -183,9 +183,9 @@ pub fn train_model_sync(
         model.validation_mse,
         slot_stats,
         ModelSummary {
-            model_type: "LinearRegression".to_string(),
+            model_type: model.model_type().to_string(),
             max_depth: Some(10),
-            feature_importance: None,
+            feature_importance: model.feature_importance(),
         },
     );
 
