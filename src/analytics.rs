@@ -815,7 +815,7 @@ mod tests {
     #[test]
     fn test_midnight_utc_leap_year() -> Result<()> {
         let date =
-            NaiveDate::from_ymd_opt(2024, 6, 15).ok_or_else(|| anyhow::anyhow!("Invalid date"))?;
+            NaiveDate::from_ymd_opt(2024, 2, 29).ok_or_else(|| anyhow::anyhow!("Invalid date"))?;
         let result = midnight_utc(date);
 
         assert_eq!(result.month(), 2);
@@ -826,7 +826,7 @@ mod tests {
     #[test]
     fn test_midnight_utc_year_boundary() -> Result<()> {
         let date =
-            NaiveDate::from_ymd_opt(2024, 6, 15).ok_or_else(|| anyhow::anyhow!("Invalid date"))?;
+            NaiveDate::from_ymd_opt(2024, 12, 31).ok_or_else(|| anyhow::anyhow!("Invalid date"))?;
         let result = midnight_utc(date);
 
         assert_eq!(result.year(), 2024);
