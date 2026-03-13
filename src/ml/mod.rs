@@ -31,7 +31,7 @@ impl OccupancyPredictor {
         Self {
             model: None,
             feature_extractor: FeatureExtractor::new(),
-            recent_data: VecDeque::with_capacity(180),
+            recent_data: VecDeque::with_capacity(360),
             last_training: None,
             config,
         }
@@ -57,7 +57,7 @@ impl OccupancyPredictor {
     }
 
     pub fn add_observation(&mut self, timestamp: DateTime<Utc>, percentage: f64) {
-        while self.recent_data.len() >= 180 {
+        while self.recent_data.len() >= 360 {
             self.recent_data.pop_front();
         }
         self.recent_data.push_back((timestamp, percentage));

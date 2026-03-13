@@ -394,6 +394,12 @@ mod tests {
                     week_of_year_sin: (t * 0.02).sin() + noise1,
                     week_of_year_cos: (t * 0.021).cos() + noise2,
                     hours_ahead: 1.0 + (t % 6.0),
+                    raw_hour: t % 24.0,
+                    raw_weekday: t % 7.0,
+                    time_to_close: 5.0 + (t % 12.0),
+                    occupancy_volatility: 2.0 + (t % 10.0),
+                    recent_avg_6h: 42.0 + ((t * 0.9) % 28.0),
+                    prev_week_same_slot: 38.0 + (t % 35.0),
                 }
             })
             .collect()
@@ -531,6 +537,12 @@ mod tests {
                     week_of_year_sin: (t * 0.02).sin(),
                     week_of_year_cos: (t * 0.021).cos(),
                     hours_ahead: 0.0,
+                    raw_hour: t % 24.0,
+                    raw_weekday: t % 7.0,
+                    time_to_close: 5.0 + (t % 12.0),
+                    occupancy_volatility: 2.0 + (t % 10.0),
+                    recent_avg_6h: 42.0 + ((t * 0.9) % 28.0),
+                    prev_week_same_slot: 38.0 + (t % 35.0),
                 }
             })
             .collect();
