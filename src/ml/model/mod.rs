@@ -122,6 +122,7 @@ pub struct ModelBuilder {
     min_samples_split: usize,
     min_samples_leaf: usize,
     n_trees: usize,
+    max_features: Option<usize>,
 }
 
 impl Default for ModelBuilder {
@@ -133,6 +134,7 @@ impl Default for ModelBuilder {
             min_samples_split: 2,
             min_samples_leaf: 1,
             n_trees: 100,
+            max_features: None,
         }
     }
 }
@@ -175,6 +177,12 @@ impl ModelBuilder {
     #[must_use]
     pub fn n_trees(mut self, n: usize) -> Self {
         self.n_trees = n;
+        self
+    }
+
+    #[must_use]
+    pub fn max_features(mut self, max: Option<usize>) -> Self {
+        self.max_features = max;
         self
     }
 
@@ -274,7 +282,7 @@ impl ModelBuilder {
             max_depth,
             min_samples_split: self.min_samples_split,
             min_samples_leaf: self.min_samples_leaf,
-            max_features: None,
+            max_features: self.max_features,
         };
 
         let rf = random_forest::RandomForestModel::train(&matrix, targets, &params)?;
@@ -402,6 +410,34 @@ mod tests {
         assert_eq!(builder.max_depth, 0);
         assert_eq!(builder.min_samples_split, 2);
         assert_eq!(builder.min_samples_leaf, 1);
+        assert!(builder.max_features.is_none());
+    }
+
+    #[test]
+    fn test_model_builder_max_features() {
+        let builder = ModelBuilder::new().max_features(Some(8));
+        assert_eq!(builder.max_features, Some(8));
+
+        let builder_none = ModelBuilder::new().max_features(None);
+        assert!(builder_none.max_features.is_none());
+    }
+
+    #[test]
+    fn test_train_rf_with_max_features() -> Result<()> {
+        let features = create_test_features(200);
+        let targets: Vec<f64> = features.iter().map(|f| f.historical_avg).collect();
+
+        let builder = ModelBuilder::new()
+            .n_trees(10)
+            .max_depth(5)
+            .max_features(Some(4));
+
+        let model = builder.train_rf(&features, &targets)?;
+        assert_eq!(model.training_samples, 200);
+        assert!(model.training_mse >= 0.0);
+        assert_eq!(model.model_type(), "RandomForest");
+
+        Ok(())
     }
 
     #[test]

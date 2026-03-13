@@ -1,3 +1,49 @@
+/// Per-fold metric values with aggregate statistics.
+#[derive(Debug, Clone)]
+pub struct FoldScores {
+    pub per_fold: Vec<f64>,
+    pub mean: f64,
+    pub std_dev: f64,
+}
+
+impl FoldScores {
+    /// Compute mean and standard deviation from a vector of per-fold scores.
+    ///
+    /// Returns scores with `mean = 0.0` and `std_dev = 0.0` if the input is
+    /// empty.
+    pub fn from_scores(scores: Vec<f64>) -> Self {
+        if scores.is_empty() {
+            return Self {
+                per_fold: scores,
+                mean: 0.0,
+                std_dev: 0.0,
+            };
+        }
+
+        #[allow(clippy::cast_precision_loss)]
+        let mean = scores.iter().sum::<f64>() / scores.len() as f64;
+
+        #[allow(clippy::cast_precision_loss)]
+        let variance = scores.iter().map(|s| (s - mean).powi(2)).sum::<f64>() / scores.len() as f64;
+        let std_dev = variance.sqrt();
+
+        Self {
+            per_fold: scores,
+            mean,
+            std_dev,
+        }
+    }
+}
+
+/// Complete cross-validation results across all metrics.
+#[derive(Debug, Clone)]
+pub struct CrossValidationScores {
+    pub mse: FoldScores,
+    pub rmse: FoldScores,
+    pub mae: FoldScores,
+    pub r_squared: FoldScores,
+}
+
 /// A single fold's train/validation index ranges (half-open: `start..end`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Fold {
@@ -115,9 +161,61 @@ impl TimeSeriesSplit {
 
 #[cfg(test)]
 mod tests {
+    use approx::assert_relative_eq;
     use proptest::prelude::*;
 
     use super::*;
+
+    // ── FoldScores ───────────────────────────────────────────────────
+
+    #[test]
+    fn test_fold_scores_from_scores() {
+        let scores = FoldScores::from_scores(vec![2.0, 4.0, 6.0, 8.0]);
+        assert_relative_eq!(scores.mean, 5.0);
+        // std_dev = sqrt(((2-5)^2 + (4-5)^2 + (6-5)^2 + (8-5)^2) / 4)
+        //         = sqrt((9+1+1+9)/4) = sqrt(5) ≈ 2.2361
+        assert_relative_eq!(scores.std_dev, 5.0_f64.sqrt(), epsilon = 1e-10);
+        assert_eq!(scores.per_fold.len(), 4);
+    }
+
+    #[test]
+    fn test_fold_scores_single_value() {
+        let scores = FoldScores::from_scores(vec![42.0]);
+        assert_relative_eq!(scores.mean, 42.0);
+        assert_relative_eq!(scores.std_dev, 0.0);
+    }
+
+    #[test]
+    fn test_fold_scores_empty() {
+        let scores = FoldScores::from_scores(vec![]);
+        assert_relative_eq!(scores.mean, 0.0);
+        assert_relative_eq!(scores.std_dev, 0.0);
+        assert!(scores.per_fold.is_empty());
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(1000))]
+
+        #[test]
+        fn prop_fold_scores_mean_in_range(
+            scores in proptest::collection::vec(-1000.0_f64..1000.0, 1..20),
+        ) {
+            let min = scores.iter().copied().fold(f64::INFINITY, f64::min);
+            let max = scores.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+
+            let fold_scores = FoldScores::from_scores(scores);
+            prop_assert!(
+                fold_scores.mean >= min && fold_scores.mean <= max,
+                "mean {} not in [{}, {}]",
+                fold_scores.mean,
+                min,
+                max
+            );
+            prop_assert!(fold_scores.std_dev >= 0.0);
+        }
+    }
+
+    // ── TimeSeriesSplit ──────────────────────────────────────────────
 
     #[test]
     fn test_split_basic_4_folds() {

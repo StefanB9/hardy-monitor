@@ -43,6 +43,7 @@ approx = "0.6.0-rc2"
 proptest = "1.10.0"
 temp-env = "0.3.6"
 tempfile = "3.27.0"
+toml = { version = "1.0.6", default-features = false, features = ["parse"] }
 wiremock = "0.6.5"
 
 [profile.release]
