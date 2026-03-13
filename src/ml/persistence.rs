@@ -46,7 +46,7 @@ pub struct ModelSummary {
 }
 
 impl PersistedModel {
-    pub const CURRENT_VERSION: u32 = 1;
+    pub const CURRENT_VERSION: u32 = 2;
 
     pub fn new(
         training_window_days: i64,

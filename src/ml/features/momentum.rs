@@ -80,6 +80,62 @@ pub(super) fn calculate_trend(values: &[f64]) -> f64 {
     }
 }
 
+/// 6-hour rolling average of occupancy values from recent observations.
+///
+/// Returns `50.0` (neutral default) if no data is available in the 6-hour
+/// window.
+pub(super) fn extract_avg_6h(recent_data: &VecDeque<(DateTime<Utc>, f64)>) -> f64 {
+    if recent_data.is_empty() {
+        return 50.0;
+    }
+
+    let now = recent_data.back().map_or_else(Utc::now, |(t, _)| *t);
+    let six_hours_ago = now - chrono::Duration::hours(6);
+
+    let recent_6h: Vec<f64> = recent_data
+        .iter()
+        .filter(|(t, _)| *t >= six_hours_ago)
+        .map(|(_, v)| *v)
+        .collect();
+
+    if recent_6h.is_empty() {
+        return 50.0;
+    }
+
+    #[allow(clippy::cast_precision_loss)]
+    let n = recent_6h.len() as f64;
+    recent_6h.iter().sum::<f64>() / n
+}
+
+/// Population standard deviation of occupancy values within the last 1 hour.
+///
+/// Returns `0.0` if fewer than 2 data points are available in the window.
+pub(super) fn extract_volatility(recent_data: &VecDeque<(DateTime<Utc>, f64)>) -> f64 {
+    if recent_data.is_empty() {
+        return 0.0;
+    }
+
+    let now = recent_data.back().map_or_else(Utc::now, |(t, _)| *t);
+    let one_hour_ago = now - chrono::Duration::hours(1);
+
+    let recent_1h: Vec<f64> = recent_data
+        .iter()
+        .filter(|(t, _)| *t >= one_hour_ago)
+        .map(|(_, v)| *v)
+        .collect();
+
+    if recent_1h.len() < 2 {
+        return 0.0;
+    }
+
+    #[allow(clippy::cast_precision_loss)]
+    let n = recent_1h.len() as f64;
+    let mean = recent_1h.iter().sum::<f64>() / n;
+    let variance = recent_1h.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / n;
+
+    variance.sqrt()
+}
+
 /// Today's average-so-far and yesterday's average from recent observations.
 ///
 /// Returns `(day_avg_so_far, prev_day_avg)`. Defaults to `50.0` for each if
@@ -175,8 +231,132 @@ mod tests {
         assert_relative_eq!(trend, 0.0);
     }
 
+    // ── extract_avg_6h tests ────────────────────────────────────────
+
+    #[test]
+    fn test_extract_avg_6h_empty() {
+        let recent: VecDeque<(DateTime<Utc>, f64)> = VecDeque::new();
+        let avg = extract_avg_6h(&recent);
+        assert_relative_eq!(avg, 50.0);
+    }
+
+    #[test]
+    fn test_extract_avg_6h_with_data() {
+        let now = Utc::now();
+        // 4 values within the last 6 hours: 20, 40, 60, 80 → mean = 50
+        let recent: VecDeque<(DateTime<Utc>, f64)> = vec![
+            (now - chrono::Duration::hours(5), 20.0),
+            (now - chrono::Duration::hours(3), 40.0),
+            (now - chrono::Duration::hours(1), 60.0),
+            (now, 80.0),
+        ]
+        .into();
+
+        let avg = extract_avg_6h(&recent);
+        assert_relative_eq!(avg, 50.0, epsilon = 1e-10);
+    }
+
+    #[test]
+    fn test_extract_avg_6h_excludes_old_data() {
+        let now = Utc::now();
+        // One value outside 6h window (10h ago), two within (3h, 0h)
+        let recent: VecDeque<(DateTime<Utc>, f64)> = vec![
+            (now - chrono::Duration::hours(10), 0.0),
+            (now - chrono::Duration::hours(3), 60.0),
+            (now, 80.0),
+        ]
+        .into();
+
+        let avg = extract_avg_6h(&recent);
+        // Only 60 and 80 are within 6h → mean = 70
+        assert_relative_eq!(avg, 70.0, epsilon = 1e-10);
+    }
+
+    // ── extract_volatility tests ─────────────────────────────────────
+
+    #[test]
+    fn test_extract_volatility_empty() {
+        let recent: VecDeque<(DateTime<Utc>, f64)> = VecDeque::new();
+        let vol = extract_volatility(&recent);
+        assert_relative_eq!(vol, 0.0);
+    }
+
+    #[test]
+    fn test_extract_volatility_constant() {
+        let now = Utc::now();
+        let recent: VecDeque<(DateTime<Utc>, f64)> = (0..60)
+            .map(|i| (now - chrono::Duration::minutes(i), 42.0))
+            .collect();
+
+        let vol = extract_volatility(&recent);
+        assert_relative_eq!(vol, 0.0, epsilon = 1e-10);
+    }
+
+    #[test]
+    fn test_extract_volatility_varying() {
+        let now = Utc::now();
+        // Values: 10, 20, 30, 40, 50 — mean=30, pop variance=200, pop std=~14.14
+        let recent: VecDeque<(DateTime<Utc>, f64)> = vec![
+            (now - chrono::Duration::minutes(4), 10.0),
+            (now - chrono::Duration::minutes(3), 20.0),
+            (now - chrono::Duration::minutes(2), 30.0),
+            (now - chrono::Duration::minutes(1), 40.0),
+            (now, 50.0),
+        ]
+        .into();
+
+        let vol = extract_volatility(&recent);
+        assert!(vol > 0.0, "Volatility should be positive for varying data");
+        assert_relative_eq!(vol, 200.0_f64.sqrt(), epsilon = 1e-10);
+    }
+
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(1000))]
+
+        #[test]
+        fn prop_extract_avg_6h_finite(
+            values in proptest::collection::vec(0.0_f64..100.0, 0..120),
+        ) {
+            let now = Utc::now();
+            let recent: VecDeque<(DateTime<Utc>, f64)> = values
+                .iter()
+                .enumerate()
+                .map(|(i, &v)| (now - chrono::Duration::minutes(i64::try_from(i * 3).unwrap_or_default()), v))
+                .collect();
+
+            let avg = extract_avg_6h(&recent);
+            prop_assert!(avg.is_finite(), "6h average must be finite, got {avg}");
+        }
+
+        #[test]
+        fn prop_extract_volatility_non_negative(
+            values in proptest::collection::vec(0.0_f64..100.0, 0..60),
+        ) {
+            let now = Utc::now();
+            let recent: VecDeque<(DateTime<Utc>, f64)> = values
+                .iter()
+                .enumerate()
+                .map(|(i, &v)| (now - chrono::Duration::minutes(i64::try_from(i).unwrap_or_default()), v))
+                .collect();
+
+            let vol = extract_volatility(&recent);
+            prop_assert!(vol >= 0.0, "Volatility must be non-negative, got {vol}");
+        }
+
+        #[test]
+        fn prop_extract_volatility_finite(
+            values in proptest::collection::vec(0.0_f64..100.0, 0..60),
+        ) {
+            let now = Utc::now();
+            let recent: VecDeque<(DateTime<Utc>, f64)> = values
+                .iter()
+                .enumerate()
+                .map(|(i, &v)| (now - chrono::Duration::minutes(i64::try_from(i).unwrap_or_default()), v))
+                .collect();
+
+            let vol = extract_volatility(&recent);
+            prop_assert!(vol.is_finite(), "Volatility must be finite, got {vol}");
+        }
 
         #[test]
         fn prop_extract_momentum_defaults_on_empty(

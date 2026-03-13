@@ -33,10 +33,17 @@ pub struct PredictionFeatures {
     pub week_of_year_cos: f64,
 
     pub hours_ahead: f64,
+
+    pub raw_hour: f64,
+    pub raw_weekday: f64,
+    pub time_to_close: f64,
+    pub occupancy_volatility: f64,
+    pub recent_avg_6h: f64,
+    pub prev_week_same_slot: f64,
 }
 
 impl PredictionFeatures {
-    pub const NUM_FEATURES: usize = 16;
+    pub const NUM_FEATURES: usize = 22;
 
     pub fn to_vec(&self) -> Vec<f64> {
         vec![
@@ -56,6 +63,12 @@ impl PredictionFeatures {
             self.week_of_year_sin,
             self.week_of_year_cos,
             self.hours_ahead,
+            self.raw_hour,
+            self.raw_weekday,
+            self.time_to_close,
+            self.occupancy_volatility,
+            self.recent_avg_6h,
+            self.prev_week_same_slot,
         ]
     }
 
@@ -77,6 +90,12 @@ impl PredictionFeatures {
             "week_of_year_sin",
             "week_of_year_cos",
             "hours_ahead",
+            "raw_hour",
+            "raw_weekday",
+            "time_to_close",
+            "occupancy_volatility",
+            "recent_avg_6h",
+            "prev_week_same_slot",
         ]
     }
 }
@@ -151,7 +170,7 @@ impl FeatureExtractor {
         hours_ahead: i64,
         recent_data: &VecDeque<(DateTime<Utc>, f64)>,
         baseline: &[HourlyAverage],
-        _schedule: &GymSchedule,
+        schedule: &GymSchedule,
     ) -> PredictionFeatures {
         let local_time = target_time.with_timezone(&Local);
         let hour = local_time.hour().cast_signed();
@@ -190,6 +209,21 @@ impl FeatureExtractor {
         #[allow(clippy::cast_precision_loss)]
         let hours_ahead_f64 = hours_ahead as f64;
 
+        let raw_hour = f64::from(hour);
+        let raw_weekday = f64::from(weekday);
+
+        let close_hour = schedule.get_close_hour(local_time.date_naive());
+        let current_hour = local_time.hour();
+        let time_to_close = if current_hour >= close_hour {
+            0.0
+        } else {
+            f64::from(close_hour - current_hour)
+        };
+
+        let occupancy_volatility = momentum::extract_volatility(recent_data);
+        let recent_avg_6h = momentum::extract_avg_6h(recent_data);
+        let prev_week_same_slot = historical_avg;
+
         PredictionFeatures {
             hour_sin,
             hour_cos,
@@ -207,6 +241,12 @@ impl FeatureExtractor {
             week_of_year_sin,
             week_of_year_cos,
             hours_ahead: hours_ahead_f64,
+            raw_hour,
+            raw_weekday,
+            time_to_close,
+            occupancy_volatility,
+            recent_avg_6h,
+            prev_week_same_slot,
         }
     }
 }
@@ -286,6 +326,12 @@ mod tests {
             week_of_year_sin: 0.5,
             week_of_year_cos: 0.866,
             hours_ahead: 1.0,
+            raw_hour: 14.0,
+            raw_weekday: 2.0,
+            time_to_close: 9.0,
+            occupancy_volatility: 5.0,
+            recent_avg_6h: 47.0,
+            prev_week_same_slot: 43.0,
         };
 
         let vec = features.to_vec();
@@ -301,28 +347,36 @@ mod tests {
     // ── Property-based tests for PredictionFeatures (Step 7) ─────────
 
     fn arb_prediction_features() -> impl Strategy<Value = PredictionFeatures> {
-        // Split into two groups to stay within proptest's 12-element tuple limit.
-        let time_and_stats = (
-            -1.0_f64..=1.0,   // hour_sin
-            -1.0_f64..=1.0,   // hour_cos
-            -1.0_f64..=1.0,   // weekday_sin
-            -1.0_f64..=1.0,   // weekday_cos
-            0.0_f64..=100.0,  // historical_avg
-            0.0_f64..=50.0,   // historical_std
-            0.0_f64..=100.0,  // recent_avg_1h
-            0.0_f64..=100.0,  // recent_avg_3h
-            -50.0_f64..=50.0, // recent_trend
-            0.0_f64..=100.0,  // day_avg_so_far
-            0.0_f64..=100.0,  // prev_day_avg
+        // Split into three groups to stay within proptest's 12-element tuple limit.
+        let group1 = (
+            -1.0_f64..=1.0,  // hour_sin
+            -1.0_f64..=1.0,  // hour_cos
+            -1.0_f64..=1.0,  // weekday_sin
+            -1.0_f64..=1.0,  // weekday_cos
+            0.0_f64..=100.0, // historical_avg
+            0.0_f64..=50.0,  // historical_std
+            0.0_f64..=100.0, // recent_avg_1h
+            0.0_f64..=100.0, // recent_avg_3h
         );
-        let context = (
+        let group2 = (
+            -50.0_f64..=50.0,                                // recent_trend
+            0.0_f64..=100.0,                                 // day_avg_so_far
+            0.0_f64..=100.0,                                 // prev_day_avg
             proptest::prop_oneof![Just(0.0_f64), Just(1.0)], // is_weekend
             proptest::prop_oneof![Just(0.0_f64), Just(1.0)], // is_holiday
             -1.0_f64..=1.0,                                  // week_of_year_sin
             -1.0_f64..=1.0,                                  // week_of_year_cos
             0.0_f64..=24.0,                                  // hours_ahead
         );
-        (time_and_stats, context).prop_map(
+        let group3 = (
+            0.0_f64..=23.0,  // raw_hour
+            0.0_f64..=6.0,   // raw_weekday
+            0.0_f64..=17.0,  // time_to_close
+            0.0_f64..=50.0,  // occupancy_volatility
+            0.0_f64..=100.0, // recent_avg_6h
+            0.0_f64..=100.0, // prev_week_same_slot
+        );
+        (group1, group2, group3).prop_map(
             |(
                 (
                     hour_sin,
@@ -333,11 +387,25 @@ mod tests {
                     historical_std,
                     recent_avg_1h,
                     recent_avg_3h,
+                ),
+                (
                     recent_trend,
                     day_avg_so_far,
                     prev_day_avg,
+                    is_weekend,
+                    is_holiday,
+                    week_of_year_sin,
+                    week_of_year_cos,
+                    hours_ahead,
                 ),
-                (is_weekend, is_holiday, week_of_year_sin, week_of_year_cos, hours_ahead),
+                (
+                    raw_hour,
+                    raw_weekday,
+                    time_to_close,
+                    occupancy_volatility,
+                    recent_avg_6h,
+                    prev_week_same_slot,
+                ),
             )| {
                 PredictionFeatures {
                     hour_sin,
@@ -356,6 +424,12 @@ mod tests {
                     week_of_year_sin,
                     week_of_year_cos,
                     hours_ahead,
+                    raw_hour,
+                    raw_weekday,
+                    time_to_close,
+                    occupancy_volatility,
+                    recent_avg_6h,
+                    prev_week_same_slot,
                 }
             },
         )
@@ -396,6 +470,104 @@ mod tests {
         assert_eq!(
             PredictionFeatures::feature_names().len(),
             PredictionFeatures::NUM_FEATURES
+        );
+    }
+
+    // ── New feature extraction tests ──────────────────────────────────
+
+    #[test]
+    fn test_extract_raw_hour_and_weekday() {
+        let extractor = FeatureExtractor::new();
+        // Monday 2024-06-17 at 14:00 UTC
+        let timestamp = chrono::TimeZone::with_ymd_and_hms(&Utc, 2024, 6, 17, 14, 0, 0);
+        let ts = timestamp.unwrap();
+        let recent: VecDeque<(DateTime<Utc>, f64)> = VecDeque::new();
+        let schedule = GymSchedule::default();
+
+        let features = extractor.extract(ts, 0, &recent, &[], &schedule);
+
+        let local = ts.with_timezone(&Local);
+        let expected_hour = f64::from(local.hour().cast_signed());
+        let expected_weekday = f64::from(local.weekday().num_days_from_monday().cast_signed());
+
+        assert_relative_eq!(features.raw_hour, expected_hour, epsilon = 1e-10);
+        assert_relative_eq!(features.raw_weekday, expected_weekday, epsilon = 1e-10);
+    }
+
+    #[test]
+    fn test_extract_time_to_close_weekday() {
+        let extractor = FeatureExtractor::new();
+        // Monday 2024-06-17 at 14:00 local → close at 23 → 9 hours to close
+        // We need to pick a UTC time that maps to hour 14 local.
+        let local_14 = chrono::TimeZone::with_ymd_and_hms(&Local, 2024, 6, 17, 14, 0, 0);
+        let ts = local_14.unwrap().to_utc();
+        let recent: VecDeque<(DateTime<Utc>, f64)> = VecDeque::new();
+        let schedule = GymSchedule::default(); // weekday_close = 23
+
+        let features = extractor.extract(ts, 0, &recent, &[], &schedule);
+
+        assert_relative_eq!(features.time_to_close, 9.0, epsilon = 1e-10);
+    }
+
+    #[test]
+    fn test_extract_time_to_close_clamped() {
+        let extractor = FeatureExtractor::new();
+        // Monday at 23:00 local → close at 23 → clamped to 0.0
+        let local_23 = chrono::TimeZone::with_ymd_and_hms(&Local, 2024, 6, 17, 23, 0, 0);
+        let ts = local_23.unwrap().to_utc();
+        let recent: VecDeque<(DateTime<Utc>, f64)> = VecDeque::new();
+        let schedule = GymSchedule::default();
+
+        let features = extractor.extract(ts, 0, &recent, &[], &schedule);
+
+        assert_relative_eq!(features.time_to_close, 0.0, epsilon = 1e-10);
+    }
+
+    #[test]
+    fn test_extract_volatility_integrated() {
+        let extractor = FeatureExtractor::new();
+        let now = Utc::now();
+        let recent: VecDeque<(DateTime<Utc>, f64)> = (0..60)
+            .map(|i: i64| {
+                let remainder = i % 10;
+                (
+                    now - chrono::Duration::minutes(i),
+                    30.0 + f64::from(i32::try_from(remainder).unwrap_or_default()),
+                )
+            })
+            .collect();
+        let schedule = GymSchedule::default();
+
+        let features = extractor.extract(now, 0, &recent, &[], &schedule);
+
+        assert!(features.occupancy_volatility.is_finite());
+        assert!(features.occupancy_volatility >= 0.0);
+    }
+
+    #[test]
+    fn test_extract_prev_week_defaults_to_historical() {
+        let mut extractor = FeatureExtractor::new();
+        let baseline = vec![HourlyAverage {
+            weekday: 0, // Monday
+            hour: 14,
+            avg_percentage: 42.0,
+            sample_count: 10,
+        }];
+        extractor.update_historical_stats(&baseline);
+
+        // Monday at hour 14 local
+        let local_14 = chrono::TimeZone::with_ymd_and_hms(&Local, 2024, 6, 17, 14, 0, 0);
+        let ts = local_14.unwrap().to_utc();
+        let recent: VecDeque<(DateTime<Utc>, f64)> = VecDeque::new();
+        let schedule = GymSchedule::default();
+
+        let features = extractor.extract(ts, 0, &recent, &baseline, &schedule);
+
+        // prev_week_same_slot should default to historical_avg
+        assert_relative_eq!(
+            features.prev_week_same_slot,
+            features.historical_avg,
+            epsilon = 1e-10
         );
     }
 }

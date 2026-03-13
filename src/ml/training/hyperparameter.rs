@@ -32,7 +32,7 @@ impl HyperparameterSet {
         let n_trees_values = [100, 200, 300, 500];
         let max_depth_values = [8, 12, 16, 0]; // 0 = unlimited
         let min_samples_leaf_values = [2, 5, 10];
-        let max_features_values: [Option<usize>; 3] = [Some(4), Some(8), None];
+        let max_features_values: [Option<usize>; 3] = [Some(5), Some(11), None];
 
         let mut grid = Vec::with_capacity(144);
         for &n_trees in &n_trees_values {
@@ -59,7 +59,7 @@ impl HyperparameterSet {
         let n_trees_values = [50, 100];
         let max_depth_values = [5, 10];
         let min_samples_leaf_values = [2, 5];
-        let max_features_values: [Option<usize>; 2] = [Some(4), None];
+        let max_features_values: [Option<usize>; 2] = [Some(5), None];
 
         let mut grid = Vec::with_capacity(16);
         for &n_trees in &n_trees_values {
@@ -207,6 +207,12 @@ mod tests {
                     week_of_year_sin: (t * 0.02).sin() + noise1,
                     week_of_year_cos: (t * 0.021).cos() + noise2,
                     hours_ahead: 1.0 + (t % 6.0),
+                    raw_hour: t % 24.0,
+                    raw_weekday: t % 7.0,
+                    time_to_close: 5.0 + (t % 12.0),
+                    occupancy_volatility: 2.0 + (t % 10.0),
+                    recent_avg_6h: 42.0 + ((t * 0.9) % 28.0),
+                    prev_week_same_slot: 38.0 + (t % 35.0),
                 }
             })
             .collect()
@@ -232,7 +238,7 @@ mod tests {
         assert_eq!(grid[0].n_trees, 100);
         assert_eq!(grid[0].max_depth, 8);
         assert_eq!(grid[0].min_samples_leaf, 2);
-        assert_eq!(grid[0].max_features, Some(4));
+        assert_eq!(grid[0].max_features, Some(5));
 
         // Last config: largest values
         let last = &grid[143];
@@ -332,7 +338,7 @@ mod tests {
                     n_trees: 10,
                     max_depth: 5,
                     min_samples_leaf: 2,
-                    max_features: Some(4),
+                    max_features: Some(5),
                 },
                 HyperparameterSet {
                     n_trees: 10,
