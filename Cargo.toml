@@ -23,45 +23,45 @@ missing_panics_doc = "allow"
 [workspace.dependencies]
 # --- Shared across multiple crates ---
 anyhow = { version = "1.0.102", default-features = false, features = ["std"] }
-chrono = { version = "0.4.44", default-features = false, features = ["clock", "serde"] }
-dirs = { version = "6.0.0", default-features = false }
-futures = { version = "0.3.32", default-features = false }
-mimalloc = { version = "0.1.48", default-features = false }
-reqwest = { version = "0.13.2", default-features = false, features = ["json", "native-tls"] }
-serde = { version = "1.0.228", default-features = false, features = ["derive"] }
-sqlx = { version = "0.9.0-alpha.1", default-features = false, features = ["chrono", "macros", "migrate", "postgres", "runtime-tokio", "tls-rustls"] }
-thiserror = { version = "2.0.18", default-features = false }
-tokio = { version = "1.50.0", default-features = false, features = ["macros", "rt-multi-thread"] }
-tracing = { version = "0.1.44", default-features = false, features = ["attributes", "std"] }
-tracing-appender = { version = "0.2.4", default-features = false }
-tracing-subscriber = { version = "0.3.23", default-features = false, features = ["env-filter", "fmt", "std"] }
-
-# --- Core-only ---
-config = { version = "0.15.21", default-features = false, features = ["toml"] }
-csv = { version = "1.4.0", default-features = false }
-dotenvy = { version = "0.15.7", default-features = false }
 
 # --- GUI-only ---
 approx = { version = "0.6.0-rc2", default-features = false }
 bincode = { version = "2.0.1", default-features = false, features = ["std", "serde"] }
+chrono = { version = "0.4.44", default-features = false, features = ["clock", "serde"] }
+
+# --- Core-only ---
+config = { version = "0.15.21", default-features = false, features = ["toml"] }
+csv = { version = "1.4.0", default-features = false }
+dirs = { version = "6.0.0", default-features = false }
+dotenvy = { version = "0.15.7", default-features = false }
+futures = { version = "0.3.32", default-features = false }
 iced = { version = "0.14.0", default-features = false, features = ["advanced", "canvas", "crisp", "tokio", "wgpu"] }
 image = { version = "0.25.10", default-features = false, features = ["jpeg", "png"] }
 linfa = { version = "0.8.1", default-features = false }
 linfa-linear = { version = "0.8.1", default-features = false }
+mimalloc = { version = "0.1.48", default-features = false }
 muda = { version = "0.17.1", default-features = false }
 ndarray = { version = "0.16.1", default-features = false }
 notify-rust = { version = "4.12.0", default-features = false }
-rayon = { version = "1.11.0", default-features = false }
-smartcore = { version = "0.4.9", default-features = false }
-tray-icon = { version = "0.21.3", default-features = false }
-zstd = { version = "0.13.3", default-features = false }
 
 # --- Dev dependencies ---
 proptest = { version = "1.10.0" }
+rayon = { version = "1.11.0", default-features = false }
+reqwest = { version = "0.13.2", default-features = false, features = ["json", "native-tls"] }
+serde = { version = "1.0.228", default-features = false, features = ["derive"] }
+smartcore = { version = "0.4.9", default-features = false }
+sqlx = { version = "0.9.0-alpha.1", default-features = false, features = ["chrono", "macros", "migrate", "postgres", "runtime-tokio", "tls-rustls"] }
 temp-env = { version = "0.3.6" }
 tempfile = { version = "3.27.0" }
+thiserror = { version = "2.0.18", default-features = false }
+tokio = { version = "1.50.0", default-features = false, features = ["macros", "rt-multi-thread"] }
 toml = { version = "1.0.6", default-features = false, features = ["parse"] }
+tracing = { version = "0.1.44", default-features = false, features = ["attributes", "std"] }
+tracing-appender = { version = "0.2.4", default-features = false }
+tracing-subscriber = { version = "0.3.23", default-features = false, features = ["env-filter", "fmt", "std"] }
+tray-icon = { version = "0.21.3", default-features = false }
 wiremock = { version = "0.6.5" }
+zstd = { version = "0.13.3", default-features = false }
 
 [profile.release]
 codegen-units = 1
