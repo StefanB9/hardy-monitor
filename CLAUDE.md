@@ -4,40 +4,49 @@ Gym occupancy monitoring application built in Rust. Fetches real-time occupancy 
 
 ## Project Structure
 
-Single crate with feature-gated modules:
+Cargo workspace with 3 members:
 
 ```
-hardy-monitor (binary + library)
-├── Features:
-│   default = ["gui"]
-│   gui     = iced UI, ML predictions, system notifications, tray icon
+hardy-monitor/                         (workspace root)
+├── Cargo.toml                         [workspace] manifest — all dependency versions here
+├── migrations/                        sqlx migrations (single table: occupancy_logs)
+├── .sqlx/                             sqlx offline query cache
 │
-├── Core Modules (always compiled):
-│   api.rs          GymApiClient (reqwest HTTP). Fetches occupancy from gym API.
-│   config.rs       AppConfig (config crate + dotenvy). TOML + env var loading.
-│   db.rs           Database (sqlx PgPool). OccupancyLog, HourlyAverage, migrations.
-│   error.rs        AppError, NetworkErrorKind, DatabaseError (thiserror).
-│   schedule.rs     GymSchedule, Bavarian holiday detection.
-│   traits.rs       Clock, Notifier abstractions. SystemClock, MockClock, MockNotifier.
-│   repair.rs       DataRepairer. Gap filling, outlier removal, smoothing.
-│   analytics.rs    OccupancyStats, insights, trend analysis, predictions.
-│
-├── GUI Modules (feature = "gui"):
-│   ml/             OccupancyPredictor, linfa linear regression, feature extraction.
-│   style.rs        Iced theme customization.
-│   widgets/        Custom widgets (gauge, heatmap, charts).
-│   views/          Dashboard, weekly patterns, insights, ML predictions, data repair.
-│
-├── tests/          Integration tests.
-│   api.rs          wiremock-based API client tests.
-│   database.rs     PostgreSQL integration tests (TestDatabase isolation).
-│   app_logic.rs    MockClock/MockNotifier behavior tests.
-│   common/mod.rs   TestDatabase helper (creates isolated DB per test).
-│
-└── migrations/     sqlx migrations (single table: occupancy_logs).
+├── crates/
+│   ├── hardy-core/                    (library — shared by daemon and GUI)
+│   │   ├── src/
+│   │   │   ├── lib.rs                 Module declarations + re-exports
+│   │   │   ├── analytics.rs           OccupancyStats, insights, trend analysis, predictions
+│   │   │   ├── api.rs                 GymApiClient (reqwest HTTP)
+│   │   │   ├── config.rs              AppConfig, MlConfig, MlAlgorithm (TOML + env var)
+│   │   │   ├── db.rs                  Database (sqlx PgPool). OccupancyLog, HourlyAverage
+│   │   │   ├── error.rs               AppError, NetworkErrorKind, DatabaseError (thiserror)
+│   │   │   ├── repair.rs              DataRepairer. Gap filling, outlier removal, smoothing
+│   │   │   ├── schedule.rs            GymSchedule, Bavarian holiday detection
+│   │   │   └── traits.rs              Clock, Notifier, SystemClock, MockClock, MockNotifier
+│   │   └── tests/                     Integration tests
+│   │       ├── api.rs                 wiremock-based API client tests
+│   │       ├── database.rs            PostgreSQL tests (TestDatabase isolation)
+│   │       ├── app_logic.rs           MockClock/MockNotifier behavior tests
+│   │       └── common/mod.rs          TestDatabase helper
+│   │
+│   ├── hardy-daemon/                  (binary — headless fetch loop)
+│   │   └── src/main.rs               Daemon loop, logging, fetch_and_store
+│   │
+│   └── hardy-gui/                     (binary + library — iced desktop GUI)
+│       ├── assets/icon.png
+│       └── src/
+│           ├── main.rs                Entry point, tray icon, iced runner
+│           ├── lib.rs                 Module declarations
+│           ├── app.rs                 HardyMonitorApp, Message, update/view/subscription
+│           ├── style.rs               Iced theme customization
+│           ├── notifier.rs            SystemNotifier, CombinedNotifier
+│           ├── ml/                    OccupancyPredictor, linfa, feature extraction
+│           ├── widgets/               Custom widgets (gauge, heatmap, charts)
+│           └── views/                 Dashboard, weekly, insights, ML predictions, repair
 ```
 
-**Feature boundary:** Core modules have zero GUI dependencies. GUI modules depend on core. Never reverse.
+**Dependency boundary:** Core has zero GUI dependencies. Both binaries depend on core. GUI depends on core + GUI-specific crates. Never reverse.
 
 ## Planning Process
 
@@ -53,11 +62,13 @@ Do not silently make architectural decisions. If the implementation plan documen
 ## Quick Reference
 
 ```bash
-cargo nextest run                             # All tests (use nextest, not cargo test)
-cargo nextest run --no-default-features       # Core-only tests (no GUI deps)
-cargo clippy --all-targets                    # Zero warnings required (includes tests)
-cargo check --all-targets                     # Type-check everything including tests
+cargo nextest run --workspace                 # All workspace tests (use nextest, not cargo test)
+cargo nextest run -p hardy-core               # Core-only tests
+cargo clippy --workspace --all-targets        # Zero warnings required (includes tests)
+cargo check --workspace --all-targets         # Type-check everything including tests
 cargo fmt --all -- --check                    # Format check
+cargo build -p hardy-daemon                   # Build daemon only
+cargo build -p hardy-gui                      # Build GUI only
 ```
 
 **Always use `cargo nextest run` instead of `cargo test`.** Nextest is the project's test runner.
@@ -86,12 +97,12 @@ cargo fmt --all -- --check                    # Format check
 ### Test Conventions
 
 - **Naming:** `test_<unit>_<scenario>` (e.g., `test_database_rejects_duplicate_timestamp`)
-- **Location:** `#[cfg(test)] mod tests` inline in the source file. Integration tests in `tests/`.
+- **Location:** `#[cfg(test)] mod tests` inline in the source file. Integration tests in `crates/hardy-core/tests/`.
 - **Assertions:** `assert_eq!`, `assert!`, `prop_assert!`, `assert_relative_eq!` (approx)
 - **Errors:** Tests return `anyhow::Result<()>` with `.context()` for diagnostics.
 - **Quality:** Test code follows the same lint rules as production code. No `.unwrap()`, `.expect()`, or `panic!()` in tests — use `?` with `anyhow::Result` or `anyhow::bail!`.
 - **Proptest config:** `#![proptest_config(ProptestConfig::with_cases(1000))]`
-- **Database tests:** Use `TestDatabase` from `tests/common/mod.rs` for isolated per-test databases.
+- **Database tests:** Use `TestDatabase` from `crates/hardy-core/tests/common/mod.rs` for isolated per-test databases.
 - **Time mocking:** Use `MockClock` with `set_time()` / `advance()` instead of real time.
 - **Notification mocking:** Use `MockNotifier` with `notification_count()`.
 
@@ -167,7 +178,7 @@ Minimum necessary. `pub(super)` or `pub(crate)` for internal types. Private fiel
 - One responsibility per file.
 - Split at ~300 lines. Convert to directory module (`mod.rs` + submodules) at ~500 lines.
 - Directory modules: `mod.rs` is the coordinator (struct, trait impl, re-exports). Submodules own specific concerns.
-- Feature-gated modules use `#[cfg(feature = "gui")]` at the declaration site in `lib.rs`.
+- GUI-specific modules live in `hardy-gui`, core modules in `hardy-core`. No feature gates needed.
 
 ### Comments
 
@@ -186,7 +197,7 @@ Minimum necessary. `pub(super)` or `pub(crate)` for internal types. Private fiel
 
 **Rule 2: Minimum Features Enabled.** Strictly limit feature opt-ins to the absolute bare minimum required for the code to compile and run. Never use blanket features like `features = ["full"]`. This keeps compile times fast, binary sizes small, and the attack surface minimal.
 
-**Rule 3: GUI deps are optional.** Any dependency only needed for GUI/ML/notifications must be gated behind the `gui` feature with `optional = true`.
+**Rule 3: GUI deps stay in hardy-gui.** Any dependency only needed for GUI/ML/notifications belongs in `hardy-gui/Cargo.toml`, not `hardy-core`. All versions are defined in the workspace root `[workspace.dependencies]`.
 
 **General:**
 - New dependencies require justification: what problem, why this crate, what alternatives were considered.
@@ -195,8 +206,8 @@ Minimum necessary. `pub(super)` or `pub(crate)` for internal types. Private fiel
 ## Database & sqlx
 
 - **Migrations:** Use `cargo sqlx migrate add -r <name>` to create reversible migration files. Run from the project root.
-- **Running migrations:** Migrations run automatically via `sqlx::migrate!("./migrations")` in `Database::new()`. `DATABASE_URL` is read from `.env`.
-- **Offline cache:** After adding or changing queries, regenerate with `cargo sqlx prepare` from the project root. Commit the `.sqlx/` directory.
+- **Running migrations:** Migrations run automatically via `sqlx::migrate!("../../migrations")` in `Database::new()` (relative to `hardy-core`'s `CARGO_MANIFEST_DIR`). `DATABASE_URL` is read from `.env`.
+- **Offline cache:** After adding or changing queries, regenerate with `cargo sqlx prepare --workspace` from the project root. Commit the `.sqlx/` directory.
 - **Compile-time checked queries:** Use `sqlx::query!` and `sqlx::query_as!` — never raw string queries without compile-time verification.
 - **Never hand-create migration files.** Always use the `cargo sqlx migrate add` command so timestamps are generated correctly.
 - **Test isolation:** Integration tests use `TestDatabase` (creates a unique `hardy_test_*` database per test, dropped on cleanup).
@@ -206,7 +217,7 @@ Minimum necessary. `pub(super)` or `pub(crate)` for internal types. Private fiel
 - **`#[instrument]`** on all public `async fn`. Use `skip(self)` or `skip_all` with explicit `fields(...)`.
 - **Field syntax:** `%value` for Display, `?value` for Debug, bare primitives for Copy types.
 - **Levels:** `error!` = failures requiring attention. `warn!` = degraded states. `info!` = lifecycle events. `debug!` = protocol detail.
-- **Default filter:** `hardy_monitor=DEBUG` (debug), `hardy_monitor=INFO` (release). Noisy crates (fontdb, wgpu, naga, iced) filtered out.
+- **Default filter:** `hardy_core=DEBUG,hardy_daemon=DEBUG` / `hardy_gui=DEBUG` (debug), `INFO` (release). Noisy crates (fontdb, wgpu, naga, iced) filtered out in GUI.
 - **Override:** `RUST_LOG` env var via `EnvFilter::try_from_default_env()`.
 - **Release logging:** Writes to `logs/hardy-monitor.log` with daily rotation via `tracing-appender`.
 
@@ -245,8 +256,8 @@ main          Stable release branch. Always clean: compiles, all tests pass, zer
 4. **Verify** locally before merging (no CI — you must run these):
    ```bash
    cargo fmt --all -- --check
-   cargo clippy --all-targets
-   cargo nextest run
+   cargo clippy --workspace --all-targets
+   cargo nextest run --workspace
    ```
 
 5. **Merge** the PR into `dev` via merge commit (no squash — preserve commit history).
@@ -305,9 +316,9 @@ Title: <type>: <short description> (under 72 chars)
 Run locally before every merge — there is no CI to catch failures:
 
 - [ ] `cargo fmt --all -- --check`
-- [ ] `cargo clippy --all-targets` — zero warnings
-- [ ] `cargo nextest run` — all tests pass
-- [ ] `cargo check --all-targets` — all targets type-check
+- [ ] `cargo clippy --workspace --all-targets` — zero warnings
+- [ ] `cargo nextest run --workspace` — all tests pass
+- [ ] `cargo check --workspace --all-targets` — all targets type-check
 - [ ] Tests written first (TDD evidence in commit history)
 - [ ] No `.unwrap()`, `.expect()`, `panic!()`, `todo!()`
 - [ ] Error paths have `.context()`
