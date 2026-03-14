@@ -110,6 +110,7 @@ struct UiState {
     history_end_date: String,
     history_days_preset: Option<i64>,
     show_ml_prediction: bool,
+    show_model_details: bool,
     is_window_visible: bool,
 }
 
@@ -185,6 +186,7 @@ pub enum Message {
     MlTrainingCompleted(Result<Box<TrainingResult>, String>),
     ModelPersisted,
     PredictionModeToggled(bool),
+    ModelDetailsToggled(bool),
 }
 
 impl HardyMonitorApp {
@@ -278,6 +280,7 @@ impl HardyMonitorApp {
                 history_end_date: tomorrow_str.clone(),
                 history_days_preset: Some(1),
                 show_ml_prediction: false,
+                show_model_details: false,
                 is_window_visible: true,
             },
             notifications: NotificationState {
@@ -386,6 +389,7 @@ impl HardyMonitorApp {
                 if let Ok(logs) = result {
                     self.data.history = logs;
                     self.ui.chart_cache.clear();
+                    self.ui.ml_predictions_chart_cache.clear();
                     self.data.predictions =
                         analytics::calculate_predictions(&self.data.prediction_baseline);
                 } else if let Err(e) = result {
@@ -628,6 +632,10 @@ impl HardyMonitorApp {
                 self.ui.show_ml_prediction = checked;
                 Task::none()
             }
+            Message::ModelDetailsToggled(expanded) => {
+                self.ui.show_model_details = expanded;
+                Task::none()
+            }
             Message::MlTrainingCompleted(result) => {
                 self.data.ml_training_in_progress = false;
                 match result {
@@ -741,6 +749,8 @@ impl HardyMonitorApp {
                 chart_cache: &self.ui.ml_predictions_chart_cache,
                 now: self.clock.now_utc(),
                 training_info: self.data.predictor.training_info(),
+                history: &self.data.history,
+                show_model_details: self.ui.show_model_details,
             }),
             ViewMode::DataRepair => views::data_repair::view(DataRepairProps {
                 start_date: &self.repair.start_date,
