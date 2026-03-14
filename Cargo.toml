@@ -7,7 +7,7 @@ edition = "2024"
 
 [features]
 default = ["gui"]
-gui = ["dep:approx", "dep:bincode", "dep:iced", "dep:image", "dep:linfa", "dep:linfa-linear", "dep:muda", "dep:ndarray", "dep:notify-rust", "dep:smartcore", "dep:tray-icon", "dep:zstd"]
+gui = ["dep:approx", "dep:bincode", "dep:iced", "dep:image", "dep:linfa", "dep:linfa-linear", "dep:muda", "dep:ndarray", "dep:notify-rust", "dep:rayon", "dep:smartcore", "dep:tray-icon", "dep:zstd"]
 
 [dependencies]
 anyhow = { version = "1.0.102", default-features = false, features = ["std"] }
@@ -24,9 +24,11 @@ iced = { version = "0.14.0", default-features = false, features = ["advanced", "
 image = { version = "0.25.10", default-features = false, features = ["jpeg", "png"], optional = true }
 linfa = { version = "0.8.1", default-features = false, optional = true }
 linfa-linear = { version = "0.8.1", default-features = false, optional = true }
+mimalloc = { version = "0.1.48", default-features = false }
 muda = { version = "0.17.1", default-features = false, optional = true }
 ndarray = { version = "0.16.1", default-features = false, optional = true }
 notify-rust = { version = "4.12.0", default-features = false, optional = true }
+rayon = { version = "1.11.0", default-features = false, optional = true }
 reqwest = { version = "0.13.2", default-features = false, features = ["json", "native-tls"] }
 serde = { version = "1.0.228", default-features = false, features = ["derive"] }
 smartcore = { version = "0.4.9", default-features = false, optional = true }

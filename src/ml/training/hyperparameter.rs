@@ -1,3 +1,5 @@
+use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
+
 use super::cross_validation::{CrossValidationScores, Fold, FoldScores};
 use crate::ml::{
     evaluation,
@@ -193,29 +195,28 @@ pub fn grid_search_with_grid(
     folds: &[Fold],
     grid: &[HyperparameterSet],
 ) -> Result<GridSearchResult, TrainingError> {
-    let mut best_params: Option<HyperparameterSet> = None;
-    let mut best_scores: Option<CrossValidationScores> = None;
-    let mut best_mse = f64::MAX;
-    let mut configs_evaluated = 0_usize;
+    let valid_results: Vec<_> = grid
+        .par_iter()
+        .filter_map(|config| {
+            evaluate_config(config, features, targets, folds)
+                .ok()
+                .map(|scores| (config.clone(), scores))
+        })
+        .collect();
 
-    for config in grid {
-        if let Ok(scores) = evaluate_config(config, features, targets, folds) {
-            configs_evaluated += 1;
-            if scores.mse.mean < best_mse {
-                best_mse = scores.mse.mean;
-                best_params = Some(config.clone());
-                best_scores = Some(scores);
-            }
-        }
-    }
+    let configs_evaluated = valid_results.len();
 
-    match (best_params, best_scores) {
-        (Some(params), Some(scores)) => Ok(GridSearchResult {
-            best_params: params,
-            best_cv_scores: scores,
+    let best_result = valid_results
+        .into_iter()
+        .min_by(|(_, scores_a), (_, scores_b)| scores_a.mse.mean.total_cmp(&scores_b.mse.mean));
+
+    match best_result {
+        Some((best_params, best_cv_scores)) => Ok(GridSearchResult {
+            best_params,
+            best_cv_scores,
             configs_evaluated,
         }),
-        _ => Err(TrainingError::FitError(
+        None => Err(TrainingError::FitError(
             "Grid search: no configuration trained successfully".to_string(),
         )),
     }
