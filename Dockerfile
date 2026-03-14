@@ -19,23 +19,32 @@ WORKDIR /app
 COPY Cargo.toml Cargo.lock ./
 COPY .cargo ./.cargo
 
+# Copy workspace member manifests for dependency caching
+COPY crates/hardy-core/Cargo.toml crates/hardy-core/Cargo.toml
+COPY crates/hardy-daemon/Cargo.toml crates/hardy-daemon/Cargo.toml
+COPY crates/hardy-gui/Cargo.toml crates/hardy-gui/Cargo.toml
+
 # Create dummy source files to build dependencies
-RUN mkdir -p src/bin && \
-    echo "fn main() {}" > src/main.rs && \
-    echo "" > src/lib.rs
+RUN mkdir -p crates/hardy-core/src && \
+    echo "pub fn _dummy() {}" > crates/hardy-core/src/lib.rs && \
+    mkdir -p crates/hardy-daemon/src && \
+    echo "fn main() {}" > crates/hardy-daemon/src/main.rs && \
+    mkdir -p crates/hardy-gui/src && \
+    echo "fn main() {}" > crates/hardy-gui/src/main.rs && \
+    echo "" > crates/hardy-gui/src/lib.rs
 
 # Copy actual source code
-COPY src ./src
+COPY crates ./crates
 COPY migrations ./migrations
 
 # Copy sqlx offline query metadata
 COPY .sqlx ./.sqlx
 
-# Touch main.rs to ensure rebuild, then build the actual application
+# Build the daemon binary
 # SQLX_OFFLINE=true enables offline compilation without database connection
 ENV SQLX_OFFLINE=true
-RUN touch src/main.rs && \
-    cargo build --release --no-default-features
+RUN touch crates/hardy-daemon/src/main.rs && \
+    cargo build --release -p hardy-daemon
 
 # ============================================
 # Stage 2: Runtime
@@ -51,7 +60,7 @@ RUN apt-get update && apt-get install -y \
 WORKDIR /app
 
 # Copy binary from builder
-COPY --from=builder /app/target/release/hardy-monitor /app/hardy-monitor
+COPY --from=builder /app/target/release/hardy-daemon /app/hardy-daemon
 
 # Copy migrations (needed at runtime for sqlx::migrate!)
 COPY --from=builder /app/migrations /app/migrations
@@ -60,7 +69,7 @@ COPY --from=builder /app/migrations /app/migrations
 COPY config.toml /app/config.toml
 
 # Set environment variables
-ENV RUST_LOG=info,hardy_monitor=debug
+ENV RUST_LOG=info,hardy_core=debug,hardy_daemon=debug
 
-# Run in daemon mode
-CMD ["./hardy-monitor", "--daemon"]
+# Run daemon
+CMD ["./hardy-daemon"]

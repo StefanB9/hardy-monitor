@@ -1,0 +1,38 @@
+[package]
+name = "hardy-gui"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = { workspace = true }
+approx = { workspace = true }
+bincode = { workspace = true }
+chrono = { workspace = true }
+dirs = { workspace = true }
+futures = { workspace = true }
+hardy-core = { version = "0.1.0", path = "../hardy-core" }
+iced = { workspace = true }
+image = { workspace = true }
+linfa = { workspace = true }
+linfa-linear = { workspace = true }
+mimalloc = { workspace = true }
+muda = { workspace = true }
+ndarray = { workspace = true }
+notify-rust = { workspace = true }
+rayon = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+smartcore = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-appender = { workspace = true }
+tracing-subscriber = { workspace = true }
+tray-icon = { workspace = true }
+zstd = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
+tempfile = { workspace = true }
+
+[lints]
+workspace = true
