@@ -148,6 +148,7 @@ pub fn view(props: MLPredictionsProps<'_>) -> Element<'_, Message> {
             };
             let (method_label, method_color) = match p.method {
                 PredictionMethod::MachineLearning { .. } => ("ML", style::ACCENT_CYAN),
+                PredictionMethod::RandomForest { .. } => ("RF", style::ACCENT_CYAN),
                 PredictionMethod::HistoricalAverage => ("Historical", style::TEXT_MUTED),
             };
             let data_row = row![

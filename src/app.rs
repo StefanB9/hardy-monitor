@@ -603,6 +603,9 @@ impl HardyMonitorApp {
                         self.data.predictor.set_model(training.model, trained_at);
                         self.data
                             .predictor
+                            .set_residual_quantiles(training.residual_quantiles);
+                        self.data
+                            .predictor
                             .update_baseline(&self.data.prediction_baseline);
                         self.data.ml_predictions = self.data.predictor.predict(
                             &self.data.prediction_baseline,

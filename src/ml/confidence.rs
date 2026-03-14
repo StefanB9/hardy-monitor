@@ -3,17 +3,22 @@ use chrono::{DateTime, Utc};
 #[derive(Debug, Clone, PartialEq)]
 pub enum PredictionMethod {
     MachineLearning { confidence: f64 },
+    RandomForest { confidence: f64, n_trees: usize },
     HistoricalAverage,
 }
 
 impl PredictionMethod {
     pub fn is_ml(&self) -> bool {
-        matches!(self, PredictionMethod::MachineLearning { .. })
+        matches!(
+            self,
+            PredictionMethod::MachineLearning { .. } | PredictionMethod::RandomForest { .. }
+        )
     }
 
     pub fn confidence(&self) -> f64 {
         match self {
-            PredictionMethod::MachineLearning { confidence } => *confidence,
+            PredictionMethod::MachineLearning { confidence }
+            | PredictionMethod::RandomForest { confidence, .. } => *confidence,
             PredictionMethod::HistoricalAverage => 0.5,
         }
     }
@@ -38,11 +43,18 @@ impl PredictionWithConfidence {
         confidence_score: f64,
         method: PredictionMethod,
     ) -> Self {
+        let clamped_low = confidence_low.clamp(0.0, 100.0);
+        let clamped_high = confidence_high.clamp(0.0, 100.0);
+        let (final_low, final_high) = if clamped_low <= clamped_high {
+            (clamped_low, clamped_high)
+        } else {
+            (clamped_high, clamped_low)
+        };
         Self {
             timestamp,
             predicted_value: predicted_value.clamp(0.0, 100.0),
-            confidence_low: confidence_low.clamp(0.0, 100.0),
-            confidence_high: confidence_high.clamp(0.0, 100.0),
+            confidence_low: final_low,
+            confidence_high: final_high,
             confidence_score: confidence_score.clamp(0.0, 1.0),
             method,
         }
@@ -185,6 +197,83 @@ mod tests {
         assert!(!invalid.is_valid());
     }
 
+    #[test]
+    fn test_new_swaps_inverted_interval() {
+        let ts = Utc.with_ymd_and_hms(2024, 6, 17, 10, 0, 0).unwrap();
+        let pred = PredictionWithConfidence::new(
+            ts,
+            50.0,
+            80.0,
+            20.0,
+            0.8,
+            PredictionMethod::HistoricalAverage,
+        );
+        assert!(
+            pred.confidence_low <= pred.confidence_high,
+            "Expected low ({}) <= high ({})",
+            pred.confidence_low,
+            pred.confidence_high
+        );
+        assert_relative_eq!(pred.confidence_low, 20.0);
+        assert_relative_eq!(pred.confidence_high, 80.0);
+    }
+
+    #[test]
+    fn test_interval_width_always_non_negative() {
+        let ts = Utc.with_ymd_and_hms(2024, 6, 17, 10, 0, 0).unwrap();
+
+        // Case: both in range but inverted
+        let pred = PredictionWithConfidence::new(
+            ts,
+            50.0,
+            70.0,
+            30.0,
+            0.5,
+            PredictionMethod::HistoricalAverage,
+        );
+        assert!(pred.interval_width() >= 0.0);
+
+        // Case: clamping causes inversion (low clamps to 0, high clamps to 0)
+        let pred2 = PredictionWithConfidence::new(
+            ts,
+            50.0,
+            -20.0,
+            -10.0,
+            0.5,
+            PredictionMethod::HistoricalAverage,
+        );
+        assert!(pred2.interval_width() >= 0.0);
+
+        // Case: both clamp to 100
+        let pred3 = PredictionWithConfidence::new(
+            ts,
+            50.0,
+            110.0,
+            120.0,
+            0.5,
+            PredictionMethod::HistoricalAverage,
+        );
+        assert!(pred3.interval_width() >= 0.0);
+    }
+
+    #[test]
+    fn test_prediction_method_random_forest_is_ml() {
+        let rf = PredictionMethod::RandomForest {
+            confidence: 0.85,
+            n_trees: 100,
+        };
+        assert!(rf.is_ml());
+    }
+
+    #[test]
+    fn test_prediction_method_random_forest_confidence() {
+        let rf = PredictionMethod::RandomForest {
+            confidence: 0.85,
+            n_trees: 100,
+        };
+        assert_relative_eq!(rf.confidence(), 0.85);
+    }
+
     // ── Property-based tests ─────────────────────────────────────────
 
     proptest! {
@@ -245,35 +334,38 @@ mod tests {
 
         #[test]
         fn prop_interval_width_non_negative(
-            low in 0.0_f64..=100.0,
-            high in 0.0_f64..=100.0,
+            low in -50.0_f64..=200.0,
+            high in -50.0_f64..=200.0,
         ) {
             let ts = Utc.with_ymd_and_hms(2024, 6, 17, 10, 0, 0).unwrap();
             let pred = PredictionWithConfidence::new(
                 ts, 50.0, low, high, 0.8,
                 PredictionMethod::HistoricalAverage,
             );
-            // After clamping, both are in [0, 100], so width = high - low
-            // may be negative if raw low > raw high, but both get clamped independently.
-            // interval_width() = confidence_high - confidence_low, which can be negative
-            // when the clamped high < clamped low. This is a known limitation documented
-            // in the Phase 1 plan — Phase 5 will address the confidence overhaul.
             let width = pred.interval_width();
             prop_assert!(
-                width.is_finite(),
-                "interval_width should be finite, got {width}"
+                width >= 0.0,
+                "interval_width should be >= 0, got {width}"
             );
         }
 
         #[test]
         fn prop_method_confidence_range(
             confidence in 0.0_f64..=1.0,
+            n_trees in 1_usize..500,
         ) {
             let ml = PredictionMethod::MachineLearning { confidence };
             let result = ml.confidence();
             prop_assert!(
                 (0.0..=1.0).contains(&result),
                 "ML confidence out of range: {result}"
+            );
+
+            let rf = PredictionMethod::RandomForest { confidence, n_trees };
+            let result = rf.confidence();
+            prop_assert!(
+                (0.0..=1.0).contains(&result),
+                "RF confidence out of range: {result}"
             );
 
             let avg = PredictionMethod::HistoricalAverage;

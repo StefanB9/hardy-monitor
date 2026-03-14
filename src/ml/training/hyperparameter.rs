@@ -129,6 +129,53 @@ pub fn evaluate_config(
     })
 }
 
+/// Collect per-prediction CV residuals from validation folds.
+///
+/// Re-runs cross-validation with the given config and collects
+/// `(weekday, hour, residual)` triples where `residual = actual - predicted`.
+/// Weekday/hour are extracted from each feature's `raw_weekday`/`raw_hour`
+/// fields.
+#[allow(
+    clippy::similar_names,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss
+)]
+pub fn collect_cv_residuals(
+    config: &HyperparameterSet,
+    features: &[PredictionFeatures],
+    targets: &[f64],
+    folds: &[Fold],
+) -> Result<Vec<(u32, u32, f64)>, TrainingError> {
+    let total_val_samples: usize = folds.iter().map(|f| f.val_end - f.val_start).sum();
+    let mut residuals = Vec::with_capacity(total_val_samples);
+
+    for fold in folds {
+        let train_features = &features[fold.train_start..fold.train_end];
+        let train_targets = &targets[fold.train_start..fold.train_end];
+        let val_features = &features[fold.val_start..fold.val_end];
+        let val_targets = &targets[fold.val_start..fold.val_end];
+
+        let builder = ModelBuilder::new()
+            .n_trees(config.n_trees)
+            .max_depth(config.max_depth)
+            .min_samples_leaf(config.min_samples_leaf)
+            .max_features(config.max_features);
+
+        let model = builder.train_rf(train_features, train_targets)?;
+        let predictions = model.predict_batch(val_features);
+
+        for (i, (&actual, predicted)) in val_targets.iter().zip(predictions.iter()).enumerate() {
+            let feature = &val_features[i];
+            let weekday = feature.raw_weekday as u32;
+            let hour = feature.raw_hour as u32;
+            let residual = actual - predicted;
+            residuals.push((weekday, hour, residual));
+        }
+    }
+
+    Ok(residuals)
+}
+
 /// Run grid search with the default hyperparameter grid.
 #[allow(dead_code)]
 pub fn grid_search(
@@ -314,8 +361,119 @@ mod tests {
         assert!(result.is_err());
     }
 
+    // ── collect_cv_residuals tests ───────────────────────────────────
+
+    #[test]
+    fn test_collect_cv_residuals_basic() -> Result<()> {
+        let features = create_test_features(500);
+        let targets: Vec<f64> = features.iter().map(|f| f.historical_avg).collect();
+
+        let splitter = TimeSeriesSplit::new(3, 0);
+        let folds = splitter
+            .and_then(|s| s.split(features.len()))
+            .ok_or_else(|| anyhow::anyhow!("Failed to create folds"))?;
+
+        let config = HyperparameterSet {
+            n_trees: 10,
+            max_depth: 5,
+            min_samples_leaf: 2,
+            max_features: Some(5),
+        };
+
+        let residuals = collect_cv_residuals(&config, &features, &targets, &folds)?;
+
+        // Total residuals should equal sum of validation set sizes
+        let expected_count: usize = folds.iter().map(|f| f.val_end - f.val_start).sum();
+        assert_eq!(residuals.len(), expected_count);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_collect_cv_residuals_weekday_hour_range() -> Result<()> {
+        let features = create_test_features(500);
+        let targets: Vec<f64> = features.iter().map(|f| f.historical_avg).collect();
+
+        let splitter = TimeSeriesSplit::new(3, 0);
+        let folds = splitter
+            .and_then(|s| s.split(features.len()))
+            .ok_or_else(|| anyhow::anyhow!("Failed to create folds"))?;
+
+        let config = HyperparameterSet {
+            n_trees: 10,
+            max_depth: 5,
+            min_samples_leaf: 2,
+            max_features: Some(5),
+        };
+
+        let residuals = collect_cv_residuals(&config, &features, &targets, &folds)?;
+
+        for &(weekday, hour, _) in &residuals {
+            assert!(weekday < 7, "weekday ({weekday}) should be < 7");
+            assert!(hour < 24, "hour ({hour}) should be < 24");
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_collect_cv_residuals_finite() -> Result<()> {
+        let features = create_test_features(500);
+        let targets: Vec<f64> = features.iter().map(|f| f.historical_avg).collect();
+
+        let splitter = TimeSeriesSplit::new(3, 0);
+        let folds = splitter
+            .and_then(|s| s.split(features.len()))
+            .ok_or_else(|| anyhow::anyhow!("Failed to create folds"))?;
+
+        let config = HyperparameterSet {
+            n_trees: 10,
+            max_depth: 5,
+            min_samples_leaf: 2,
+            max_features: Some(5),
+        };
+
+        let residuals = collect_cv_residuals(&config, &features, &targets, &folds)?;
+
+        for &(_, _, residual) in &residuals {
+            assert!(
+                residual.is_finite(),
+                "All residuals should be finite, got {residual}"
+            );
+        }
+
+        Ok(())
+    }
+
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(1000))]
+
+        #[test]
+        #[allow(clippy::cast_possible_truncation)]
+        fn prop_residual_count_equals_val_samples(seed in 0_u64..50) {
+            let n = 300 + (seed as usize % 200);
+            let features = create_test_features(n);
+            let targets: Vec<f64> = features.iter().map(|f| f.historical_avg).collect();
+
+            let Some(splitter) = TimeSeriesSplit::new(3, 0) else {
+                return Ok(());
+            };
+            let Some(folds) = splitter.split(features.len()) else {
+                return Ok(());
+            };
+
+            let config = HyperparameterSet {
+                n_trees: 5,
+                max_depth: 3,
+                min_samples_leaf: 2,
+                max_features: Some(5),
+            };
+
+            if let Ok(residuals) = collect_cv_residuals(&config, &features, &targets, &folds) {
+                let expected: usize = folds.iter().map(|f| f.val_end - f.val_start).sum();
+                prop_assert_eq!(residuals.len(), expected);
+            }
+        }
 
         #[test]
         #[allow(clippy::cast_possible_truncation)]
