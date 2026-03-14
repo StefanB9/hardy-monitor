@@ -42,6 +42,20 @@ fn default_tune_hyperparameters() -> bool {
     true
 }
 
+impl MlConfig {
+    /// Resolve the model persistence path.
+    ///
+    /// Uses `model_path` if set, otherwise derives a default using
+    /// `dirs::data_dir()` (e.g., `AppData/Roaming/hardy-monitor/model.bin`).
+    /// Returns `None` only if `dirs::data_dir()` is unavailable.
+    pub fn resolve_model_path(&self) -> Option<PathBuf> {
+        if let Some(ref path) = self.model_path {
+            return Some(path.clone());
+        }
+        dirs::data_dir().map(|d| d.join("hardy-monitor").join("model.bin"))
+    }
+}
+
 impl Default for MlConfig {
     fn default() -> Self {
         Self {
@@ -105,6 +119,47 @@ mod tests {
         assert_eq!(lr.algorithm, MlAlgorithm::LinearRegression);
 
         Ok(())
+    }
+
+    #[test]
+    fn test_resolve_model_path_explicit() {
+        let config = MlConfig {
+            model_path: Some(PathBuf::from("/custom/path/model.bin")),
+            ..MlConfig::default()
+        };
+
+        let resolved = config.resolve_model_path();
+        assert_eq!(resolved, Some(PathBuf::from("/custom/path/model.bin")));
+    }
+
+    #[test]
+    fn test_resolve_model_path_default() {
+        let config = MlConfig::default();
+        assert!(config.model_path.is_none());
+
+        let resolved = config.resolve_model_path();
+        assert!(resolved.is_some());
+
+        let path = resolved.unwrap_or_else(|| unreachable!());
+        let path_str = path.to_string_lossy();
+        assert!(
+            path_str.contains("hardy-monitor"),
+            "default path should contain 'hardy-monitor': {path_str}"
+        );
+        assert!(
+            path_str.ends_with("model.bin"),
+            "default path should end with 'model.bin': {path_str}"
+        );
+    }
+
+    #[test]
+    fn test_resolve_model_path_default_not_none() {
+        // dirs::data_dir() should return Some on Windows/macOS/Linux
+        let data_dir = dirs::data_dir();
+        assert!(
+            data_dir.is_some(),
+            "dirs::data_dir() should be available on this platform"
+        );
     }
 
     #[test]

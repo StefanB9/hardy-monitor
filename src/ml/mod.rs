@@ -18,12 +18,84 @@ pub use persistence::PersistedModel;
 pub use residuals::ResidualQuantiles;
 pub use training::TrainingResult;
 
+use self::persistence::{SerializedCvScores, SerializedHyperparameters};
 use crate::{db::HourlyAverage, schedule::GymSchedule, traits::Clock};
+
+/// Summary of the last training run for GUI display.
+#[derive(Debug, Clone)]
+pub struct TrainingInfo {
+    pub algorithm: String,
+    pub training_samples: usize,
+    pub training_window_days: i64,
+    pub training_mse: f64,
+    pub validation_mse: Option<f64>,
+    pub cv_scores: Option<CvScoresSummary>,
+    pub best_hyperparameters: Option<HyperparametersSummary>,
+}
+
+/// Displayable cross-validation score summary.
+#[derive(Debug, Clone)]
+pub struct CvScoresSummary {
+    pub rmse_mean: f64,
+    pub rmse_std: f64,
+    pub mae_mean: f64,
+    pub mae_std: f64,
+    pub r_squared_mean: f64,
+    pub r_squared_std: f64,
+}
+
+/// Displayable hyperparameters summary.
+#[derive(Debug, Clone)]
+pub struct HyperparametersSummary {
+    pub n_trees: usize,
+    pub max_depth: usize,
+    pub min_samples_leaf: usize,
+    pub max_features: Option<usize>,
+}
+
+impl TrainingInfo {
+    /// Reconstruct `TrainingInfo` from a persisted model's metadata.
+    pub fn from_persisted(persisted: &PersistedModel) -> Self {
+        Self {
+            algorithm: persisted.model_summary.model_type.clone(),
+            training_samples: persisted.training_samples,
+            training_window_days: persisted.training_window_days,
+            training_mse: persisted.training_mse,
+            validation_mse: persisted.validation_mse,
+            cv_scores: persisted.cv_scores.as_ref().map(Self::cv_from_serialized),
+            best_hyperparameters: persisted
+                .best_hyperparameters
+                .as_ref()
+                .map(Self::hp_from_serialized),
+        }
+    }
+
+    fn cv_from_serialized(cv: &SerializedCvScores) -> CvScoresSummary {
+        CvScoresSummary {
+            rmse_mean: cv.rmse_mean,
+            rmse_std: cv.rmse_std,
+            mae_mean: cv.mae_mean,
+            mae_std: cv.mae_std,
+            r_squared_mean: cv.r_squared_mean,
+            r_squared_std: cv.r_squared_std,
+        }
+    }
+
+    fn hp_from_serialized(hp: &SerializedHyperparameters) -> HyperparametersSummary {
+        HyperparametersSummary {
+            n_trees: hp.n_trees,
+            max_depth: hp.max_depth,
+            min_samples_leaf: hp.min_samples_leaf,
+            max_features: hp.max_features,
+        }
+    }
+}
 
 pub struct OccupancyPredictor {
     model: Option<TrainedModel>,
     feature_extractor: FeatureExtractor,
     residual_quantiles: Option<ResidualQuantiles>,
+    training_info: Option<TrainingInfo>,
     recent_data: VecDeque<(DateTime<Utc>, f64)>,
     last_training: Option<DateTime<Utc>>,
     config: MlConfig,
@@ -35,6 +107,7 @@ impl OccupancyPredictor {
             model: None,
             feature_extractor: FeatureExtractor::new(),
             residual_quantiles: None,
+            training_info: None,
             recent_data: VecDeque::with_capacity(360),
             last_training: None,
             config,
@@ -63,6 +136,16 @@ impl OccupancyPredictor {
     /// Set or clear the residual-based quantile data for confidence intervals.
     pub fn set_residual_quantiles(&mut self, quantiles: Option<ResidualQuantiles>) {
         self.residual_quantiles = quantiles;
+    }
+
+    /// Set or clear the training info for GUI display.
+    pub fn set_training_info(&mut self, info: Option<TrainingInfo>) {
+        self.training_info = info;
+    }
+
+    /// Get the training info for GUI display.
+    pub fn training_info(&self) -> Option<&TrainingInfo> {
+        self.training_info.as_ref()
     }
 
     pub fn add_observation(&mut self, timestamp: DateTime<Utc>, percentage: f64) {
@@ -543,5 +626,148 @@ mod tests {
         assert!(matches!(p.method, PredictionMethod::MachineLearning { .. }));
 
         Ok(())
+    }
+
+    // ── TrainingInfo tests ──────────────────────────────────────────
+
+    #[test]
+    fn test_training_info_default_none() {
+        let config = MlConfig::default();
+        let predictor = OccupancyPredictor::new(config);
+        assert!(predictor.training_info().is_none());
+    }
+
+    #[test]
+    fn test_set_and_get_training_info() {
+        let config = MlConfig::default();
+        let mut predictor = OccupancyPredictor::new(config);
+
+        let info = TrainingInfo {
+            algorithm: "RandomForest".to_string(),
+            training_samples: 2000,
+            training_window_days: 56,
+            training_mse: 10.5,
+            validation_mse: Some(12.3),
+            cv_scores: Some(CvScoresSummary {
+                rmse_mean: 3.5,
+                rmse_std: 0.2,
+                mae_mean: 2.8,
+                mae_std: 0.15,
+                r_squared_mean: 0.85,
+                r_squared_std: 0.02,
+            }),
+            best_hyperparameters: Some(HyperparametersSummary {
+                n_trees: 150,
+                max_depth: 12,
+                min_samples_leaf: 3,
+                max_features: Some(8),
+            }),
+        };
+        predictor.set_training_info(Some(info));
+
+        let retrieved = predictor.training_info();
+        assert!(retrieved.is_some());
+        let ti = retrieved.unwrap_or_else(|| unreachable!());
+        assert_eq!(ti.algorithm, "RandomForest");
+        assert_eq!(ti.training_samples, 2000);
+    }
+
+    #[test]
+    fn test_training_info_cleared() {
+        let config = MlConfig::default();
+        let mut predictor = OccupancyPredictor::new(config);
+
+        let info = TrainingInfo {
+            algorithm: "LinearRegression".to_string(),
+            training_samples: 1000,
+            training_window_days: 28,
+            training_mse: 5.0,
+            validation_mse: None,
+            cv_scores: None,
+            best_hyperparameters: None,
+        };
+        predictor.set_training_info(Some(info));
+        assert!(predictor.training_info().is_some());
+
+        predictor.set_training_info(None);
+        assert!(predictor.training_info().is_none());
+    }
+
+    #[test]
+    fn test_training_info_from_persisted() {
+        let quantiles = {
+            let residuals: Vec<(u32, u32, f64)> = (0..20)
+                .map(|i| (0, 10, -5.0 + f64::from(i) * 0.5))
+                .collect();
+            ResidualQuantiles::from_residuals(&residuals)
+        };
+
+        let persisted = PersistedModel::new(
+            56,
+            2500,
+            12.3,
+            Some(14.1),
+            vec![],
+            persistence::ModelSummary {
+                model_type: "RandomForest".to_string(),
+                max_depth: Some(12),
+                feature_importance: None,
+            },
+            quantiles.as_ref(),
+            Some(persistence::SerializedHyperparameters {
+                n_trees: 150,
+                max_depth: 12,
+                min_samples_leaf: 3,
+                max_features: Some(8),
+            }),
+            Some(persistence::SerializedCvScores {
+                rmse_mean: 4.21,
+                rmse_std: 0.35,
+                mae_mean: 3.12,
+                mae_std: 0.28,
+                r_squared_mean: 0.87,
+                r_squared_std: 0.03,
+                mse_mean: 17.72,
+                mse_std: 2.95,
+            }),
+        );
+
+        let info = TrainingInfo::from_persisted(&persisted);
+        assert_eq!(info.algorithm, "RandomForest");
+        assert_eq!(info.training_samples, 2500);
+        assert_eq!(info.training_window_days, 56);
+
+        let cv = info.cv_scores.unwrap_or_else(|| unreachable!());
+        assert_abs_diff_eq!(cv.rmse_mean, 4.21, epsilon = 1e-10);
+        assert_abs_diff_eq!(cv.r_squared_mean, 0.87, epsilon = 1e-10);
+
+        let hp = info.best_hyperparameters.unwrap_or_else(|| unreachable!());
+        assert_eq!(hp.n_trees, 150);
+        assert_eq!(hp.max_depth, 12);
+    }
+
+    #[test]
+    fn test_training_info_from_persisted_without_optional() {
+        let persisted = PersistedModel::new(
+            28,
+            1000,
+            5.5,
+            None,
+            vec![],
+            persistence::ModelSummary {
+                model_type: "LinearRegression".to_string(),
+                max_depth: None,
+                feature_importance: None,
+            },
+            None,
+            None,
+            None,
+        );
+
+        let info = TrainingInfo::from_persisted(&persisted);
+        assert_eq!(info.algorithm, "LinearRegression");
+        assert!(info.cv_scores.is_none());
+        assert!(info.best_hyperparameters.is_none());
+        assert!(info.validation_mse.is_none());
     }
 }

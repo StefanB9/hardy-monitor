@@ -14,7 +14,10 @@ use hardy_monitor::{
     config::AppConfig,
     db::{Database, HourlyAverage, OccupancyLog},
     error::AppError,
-    ml::{MlConfig, OccupancyPredictor, PredictionWithConfidence, TrainingResult},
+    ml::{
+        CvScoresSummary, HyperparametersSummary, MlConfig, OccupancyPredictor, PersistedModel,
+        PredictionWithConfidence, TrainingInfo, TrainingResult,
+    },
     repair::DataRepairer,
     schedule::GymSchedule,
     style,
@@ -180,10 +183,12 @@ pub enum Message {
     RepairCompleted(Result<RepairSummary, AppError>),
 
     MlTrainingCompleted(Result<Box<TrainingResult>, String>),
+    ModelPersisted,
     PredictionModeToggled(bool),
 }
 
 impl HardyMonitorApp {
+    #[allow(clippy::too_many_lines)]
     pub fn new(
         db: Database,
         tray_icon: Option<TrayIcon>,
@@ -203,6 +208,32 @@ impl HardyMonitorApp {
 
         let notif_threshold = config.notifications.threshold_percent;
         let notif_enabled = config.notifications.enabled;
+
+        // Try loading persisted model for immediate calibrated CIs
+        let mut predictor = OccupancyPredictor::new(ml_config);
+        if let Some(path) = config.ml.resolve_model_path() {
+            match PersistedModel::load(&path) {
+                Ok(persisted) if !persisted.is_stale(config.ml.retrain_interval_hours) => {
+                    if let Some(quantiles) = persisted.to_residual_quantiles() {
+                        predictor.set_residual_quantiles(Some(quantiles));
+                    }
+                    predictor.set_training_info(Some(TrainingInfo::from_persisted(&persisted)));
+                    tracing::info!(
+                        summary = %persisted.summary(),
+                        "Loaded persisted ML model metadata"
+                    );
+                }
+                Ok(persisted) => {
+                    tracing::info!(
+                        summary = %persisted.summary(),
+                        "Persisted model is stale, will retrain"
+                    );
+                }
+                Err(e) => {
+                    tracing::debug!(error = %e, "No persisted model loaded");
+                }
+            }
+        }
 
         let app = Self {
             db: db.clone(),
@@ -227,7 +258,7 @@ impl HardyMonitorApp {
                 quiet_hours: Vec::new(),
                 trend: None,
                 baseline_for_comparison: Vec::new(),
-                predictor: OccupancyPredictor::new(ml_config),
+                predictor,
                 ml_predictions: Vec::new(),
                 ml_predictions_simple: Vec::new(),
                 ml_training_in_progress: false,
@@ -307,7 +338,9 @@ impl HardyMonitorApp {
                 self.ui.ml_predictions_chart_cache.clear();
                 Task::none()
             }
-            Message::ChartInteraction | Message::NotificationSent => Task::none(),
+            Message::ChartInteraction | Message::NotificationSent | Message::ModelPersisted => {
+                Task::none()
+            }
             Message::FetchAlignmentComplete => {
                 self.ui.is_poll_aligned = true;
                 if self.schedule.is_open(&self.clock.now_local()) {
@@ -599,7 +632,19 @@ impl HardyMonitorApp {
                 self.data.ml_training_in_progress = false;
                 match result {
                     Ok(training) => {
+                        // Build TrainingInfo before moving fields out of
+                        // training
+                        let training_info = Self::build_training_info(&training, &self.config.ml);
+                        self.data.predictor.set_training_info(Some(training_info));
+
                         let trained_at = training.persisted.created_at;
+                        tracing::info!(
+                            trained_at = %trained_at,
+                            training_mse = training.persisted.training_mse,
+                            validation_mse = ?training.persisted.validation_mse,
+                            "ML model training completed"
+                        );
+
                         self.data.predictor.set_model(training.model, trained_at);
                         self.data
                             .predictor
@@ -619,18 +664,30 @@ impl HardyMonitorApp {
                             .map(PredictionWithConfidence::to_simple)
                             .collect();
                         self.ui.ml_predictions_chart_cache.clear();
-                        tracing::info!(
-                            trained_at = %trained_at,
-                            training_mse = training.persisted.training_mse,
-                            validation_mse = ?training.persisted.validation_mse,
-                            "ML model training completed"
-                        );
+
+                        // Persist model metadata to disk (fire-and-forget)
+                        if let Some(path) = self.config.ml.resolve_model_path() {
+                            let persisted = training.persisted;
+                            return Task::perform(
+                                async move {
+                                    if let Err(e) = persisted.save(&path) {
+                                        tracing::warn!(
+                                            error = %e,
+                                            "Failed to save ML model metadata"
+                                        );
+                                    }
+                                },
+                                |()| Message::ModelPersisted,
+                            );
+                        }
+
+                        Task::none()
                     }
                     Err(e) => {
                         tracing::warn!(error = %e, "ML model training failed");
+                        Task::none()
                     }
                 }
-                Task::none()
             }
         }
     }
@@ -683,6 +740,7 @@ impl HardyMonitorApp {
                 ml_last_trained: self.data.predictor.last_training(),
                 chart_cache: &self.ui.ml_predictions_chart_cache,
                 now: self.clock.now_utc(),
+                training_info: self.data.predictor.training_info(),
             }),
             ViewMode::DataRepair => views::data_repair::view(DataRepairProps {
                 start_date: &self.repair.start_date,
@@ -1138,6 +1196,32 @@ impl HardyMonitorApp {
             },
             Message::MlTrainingCompleted,
         )
+    }
+
+    fn build_training_info(training: &TrainingResult, ml_config: &MlConfig) -> TrainingInfo {
+        TrainingInfo {
+            algorithm: training.model.model_type().to_string(),
+            training_samples: training.model.training_samples,
+            training_window_days: ml_config.training_window_days,
+            training_mse: training.model.training_mse,
+            validation_mse: training.model.validation_mse,
+            cv_scores: training.cv_scores.as_ref().map(|cv| CvScoresSummary {
+                rmse_mean: cv.rmse.mean,
+                rmse_std: cv.rmse.std_dev,
+                mae_mean: cv.mae.mean,
+                mae_std: cv.mae.std_dev,
+                r_squared_mean: cv.r_squared.mean,
+                r_squared_std: cv.r_squared.std_dev,
+            }),
+            best_hyperparameters: training.best_hyperparameters.as_ref().map(|hp| {
+                HyperparametersSummary {
+                    n_trees: hp.n_trees,
+                    max_depth: hp.max_depth,
+                    min_samples_leaf: hp.min_samples_leaf,
+                    max_features: hp.max_features,
+                }
+            }),
+        }
     }
 
     fn load_insights_data(db: Arc<Database>, clock: &dyn Clock) -> Task<Message> {

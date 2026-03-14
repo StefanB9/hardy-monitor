@@ -7,7 +7,7 @@ edition = "2024"
 
 [features]
 default = ["gui"]
-gui = ["dep:approx", "dep:bincode", "dep:iced", "dep:image", "dep:linfa", "dep:linfa-linear", "dep:muda", "dep:ndarray", "dep:notify-rust", "dep:smartcore", "dep:tray-icon"]
+gui = ["dep:approx", "dep:bincode", "dep:iced", "dep:image", "dep:linfa", "dep:linfa-linear", "dep:muda", "dep:ndarray", "dep:notify-rust", "dep:smartcore", "dep:tray-icon", "dep:zstd"]
 
 [dependencies]
 anyhow = { version = "1.0.102", default-features = false, features = ["std"] }
@@ -37,6 +37,7 @@ tracing = { version = "0.1.44", default-features = false, features = ["attribute
 tracing-appender = { version = "0.2.4", default-features = false }
 tracing-subscriber = { version = "0.3.23", default-features = false, features = ["env-filter", "fmt", "std"] }
 tray-icon = { version = "0.21.3", default-features = false, optional = true }
+zstd = { version = "0.13.3", default-features = false, optional = true }
 
 [dev-dependencies]
 approx = "0.6.0-rc2"
