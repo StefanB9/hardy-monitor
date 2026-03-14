@@ -17,7 +17,10 @@ use super::{
     evaluation,
     features::FeatureExtractor,
     model::{ModelBuilder, TrainedModel, TrainingError},
-    persistence::{ModelSummary, PersistedModel, SerializedSlotStats},
+    persistence::{
+        ModelSummary, PersistedModel, SerializedCvScores, SerializedHyperparameters,
+        SerializedSlotStats,
+    },
     residuals::ResidualQuantiles,
 };
 use crate::{
@@ -61,6 +64,26 @@ fn build_training_result(
         })
         .collect();
 
+    let serialized_hp = best_hyperparameters
+        .as_ref()
+        .map(|hp| SerializedHyperparameters {
+            n_trees: hp.n_trees,
+            max_depth: hp.max_depth,
+            min_samples_leaf: hp.min_samples_leaf,
+            max_features: hp.max_features,
+        });
+
+    let serialized_cv = cv_scores.as_ref().map(|cv| SerializedCvScores {
+        rmse_mean: cv.rmse.mean,
+        rmse_std: cv.rmse.std_dev,
+        mae_mean: cv.mae.mean,
+        mae_std: cv.mae.std_dev,
+        r_squared_mean: cv.r_squared.mean,
+        r_squared_std: cv.r_squared.std_dev,
+        mse_mean: cv.mse.mean,
+        mse_std: cv.mse.std_dev,
+    });
+
     let persisted = PersistedModel::new(
         config.training_window_days,
         model.training_samples,
@@ -76,6 +99,8 @@ fn build_training_result(
             feature_importance: model.feature_importance(),
         },
         residual_quantiles.as_ref(),
+        serialized_hp,
+        serialized_cv,
     );
 
     TrainingResult {

@@ -1,6 +1,7 @@
 use chrono::{DateTime, Duration as ChronoDuration, Local, Utc};
 use hardy_monitor::{
-    PredictionMethod, PredictionWithConfidence, style, widgets::history_chart::HistoryChart,
+    PredictionMethod, PredictionWithConfidence, ml::TrainingInfo, style,
+    widgets::history_chart::HistoryChart,
 };
 use iced::{
     Alignment, Element, Length,
@@ -18,16 +19,22 @@ pub struct MLPredictionsProps<'a> {
     pub ml_last_trained: Option<DateTime<Utc>>,
     pub chart_cache: &'a canvas::Cache,
     pub now: DateTime<Utc>,
+    pub training_info: Option<&'a TrainingInfo>,
 }
 
 #[allow(clippy::too_many_lines)]
 pub fn view(props: MLPredictionsProps<'_>) -> Element<'_, Message> {
+    // ── Status card ─────────────────────────────────────────────────
     let (status_text, status_color) = if props.ml_training_in_progress {
-        ("Training...", style::ACCENT_ORANGE)
+        ("Training...".to_string(), style::ACCENT_ORANGE)
     } else if props.ml_has_model {
-        ("Active", style::ACCENT_GREEN)
+        let algo = props.training_info.map_or_else(
+            || "Active".to_string(),
+            |ti| format!("Active ({})", ti.algorithm),
+        );
+        (algo, style::ACCENT_GREEN)
     } else {
-        ("Collecting data", style::TEXT_MUTED)
+        ("Collecting data".to_string(), style::TEXT_MUTED)
     };
 
     let trained_str = props.ml_last_trained.map_or_else(
@@ -53,6 +60,10 @@ pub fn view(props: MLPredictionsProps<'_>) -> Element<'_, Message> {
     ])
     .width(Length::Fill);
 
+    // ── Model details card (only if training info available) ────────
+    let details_card = props.training_info.map(|ti| build_details_card(ti));
+
+    // ── Chart card ──────────────────────────────────────────────────
     let (range_start, range_end) = if props.ml_predictions.is_empty() {
         let now = props.now;
         (now, now + ChronoDuration::hours(6))
@@ -94,6 +105,7 @@ pub fn view(props: MLPredictionsProps<'_>) -> Element<'_, Message> {
     ])
     .width(Length::Fill);
 
+    // ── Prediction details table ────────────────────────────────────
     let col_time = Length::Fixed(60.0);
     let col_pred = Length::Fixed(80.0);
     let col_low = Length::Fixed(60.0);
@@ -201,17 +213,152 @@ pub fn view(props: MLPredictionsProps<'_>) -> Element<'_, Message> {
     ])
     .width(Length::Fill);
 
-    let content = column![
-        status_card,
-        Space::new().height(20),
-        chart_card,
-        Space::new().height(20),
-        table_card,
-    ]
-    .padding(10);
+    // ── Assemble layout ─────────────────────────────────────────────
+    let mut content = column![status_card, Space::new().height(20),].padding(10);
+
+    if let Some(card) = details_card {
+        content = content.push(card);
+        content = content.push(Space::new().height(20));
+    }
+
+    content = content.push(chart_card);
+    content = content.push(Space::new().height(20));
+    content = content.push(table_card);
 
     scrollable(content)
         .height(Length::Fill)
         .width(Length::Fill)
         .into()
+}
+
+/// Build the "Model Details" card showing training metrics.
+#[allow(clippy::too_many_lines)]
+fn build_details_card(ti: &TrainingInfo) -> Element<'_, Message> {
+    let mut col = column![
+        text("Model Details").size(14).color(style::TEXT_MUTED),
+        Space::new().height(15),
+        // Algorithm + samples row
+        row![
+            text("Algorithm:").size(12).color(style::TEXT_MUTED),
+            Space::new().width(6),
+            text(&ti.algorithm).size(12).color(style::TEXT_BRIGHT),
+            Space::new().width(Length::Fill),
+            text("Samples:").size(12).color(style::TEXT_MUTED),
+            Space::new().width(6),
+            text(format!("{}", ti.training_samples))
+                .size(12)
+                .color(style::TEXT_BRIGHT),
+        ]
+        .align_y(Alignment::Center),
+        Space::new().height(4),
+        // Training window + MSE row
+        row![
+            text("Window:").size(12).color(style::TEXT_MUTED),
+            Space::new().width(6),
+            text(format!("{} days", ti.training_window_days))
+                .size(12)
+                .color(style::TEXT_BRIGHT),
+            Space::new().width(Length::Fill),
+            text("Train MSE:").size(12).color(style::TEXT_MUTED),
+            Space::new().width(6),
+            text(format!("{:.2}", ti.training_mse))
+                .size(12)
+                .color(style::TEXT_BRIGHT),
+        ]
+        .align_y(Alignment::Center),
+    ];
+
+    // Hyperparameters section (RF only)
+    if let Some(ref hp) = ti.best_hyperparameters {
+        let features_str = hp
+            .max_features
+            .map_or_else(|| "auto".to_string(), |f| format!("{f}"));
+
+        col = col
+            .push(Space::new().height(10))
+            .push(
+                text("Best Hyperparameters")
+                    .size(12)
+                    .color(style::TEXT_MUTED),
+            )
+            .push(Space::new().height(4))
+            .push(
+                row![
+                    text("Trees:").size(11).color(style::TEXT_MUTED),
+                    Space::new().width(4),
+                    text(format!("{}", hp.n_trees))
+                        .size(11)
+                        .color(style::TEXT_BRIGHT),
+                    Space::new().width(12),
+                    text("Depth:").size(11).color(style::TEXT_MUTED),
+                    Space::new().width(4),
+                    text(format!("{}", hp.max_depth))
+                        .size(11)
+                        .color(style::TEXT_BRIGHT),
+                    Space::new().width(12),
+                    text("Min Leaf:").size(11).color(style::TEXT_MUTED),
+                    Space::new().width(4),
+                    text(format!("{}", hp.min_samples_leaf))
+                        .size(11)
+                        .color(style::TEXT_BRIGHT),
+                    Space::new().width(12),
+                    text("Features:").size(11).color(style::TEXT_MUTED),
+                    Space::new().width(4),
+                    text(features_str).size(11).color(style::TEXT_BRIGHT),
+                ]
+                .align_y(Alignment::Center),
+            );
+    }
+
+    // CV scores section
+    if let Some(ref cv) = ti.cv_scores {
+        let r2_color = if cv.r_squared_mean >= 0.8 {
+            style::ACCENT_GREEN
+        } else if cv.r_squared_mean >= 0.5 {
+            style::ACCENT_ORANGE
+        } else {
+            style::ACCENT_RED
+        };
+
+        col = col
+            .push(Space::new().height(10))
+            .push(
+                text("Cross-Validation Scores")
+                    .size(12)
+                    .color(style::TEXT_MUTED),
+            )
+            .push(Space::new().height(4))
+            .push(
+                row![
+                    text("RMSE:").size(11).color(style::TEXT_MUTED),
+                    Space::new().width(4),
+                    text(format!("{:.2} \u{00b1} {:.2}", cv.rmse_mean, cv.rmse_std))
+                        .size(11)
+                        .color(style::TEXT_BRIGHT),
+                    Space::new().width(16),
+                    text("R\u{00b2}:").size(11).color(style::TEXT_MUTED),
+                    Space::new().width(4),
+                    text(format!(
+                        "{:.3} \u{00b1} {:.3}",
+                        cv.r_squared_mean, cv.r_squared_std
+                    ))
+                    .size(11)
+                    .color(r2_color),
+                ]
+                .align_y(Alignment::Center),
+            )
+            .push(Space::new().height(4))
+            .push(
+                row![
+                    text("MAE:").size(11).color(style::TEXT_MUTED),
+                    Space::new().width(4),
+                    text(format!("{:.2} \u{00b1} {:.2}", cv.mae_mean, cv.mae_std))
+                        .size(11)
+                        .color(style::TEXT_BRIGHT),
+                ]
+                .align_y(Alignment::Center),
+            );
+    }
+
+    card_container(col).width(Length::Fill).into()
 }

@@ -8,6 +8,16 @@ use super::{
     residuals::{ResidualQuantiles, SlotQuantiles},
 };
 
+/// zstd magic bytes for detecting compressed files.
+const ZSTD_MAGIC: [u8; 4] = [0x28, 0xB5, 0x2F, 0xFD];
+
+/// Maximum decompressed size (1 MB) — safety limit for
+/// `zstd::bulk::decompress`.
+const MAX_DECOMPRESSED_SIZE: usize = 1_048_576;
+
+/// zstd compression level (3 = good ratio, fast).
+const ZSTD_COMPRESSION_LEVEL: i32 = 3;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PersistedModel {
     pub version: u32,
@@ -22,6 +32,10 @@ pub struct PersistedModel {
     pub residual_quantiles: Option<Vec<SerializedSlotQuantiles>>,
     /// Global residual quantiles as (`q_low`, `q_high`, count) (v3+).
     pub global_quantiles: Option<(f64, f64, usize)>,
+    /// Best hyperparameters from grid search (v4+).
+    pub best_hyperparameters: Option<SerializedHyperparameters>,
+    /// Cross-validation scores (v4+).
+    pub cv_scores: Option<SerializedCvScores>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -41,6 +55,28 @@ pub struct SerializedSlotQuantiles {
     pub q_low: f64,
     pub q_high: f64,
     pub count: usize,
+}
+
+/// Serialized hyperparameters for persistence.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SerializedHyperparameters {
+    pub n_trees: usize,
+    pub max_depth: usize,
+    pub min_samples_leaf: usize,
+    pub max_features: Option<usize>,
+}
+
+/// Serialized cross-validation scores for persistence.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SerializedCvScores {
+    pub rmse_mean: f64,
+    pub rmse_std: f64,
+    pub mae_mean: f64,
+    pub mae_std: f64,
+    pub r_squared_mean: f64,
+    pub r_squared_std: f64,
+    pub mse_mean: f64,
+    pub mse_std: f64,
 }
 
 impl From<((u32, u32), &SlotStats)> for SerializedSlotStats {
@@ -63,8 +99,9 @@ pub struct ModelSummary {
 }
 
 impl PersistedModel {
-    pub const CURRENT_VERSION: u32 = 3;
+    pub const CURRENT_VERSION: u32 = 4;
 
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         training_window_days: i64,
         training_samples: usize,
@@ -73,6 +110,8 @@ impl PersistedModel {
         slot_stats: Vec<SerializedSlotStats>,
         model_summary: ModelSummary,
         quantiles: Option<&ResidualQuantiles>,
+        best_hyperparameters: Option<SerializedHyperparameters>,
+        cv_scores: Option<SerializedCvScores>,
     ) -> Self {
         let (residual_quantiles, global_quantiles) = quantiles.map_or((None, None), |q| {
             let slots: Vec<SerializedSlotQuantiles> = q
@@ -101,6 +140,8 @@ impl PersistedModel {
             model_summary,
             residual_quantiles,
             global_quantiles,
+            best_hyperparameters,
+            cv_scores,
         }
     }
 
@@ -132,6 +173,7 @@ impl PersistedModel {
         Some(ResidualQuantiles::from_persisted(slot_map, global))
     }
 
+    /// Save the model to disk with zstd compression.
     pub fn save(&self, path: &Path) -> Result<(), PersistenceError> {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).map_err(|e| PersistenceError::IoError(e.to_string()))?;
@@ -140,11 +182,16 @@ impl PersistedModel {
         let bytes = bincode::serde::encode_to_vec(self, bincode::config::standard())
             .map_err(|e| PersistenceError::SerializeError(e.to_string()))?;
 
-        fs::write(path, bytes).map_err(|e| PersistenceError::IoError(e.to_string()))?;
+        let compressed = zstd::bulk::compress(&bytes, ZSTD_COMPRESSION_LEVEL)
+            .map_err(|e| PersistenceError::SerializeError(e.to_string()))?;
+
+        fs::write(path, compressed).map_err(|e| PersistenceError::IoError(e.to_string()))?;
 
         Ok(())
     }
 
+    /// Load a model from disk, supporting both zstd-compressed and raw bincode
+    /// files.
     pub fn load(path: &Path) -> Result<Self, PersistenceError> {
         if !path.exists() {
             return Err(PersistenceError::FileNotFound(
@@ -152,7 +199,8 @@ impl PersistedModel {
             ));
         }
 
-        let bytes = fs::read(path).map_err(|e| PersistenceError::IoError(e.to_string()))?;
+        let raw = fs::read(path).map_err(|e| PersistenceError::IoError(e.to_string()))?;
+        let bytes = decompress_or_raw(&raw)?;
 
         let (model, _): (Self, usize) =
             bincode::serde::decode_from_slice(&bytes, bincode::config::standard())
@@ -183,6 +231,16 @@ impl PersistedModel {
                 .map_or_else(|| "N/A".to_string(), |v| format!("{v:.2}")),
             self.created_at.format("%Y-%m-%d %H:%M UTC")
         )
+    }
+}
+
+/// Decompress zstd data or return raw bytes for backward compatibility.
+fn decompress_or_raw(data: &[u8]) -> Result<Vec<u8>, PersistenceError> {
+    if data.len() >= 4 && data[..4] == ZSTD_MAGIC {
+        zstd::bulk::decompress(data, MAX_DECOMPRESSED_SIZE)
+            .map_err(|e| PersistenceError::DeserializeError(e.to_string()))
+    } else {
+        Ok(data.to_vec())
     }
 }
 
@@ -250,7 +308,31 @@ mod tests {
                 feature_importance: None,
             },
             None,
+            None,
+            None,
         )
+    }
+
+    fn create_test_hyperparameters() -> SerializedHyperparameters {
+        SerializedHyperparameters {
+            n_trees: 150,
+            max_depth: 12,
+            min_samples_leaf: 3,
+            max_features: Some(8),
+        }
+    }
+
+    fn create_test_cv_scores() -> SerializedCvScores {
+        SerializedCvScores {
+            rmse_mean: 4.21,
+            rmse_std: 0.35,
+            mae_mean: 3.12,
+            mae_std: 0.28,
+            r_squared_mean: 0.87,
+            r_squared_std: 0.03,
+            mse_mean: 17.72,
+            mse_std: 2.95,
+        }
     }
 
     #[test]
@@ -338,7 +420,7 @@ mod tests {
         Ok(())
     }
 
-    // ── Step 6: residual quantile persistence tests ──────────────────
+    // ── residual quantile persistence tests ─────────────────────────
 
     fn create_test_quantiles() -> ResidualQuantiles {
         let residuals: Vec<(u32, u32, f64)> = (0..20)
@@ -369,12 +451,14 @@ mod tests {
                 feature_importance: None,
             },
             Some(&quantiles),
+            None,
+            None,
         )
     }
 
     #[test]
     fn test_persisted_model_version_bumped() {
-        assert_eq!(PersistedModel::CURRENT_VERSION, 3);
+        assert_eq!(PersistedModel::CURRENT_VERSION, 4);
     }
 
     #[test]
@@ -389,7 +473,7 @@ mod tests {
         model.save(&path)?;
         let loaded = PersistedModel::load(&path)?;
 
-        assert_eq!(loaded.version, 3);
+        assert_eq!(loaded.version, 4);
         assert!(loaded.residual_quantiles.is_some());
         assert!(loaded.global_quantiles.is_some());
 
@@ -415,7 +499,7 @@ mod tests {
         model.save(&path)?;
         let loaded = PersistedModel::load(&path)?;
 
-        assert_eq!(loaded.version, 3);
+        assert_eq!(loaded.version, 4);
         assert!(loaded.residual_quantiles.is_none());
         assert!(loaded.global_quantiles.is_none());
 
@@ -464,5 +548,158 @@ mod tests {
         assert_relative_eq!(sq.q_low, -5.3);
         assert_relative_eq!(sq.q_high, 8.7);
         assert_eq!(sq.count, 25);
+    }
+
+    // ── v4: hyperparameters, CV scores, zstd compression ────────────
+
+    #[test]
+    fn test_serialized_hyperparameters() {
+        let hp = create_test_hyperparameters();
+
+        assert_eq!(hp.n_trees, 150);
+        assert_eq!(hp.max_depth, 12);
+        assert_eq!(hp.min_samples_leaf, 3);
+        assert_eq!(hp.max_features, Some(8));
+    }
+
+    #[test]
+    fn test_serialized_cv_scores() {
+        let cv = create_test_cv_scores();
+
+        assert_relative_eq!(cv.rmse_mean, 4.21);
+        assert_relative_eq!(cv.rmse_std, 0.35);
+        assert_relative_eq!(cv.mae_mean, 3.12);
+        assert_relative_eq!(cv.mae_std, 0.28);
+        assert_relative_eq!(cv.r_squared_mean, 0.87);
+        assert_relative_eq!(cv.r_squared_std, 0.03);
+        assert_relative_eq!(cv.mse_mean, 17.72);
+        assert_relative_eq!(cv.mse_std, 2.95);
+    }
+
+    #[test]
+    fn test_v4_roundtrip_with_all_fields() -> Result<()> {
+        let dir = tempdir()?;
+        let path = dir.path().join("model_v4_full.bin");
+
+        let quantiles = create_test_quantiles();
+        let model = PersistedModel::new(
+            56,
+            2500,
+            12.3,
+            Some(14.1),
+            vec![SerializedSlotStats {
+                weekday: 1,
+                hour: 14,
+                mean: 60.0,
+                std_dev: 8.0,
+                sample_count: 100,
+            }],
+            ModelSummary {
+                model_type: "RandomForest".to_string(),
+                max_depth: Some(12),
+                feature_importance: None,
+            },
+            Some(&quantiles),
+            Some(create_test_hyperparameters()),
+            Some(create_test_cv_scores()),
+        );
+
+        assert!(model.best_hyperparameters.is_some());
+        assert!(model.cv_scores.is_some());
+
+        model.save(&path)?;
+        let loaded = PersistedModel::load(&path)?;
+
+        assert_eq!(loaded.version, 4);
+        assert_eq!(loaded.training_samples, 2500);
+        assert_relative_eq!(loaded.training_mse, 12.3);
+
+        let hp = loaded
+            .best_hyperparameters
+            .unwrap_or_else(|| unreachable!());
+        assert_eq!(hp.n_trees, 150);
+        assert_eq!(hp.max_depth, 12);
+        assert_eq!(hp.min_samples_leaf, 3);
+        assert_eq!(hp.max_features, Some(8));
+
+        let cv = loaded.cv_scores.unwrap_or_else(|| unreachable!());
+        assert_relative_eq!(cv.rmse_mean, 4.21);
+        assert_relative_eq!(cv.r_squared_mean, 0.87);
+
+        assert!(loaded.residual_quantiles.is_some());
+        assert!(loaded.global_quantiles.is_some());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_v4_roundtrip_without_optional_fields() -> Result<()> {
+        let dir = tempdir()?;
+        let path = dir.path().join("model_v4_minimal.bin");
+
+        let model = create_test_model(); // None for quantiles, hp, cv
+        assert!(model.best_hyperparameters.is_none());
+        assert!(model.cv_scores.is_none());
+
+        model.save(&path)?;
+        let loaded = PersistedModel::load(&path)?;
+
+        assert_eq!(loaded.version, 4);
+        assert!(loaded.best_hyperparameters.is_none());
+        assert!(loaded.cv_scores.is_none());
+        assert!(loaded.residual_quantiles.is_none());
+        assert!(loaded.global_quantiles.is_none());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_zstd_compressed_smaller() -> Result<()> {
+        let dir = tempdir()?;
+        let path = dir.path().join("model_compressed.bin");
+
+        let model = create_test_model_with_quantiles();
+
+        // Get uncompressed size
+        let uncompressed = bincode::serde::encode_to_vec(&model, bincode::config::standard())
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+        model.save(&path)?;
+        let compressed = fs::read(&path)?;
+
+        assert!(
+            compressed.len() < uncompressed.len(),
+            "compressed ({}) should be smaller than uncompressed ({})",
+            compressed.len(),
+            uncompressed.len()
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_load_uncompressed_v3_compat() -> Result<()> {
+        let dir = tempdir()?;
+        let path = dir.path().join("model_raw.bin");
+
+        // Simulate a v3 file: write raw bincode without zstd compression
+        let model = create_test_model();
+        let raw_bytes = bincode::serde::encode_to_vec(&model, bincode::config::standard())
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+        // Verify it does NOT start with zstd magic
+        assert!(
+            raw_bytes.len() < 4 || raw_bytes[..4] != ZSTD_MAGIC,
+            "raw bincode should not start with zstd magic bytes"
+        );
+
+        fs::write(&path, &raw_bytes)?;
+
+        // load() should handle uncompressed data via decompress_or_raw
+        let loaded = PersistedModel::load(&path)?;
+        assert_eq!(loaded.version, model.version);
+        assert_eq!(loaded.training_samples, 1000);
+
+        Ok(())
     }
 }
