@@ -112,6 +112,20 @@ impl TrainedModel {
             ModelBackend::RandomForest(rf) => rf.feature_importance(),
         }
     }
+
+    /// Returns `true` if the model backend is Random Forest.
+    pub fn is_random_forest(&self) -> bool {
+        matches!(&self.backend, ModelBackend::RandomForest(_))
+    }
+
+    /// Returns the number of trees if the model is Random Forest, `None` for
+    /// LR.
+    pub fn n_trees(&self) -> Option<usize> {
+        match &self.backend {
+            ModelBackend::LinearRegression(_) => None,
+            ModelBackend::RandomForest(rf) => Some(rf.n_trees()),
+        }
+    }
 }
 
 /// Builder for constructing and training models.

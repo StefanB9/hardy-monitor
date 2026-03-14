@@ -16,6 +16,7 @@ use crate::ml::features::PredictionFeatures;
 #[derive(Debug, Clone)]
 pub(crate) struct RandomForestModel {
     model: Arc<RandomForestRegressor<f64, f64, DenseMatrix<f64>, Vec<f64>>>,
+    n_trees: usize,
 }
 
 /// Hyperparameters for Random Forest training.
@@ -68,6 +69,7 @@ impl RandomForestModel {
 
         Ok(Self {
             model: Arc::new(model),
+            n_trees: params.n_trees,
         })
     }
 
@@ -81,6 +83,11 @@ impl RandomForestModel {
     /// Predict a batch of samples from a `DenseMatrix`.
     pub fn predict_batch(&self, features_matrix: &DenseMatrix<f64>) -> Vec<f64> {
         self.model.predict(features_matrix).unwrap_or_default()
+    }
+
+    /// Returns the number of trees in the forest.
+    pub fn n_trees(&self) -> usize {
+        self.n_trees
     }
 
     /// Feature importance (stub — smartcore v0.4 does not expose this).

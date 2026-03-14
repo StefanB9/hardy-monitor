@@ -7,7 +7,9 @@ use chrono::Duration;
 use self::{
     cross_validation::{CrossValidationScores, FoldScores, TimeSeriesSplit},
     data_prep::{TrainingDataPreparer, estimate_samples_per_hour},
-    hyperparameter::{GridSearchResult, HyperparameterSet, grid_search_with_grid},
+    hyperparameter::{
+        GridSearchResult, HyperparameterSet, collect_cv_residuals, grid_search_with_grid,
+    },
 };
 use super::{
     MlConfig,
@@ -16,6 +18,7 @@ use super::{
     features::FeatureExtractor,
     model::{ModelBuilder, TrainedModel, TrainingError},
     persistence::{ModelSummary, PersistedModel, SerializedSlotStats},
+    residuals::ResidualQuantiles,
 };
 use crate::{
     db::{Database, HourlyAverage, OccupancyLog},
@@ -32,6 +35,7 @@ pub struct TrainingResult {
     pub best_hyperparameters: Option<HyperparameterSet>,
     pub feature_importance: Option<Vec<(String, f64)>>,
     pub oob_error: Option<f64>,
+    pub residual_quantiles: Option<ResidualQuantiles>,
 }
 
 /// Build `PersistedModel` and `FeatureExtractor` from training artifacts.
@@ -41,6 +45,7 @@ fn build_training_result(
     config: &MlConfig,
     cv_scores: Option<CrossValidationScores>,
     best_hyperparameters: Option<HyperparameterSet>,
+    residual_quantiles: Option<ResidualQuantiles>,
 ) -> TrainingResult {
     let mut feature_extractor = FeatureExtractor::new();
     feature_extractor.update_historical_stats(baseline);
@@ -70,6 +75,7 @@ fn build_training_result(
                 .or(Some(10)),
             feature_importance: model.feature_importance(),
         },
+        residual_quantiles.as_ref(),
     );
 
     TrainingResult {
@@ -80,6 +86,7 @@ fn build_training_result(
         best_hyperparameters,
         feature_importance: None,
         oob_error: None,
+        residual_quantiles,
     }
 }
 
@@ -96,6 +103,7 @@ fn train_rf_with_tuning(
         TrainedModel,
         Option<CrossValidationScores>,
         Option<HyperparameterSet>,
+        Option<ResidualQuantiles>,
     ),
     TrainingError,
 > {
@@ -113,6 +121,11 @@ fn train_rf_with_tuning(
                 ..
             } = grid_search_with_grid(features, targets, &folds, grid)?;
 
+            // Collect residuals from CV with best config
+            let residual_quantiles = collect_cv_residuals(&best_params, features, targets, &folds)
+                .ok()
+                .and_then(|r| ResidualQuantiles::from_residuals(&r));
+
             // Retrain on full data with best params
             let builder = ModelBuilder::new()
                 .n_trees(best_params.n_trees)
@@ -121,7 +134,12 @@ fn train_rf_with_tuning(
                 .max_features(best_params.max_features);
 
             let model = builder.train_rf(features, targets)?;
-            Ok((model, Some(best_cv_scores), Some(best_params)))
+            Ok((
+                model,
+                Some(best_cv_scores),
+                Some(best_params),
+                residual_quantiles,
+            ))
         } else {
             // Not enough data for CV — train with defaults
             let model = ModelBuilder::new()
@@ -129,7 +147,7 @@ fn train_rf_with_tuning(
                 .max_depth(10)
                 .min_samples_leaf(2)
                 .train_rf(features, targets)?;
-            Ok((model, None, None))
+            Ok((model, None, None, None))
         }
     } else {
         // No tuning — train RF with defaults
@@ -138,18 +156,22 @@ fn train_rf_with_tuning(
             .max_depth(10)
             .min_samples_leaf(2)
             .train_rf(features, targets)?;
-        Ok((model, None, None))
+        Ok((model, None, None, None))
     }
 }
 
-/// Run cross-validation for linear regression (no grid search).
-#[allow(clippy::similar_names)]
+/// Run cross-validation for linear regression and collect residuals.
+#[allow(
+    clippy::similar_names,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss
+)]
 fn compute_lr_cv_scores(
     features: &[super::features::PredictionFeatures],
     targets: &[f64],
     config: &MlConfig,
     logs: &[OccupancyLog],
-) -> Option<CrossValidationScores> {
+) -> Option<(CrossValidationScores, Option<ResidualQuantiles>)> {
     let sph = estimate_samples_per_hour(logs);
     #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
     let gap_samples = (config.cv_gap_hours.unsigned_abs() as usize) * sph;
@@ -160,6 +182,9 @@ fn compute_lr_cv_scores(
     let mut rmse_scores = Vec::with_capacity(folds.len());
     let mut mae_scores = Vec::with_capacity(folds.len());
     let mut r2_scores = Vec::with_capacity(folds.len());
+
+    let total_val: usize = folds.iter().map(|f| f.val_end - f.val_start).sum();
+    let mut residuals = Vec::with_capacity(total_val);
 
     for fold in &folds {
         let train_features = &features[fold.train_start..fold.train_end];
@@ -176,14 +201,26 @@ fn compute_lr_cv_scores(
         mae_scores.push(evaluation::mae(&predictions, val_targets).unwrap_or(f64::MAX));
         r2_scores
             .push(evaluation::r_squared(&predictions, val_targets).unwrap_or(f64::NEG_INFINITY));
+
+        // Collect residuals for quantile computation
+        for (i, (&actual, predicted)) in val_targets.iter().zip(predictions.iter()).enumerate() {
+            let feature = &val_features[i];
+            let weekday = feature.raw_weekday as u32;
+            let hour = feature.raw_hour as u32;
+            residuals.push((weekday, hour, actual - predicted));
+        }
     }
 
-    Some(CrossValidationScores {
+    let cv_scores = CrossValidationScores {
         mse: FoldScores::from_scores(mse_scores),
         rmse: FoldScores::from_scores(rmse_scores),
         mae: FoldScores::from_scores(mae_scores),
         r_squared: FoldScores::from_scores(r2_scores),
-    })
+    };
+
+    let quantiles = ResidualQuantiles::from_residuals(&residuals);
+
+    Some((cv_scores, quantiles))
 }
 
 pub async fn train_model(
@@ -231,15 +268,16 @@ pub fn train_model_sync(
     let (features, targets) = preparer.prepare(logs, baseline, schedule)?;
 
     let default_grid = HyperparameterSet::default_grid();
-    let (model, cv_scores, best_params) = match config.algorithm {
+    let (model, cv_scores, best_params, residual_quantiles) = match config.algorithm {
         MlAlgorithm::RandomForest => {
             train_rf_with_tuning(&features, &targets, config, logs, &default_grid)?
         }
         MlAlgorithm::LinearRegression => {
             let builder = ModelBuilder::new().ridge_lambda(1e-3);
             let model = builder.train_with_validation(&features, &targets, 0.2)?;
-            let cv_scores = compute_lr_cv_scores(&features, &targets, config, logs);
-            (model, cv_scores, None)
+            let (cv_scores, quantiles) = compute_lr_cv_scores(&features, &targets, config, logs)
+                .map_or((None, None), |(scores, q)| (Some(scores), q));
+            (model, cv_scores, None, quantiles)
         }
     };
 
@@ -249,6 +287,7 @@ pub fn train_model_sync(
         config,
         cv_scores,
         best_params,
+        residual_quantiles,
     ))
 }
 
@@ -316,7 +355,7 @@ mod tests {
         let (features, targets) = preparer.prepare(&logs, &baseline, &schedule)?;
 
         let small_grid = HyperparameterSet::small_grid();
-        let (model, cv_scores, best_params) =
+        let (model, cv_scores, best_params, residual_quantiles) =
             train_rf_with_tuning(&features, &targets, &config, &logs, &small_grid)?;
 
         assert!(model.training_samples >= 100);
@@ -325,7 +364,14 @@ mod tests {
         assert!(best_params.is_some());
 
         // Wrap in full TrainingResult to verify field integration
-        let result = build_training_result(model, &baseline, &config, cv_scores, best_params);
+        let result = build_training_result(
+            model,
+            &baseline,
+            &config,
+            cv_scores,
+            best_params,
+            residual_quantiles,
+        );
         assert!(result.cv_scores.is_some());
         assert!(result.best_hyperparameters.is_some());
         assert!(result.feature_importance.is_none());
@@ -449,17 +495,138 @@ mod tests {
             .prepare(&logs, &baseline, &schedule)
             .unwrap_or_default();
 
-        let scores = compute_lr_cv_scores(&features, &targets, &config, &logs);
-        assert!(scores.is_some());
+        let result = compute_lr_cv_scores(&features, &targets, &config, &logs);
+        assert!(result.is_some());
 
-        let scores = scores.unwrap_or_else(|| CrossValidationScores {
-            mse: FoldScores::from_scores(vec![]),
-            rmse: FoldScores::from_scores(vec![]),
-            mae: FoldScores::from_scores(vec![]),
-            r_squared: FoldScores::from_scores(vec![]),
+        let (scores, _quantiles) = result.unwrap_or_else(|| {
+            (
+                CrossValidationScores {
+                    mse: FoldScores::from_scores(vec![]),
+                    rmse: FoldScores::from_scores(vec![]),
+                    mae: FoldScores::from_scores(vec![]),
+                    r_squared: FoldScores::from_scores(vec![]),
+                },
+                None,
+            )
         });
         assert_eq!(scores.mse.per_fold.len(), 3);
         assert!(scores.mse.mean >= 0.0);
+    }
+
+    // ── Residual quantile integration ────────────────────────────────
+
+    #[test]
+    fn test_train_rf_with_tuning_produces_residual_quantiles() -> Result<()> {
+        let config = MlConfig {
+            min_samples_for_training: 100,
+            training_window_days: 28,
+            algorithm: MlAlgorithm::RandomForest,
+            tune_hyperparameters: true,
+            cv_folds: 3,
+            cv_gap_hours: 0,
+            ..Default::default()
+        };
+
+        let logs = create_test_logs(1000);
+        let baseline = create_test_baseline();
+        let schedule = GymSchedule::default();
+
+        let preparer = TrainingDataPreparer::new(config.clone());
+        let (features, targets) = preparer.prepare(&logs, &baseline, &schedule)?;
+
+        let small_grid = HyperparameterSet::small_grid();
+        let (_, _, _, residual_quantiles) =
+            train_rf_with_tuning(&features, &targets, &config, &logs, &small_grid)?;
+
+        assert!(
+            residual_quantiles.is_some(),
+            "RF with tuning should produce residual quantiles"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_train_rf_no_tuning_no_residual_quantiles() -> Result<()> {
+        let config = MlConfig {
+            min_samples_for_training: 100,
+            training_window_days: 28,
+            algorithm: MlAlgorithm::RandomForest,
+            tune_hyperparameters: false,
+            ..Default::default()
+        };
+
+        let logs = create_test_logs(1000);
+        let baseline = create_test_baseline();
+        let schedule = GymSchedule::default();
+
+        let preparer = TrainingDataPreparer::new(config.clone());
+        let (features, targets) = preparer.prepare(&logs, &baseline, &schedule)?;
+
+        let small_grid = HyperparameterSet::small_grid();
+        let (_, _, _, residual_quantiles) =
+            train_rf_with_tuning(&features, &targets, &config, &logs, &small_grid)?;
+
+        assert!(
+            residual_quantiles.is_none(),
+            "RF without tuning should have no residual quantiles"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_train_lr_with_cv_produces_residual_quantiles() {
+        let config = MlConfig {
+            min_samples_for_training: 100,
+            cv_folds: 3,
+            cv_gap_hours: 0,
+            ..Default::default()
+        };
+
+        let logs = create_test_logs(1000);
+        let baseline = create_test_baseline();
+        let schedule = GymSchedule::default();
+
+        let preparer = TrainingDataPreparer::new(config.clone());
+        let (features, targets) = preparer
+            .prepare(&logs, &baseline, &schedule)
+            .unwrap_or_default();
+
+        let result = compute_lr_cv_scores(&features, &targets, &config, &logs);
+        assert!(result.is_some(), "LR CV should succeed");
+
+        let (_scores, quantiles) = result.unwrap_or_else(|| unreachable!());
+        assert!(
+            quantiles.is_some(),
+            "LR with CV should produce residual quantiles"
+        );
+    }
+
+    #[test]
+    fn test_train_model_sync_insufficient_for_cv_no_quantiles() -> Result<()> {
+        let config = MlConfig {
+            min_samples_for_training: 5,
+            training_window_days: 28,
+            algorithm: MlAlgorithm::RandomForest,
+            tune_hyperparameters: true,
+            cv_folds: 4,
+            cv_gap_hours: 24,
+            ..Default::default()
+        };
+
+        let logs = create_test_logs(10);
+        let baseline = create_test_baseline();
+        let schedule = GymSchedule::default();
+
+        let result = train_model_sync(&logs, &baseline, &schedule, &config)?;
+
+        assert!(
+            result.residual_quantiles.is_none(),
+            "Insufficient data for CV should yield no residual quantiles"
+        );
+
+        Ok(())
     }
 
     #[test]

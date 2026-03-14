@@ -1,9 +1,12 @@
-use std::{fs, path::Path};
+use std::{collections::HashMap, fs, path::Path};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use super::features::SlotStats;
+use super::{
+    features::SlotStats,
+    residuals::{ResidualQuantiles, SlotQuantiles},
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PersistedModel {
@@ -15,6 +18,10 @@ pub struct PersistedModel {
     pub validation_mse: Option<f64>,
     pub slot_stats: Vec<SerializedSlotStats>,
     pub model_summary: ModelSummary,
+    /// Per-slot residual quantiles for calibrated confidence intervals (v3+).
+    pub residual_quantiles: Option<Vec<SerializedSlotQuantiles>>,
+    /// Global residual quantiles as (`q_low`, `q_high`, count) (v3+).
+    pub global_quantiles: Option<(f64, f64, usize)>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -24,6 +31,16 @@ pub struct SerializedSlotStats {
     pub mean: f64,
     pub std_dev: f64,
     pub sample_count: i64,
+}
+
+/// Serialized per-slot residual quantiles for persistence.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SerializedSlotQuantiles {
+    pub weekday: u32,
+    pub hour: u32,
+    pub q_low: f64,
+    pub q_high: f64,
+    pub count: usize,
 }
 
 impl From<((u32, u32), &SlotStats)> for SerializedSlotStats {
@@ -46,7 +63,7 @@ pub struct ModelSummary {
 }
 
 impl PersistedModel {
-    pub const CURRENT_VERSION: u32 = 2;
+    pub const CURRENT_VERSION: u32 = 3;
 
     pub fn new(
         training_window_days: i64,
@@ -55,7 +72,24 @@ impl PersistedModel {
         validation_mse: Option<f64>,
         slot_stats: Vec<SerializedSlotStats>,
         model_summary: ModelSummary,
+        quantiles: Option<&ResidualQuantiles>,
     ) -> Self {
+        let (residual_quantiles, global_quantiles) = quantiles.map_or((None, None), |q| {
+            let slots: Vec<SerializedSlotQuantiles> = q
+                .slot_quantiles_map()
+                .iter()
+                .map(|(&(weekday, hour), sq)| SerializedSlotQuantiles {
+                    weekday,
+                    hour,
+                    q_low: sq.q_low,
+                    q_high: sq.q_high,
+                    count: sq.count,
+                })
+                .collect();
+            let g = q.global_quantiles();
+            (Some(slots), Some((g.q_low, g.q_high, g.count)))
+        });
+
         Self {
             version: Self::CURRENT_VERSION,
             created_at: Utc::now(),
@@ -65,7 +99,37 @@ impl PersistedModel {
             validation_mse,
             slot_stats,
             model_summary,
+            residual_quantiles,
+            global_quantiles,
         }
+    }
+
+    /// Reconstruct `ResidualQuantiles` from the persisted data.
+    pub fn to_residual_quantiles(&self) -> Option<ResidualQuantiles> {
+        let serialized_slots = self.residual_quantiles.as_ref()?;
+        let (g_low, g_high, g_count) = self.global_quantiles?;
+
+        let slot_map: HashMap<(u32, u32), SlotQuantiles> = serialized_slots
+            .iter()
+            .map(|s| {
+                (
+                    (s.weekday, s.hour),
+                    SlotQuantiles {
+                        q_low: s.q_low,
+                        q_high: s.q_high,
+                        count: s.count,
+                    },
+                )
+            })
+            .collect();
+
+        let global = SlotQuantiles {
+            q_low: g_low,
+            q_high: g_high,
+            count: g_count,
+        };
+
+        Some(ResidualQuantiles::from_persisted(slot_map, global))
     }
 
     pub fn save(&self, path: &Path) -> Result<(), PersistenceError> {
@@ -185,6 +249,7 @@ mod tests {
                 max_depth: Some(10),
                 feature_importance: None,
             },
+            None,
         )
     }
 
@@ -271,5 +336,133 @@ mod tests {
         assert!(path.exists());
 
         Ok(())
+    }
+
+    // ── Step 6: residual quantile persistence tests ──────────────────
+
+    fn create_test_quantiles() -> ResidualQuantiles {
+        let residuals: Vec<(u32, u32, f64)> = (0..20)
+            .map(|i| (0, 10, -5.0 + f64::from(i) * 0.5))
+            .chain((0..15).map(|i| (3, 15, -8.0 + f64::from(i))))
+            .collect();
+
+        ResidualQuantiles::from_residuals(&residuals).unwrap_or_else(|| unreachable!())
+    }
+
+    fn create_test_model_with_quantiles() -> PersistedModel {
+        let quantiles = create_test_quantiles();
+        PersistedModel::new(
+            28,
+            1000,
+            5.5,
+            Some(6.2),
+            vec![SerializedSlotStats {
+                weekday: 0,
+                hour: 10,
+                mean: 45.0,
+                std_dev: 12.0,
+                sample_count: 50,
+            }],
+            ModelSummary {
+                model_type: "RandomForest".to_string(),
+                max_depth: Some(10),
+                feature_importance: None,
+            },
+            Some(&quantiles),
+        )
+    }
+
+    #[test]
+    fn test_persisted_model_version_bumped() {
+        assert_eq!(PersistedModel::CURRENT_VERSION, 3);
+    }
+
+    #[test]
+    fn test_persisted_model_v3_roundtrip() -> Result<()> {
+        let dir = tempdir()?;
+        let path = dir.path().join("model_v3.bin");
+
+        let model = create_test_model_with_quantiles();
+        assert!(model.residual_quantiles.is_some());
+        assert!(model.global_quantiles.is_some());
+
+        model.save(&path)?;
+        let loaded = PersistedModel::load(&path)?;
+
+        assert_eq!(loaded.version, 3);
+        assert!(loaded.residual_quantiles.is_some());
+        assert!(loaded.global_quantiles.is_some());
+
+        let slots = loaded.residual_quantiles.unwrap_or_else(|| unreachable!());
+        assert_eq!(slots.len(), 2); // two distinct (weekday, hour) slots
+
+        let (g_low, g_high, g_count) = loaded.global_quantiles.unwrap_or_else(|| unreachable!());
+        assert!(g_low < g_high);
+        assert_eq!(g_count, 35); // 20 + 15
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_persisted_model_v3_without_quantiles() -> Result<()> {
+        let dir = tempdir()?;
+        let path = dir.path().join("model_v3_no_q.bin");
+
+        let model = create_test_model(); // None quantiles
+        assert!(model.residual_quantiles.is_none());
+        assert!(model.global_quantiles.is_none());
+
+        model.save(&path)?;
+        let loaded = PersistedModel::load(&path)?;
+
+        assert_eq!(loaded.version, 3);
+        assert!(loaded.residual_quantiles.is_none());
+        assert!(loaded.global_quantiles.is_none());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_to_residual_quantiles_roundtrip() {
+        let original = create_test_quantiles();
+        let model = create_test_model_with_quantiles();
+
+        let restored = model.to_residual_quantiles();
+        assert!(restored.is_some());
+
+        let restored = restored.unwrap_or_else(|| unreachable!());
+
+        // Verify the restored quantiles produce the same confidence interval
+        let (orig_low, orig_high, orig_score) =
+            original.compute_confidence_interval(50.0, 0, 10, 1);
+        let (rest_low, rest_high, rest_score) =
+            restored.compute_confidence_interval(50.0, 0, 10, 1);
+
+        assert_relative_eq!(orig_low, rest_low, epsilon = 1e-10);
+        assert_relative_eq!(orig_high, rest_high, epsilon = 1e-10);
+        assert_relative_eq!(orig_score, rest_score, epsilon = 1e-10);
+    }
+
+    #[test]
+    fn test_to_residual_quantiles_none_when_missing() {
+        let model = create_test_model();
+        assert!(model.to_residual_quantiles().is_none());
+    }
+
+    #[test]
+    fn test_serialized_slot_quantiles() {
+        let sq = SerializedSlotQuantiles {
+            weekday: 2,
+            hour: 14,
+            q_low: -5.3,
+            q_high: 8.7,
+            count: 25,
+        };
+
+        assert_eq!(sq.weekday, 2);
+        assert_eq!(sq.hour, 14);
+        assert_relative_eq!(sq.q_low, -5.3);
+        assert_relative_eq!(sq.q_high, 8.7);
+        assert_eq!(sq.count, 25);
     }
 }
