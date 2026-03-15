@@ -193,10 +193,7 @@ impl FeatureExtractor {
             })
             .unwrap_or((50.0, 15.0));
 
-        let (recent_avg_1h, recent_avg_3h, recent_trend) = momentum::extract_momentum(recent_data);
-
-        let (day_avg_so_far, prev_day_avg) =
-            momentum::extract_day_features(recent_data, &local_time);
+        let m = momentum::extract_all_momentum(recent_data, &local_time);
 
         let is_weekend = if weekday >= 5 { 1.0 } else { 0.0 };
         let is_holiday = if is_bavarian_holiday(local_time.date_naive()) {
@@ -219,8 +216,6 @@ impl FeatureExtractor {
             f64::from(close_hour - current_hour)
         };
 
-        let occupancy_volatility = momentum::extract_volatility(recent_data);
-        let recent_avg_6h = momentum::extract_avg_6h(recent_data);
         let prev_week_same_slot = historical_avg;
 
         PredictionFeatures {
@@ -230,11 +225,11 @@ impl FeatureExtractor {
             weekday_cos,
             historical_avg,
             historical_std,
-            recent_avg_1h,
-            recent_avg_3h,
-            recent_trend,
-            day_avg_so_far,
-            prev_day_avg,
+            recent_avg_1h: m.recent_avg_1h,
+            recent_avg_3h: m.recent_avg_3h,
+            recent_trend: m.recent_trend,
+            day_avg_so_far: m.day_avg_so_far,
+            prev_day_avg: m.prev_day_avg,
             is_weekend,
             is_holiday,
             week_of_year_sin,
@@ -243,8 +238,8 @@ impl FeatureExtractor {
             raw_hour,
             raw_weekday,
             time_to_close,
-            occupancy_volatility,
-            recent_avg_6h,
+            occupancy_volatility: m.occupancy_volatility,
+            recent_avg_6h: m.recent_avg_6h,
             prev_week_same_slot,
         }
     }
