@@ -49,11 +49,9 @@ impl Database {
 
     #[tracing::instrument(skip_all, fields(db.operation = "insert", %timestamp))]
     pub async fn insert_record(&self, timestamp: DateTime<Utc>, percentage: f64) -> Result<i64> {
-        let timestamp_str = timestamp.to_rfc3339();
-
         let result = sqlx::query_scalar!(
             "INSERT INTO occupancy_logs (timestamp, percentage) VALUES ($1, $2) RETURNING id",
-            timestamp_str,
+            timestamp,
             percentage
         )
         .fetch_one(&self.pool)
@@ -76,7 +74,7 @@ impl Database {
             r#"
             SELECT
                 id as "id!",
-                timestamp::timestamptz as "timestamp!",
+                timestamp as "timestamp!",
                 percentage as "percentage!"
             FROM occupancy_logs
             ORDER BY timestamp DESC
@@ -96,22 +94,19 @@ impl Database {
         start: DateTime<Utc>,
         end: DateTime<Utc>,
     ) -> Result<Vec<OccupancyLog>> {
-        let start_str = start.to_rfc3339();
-        let end_str = end.to_rfc3339();
-
         let logs = sqlx::query_as!(
             OccupancyLog,
             r#"
             SELECT
                 id as "id!",
-                timestamp::timestamptz as "timestamp!",
+                timestamp as "timestamp!",
                 percentage as "percentage!"
             FROM occupancy_logs
             WHERE timestamp >= $1 AND timestamp <= $2
             ORDER BY timestamp ASC
             "#,
-            start_str,
-            end_str
+            start,
+            end
         )
         .fetch_all(&self.pool)
         .await
@@ -121,20 +116,18 @@ impl Database {
     }
 
     async fn get_history_from(&self, cutoff: DateTime<Utc>) -> Result<Vec<OccupancyLog>> {
-        let cutoff_str = cutoff.to_rfc3339();
-
         let logs = sqlx::query_as!(
             OccupancyLog,
             r#"
             SELECT
                 id as "id!",
-                timestamp::timestamptz as "timestamp!",
+                timestamp as "timestamp!",
                 percentage as "percentage!"
             FROM occupancy_logs
             WHERE timestamp >= $1
             ORDER BY timestamp ASC
             "#,
-            cutoff_str
+            cutoff
         )
         .fetch_all(&self.pool)
         .await
@@ -149,9 +142,6 @@ impl Database {
         start: DateTime<Utc>,
         end: DateTime<Utc>,
     ) -> Result<Vec<HourlyAverage>> {
-        let start_str = start.to_rfc3339();
-        let end_str = end.to_rfc3339();
-
         let logs = sqlx::query_as!(
             HourlyAverage,
             r#"
@@ -162,8 +152,8 @@ impl Database {
                 COUNT(*) as "sample_count!: i64"
             FROM (
                 SELECT
-                    (EXTRACT(ISODOW FROM timestamp::timestamptz)::INTEGER - 1) as weekday,
-                    EXTRACT(HOUR FROM timestamp::timestamptz)::INTEGER as hour,
+                    (EXTRACT(ISODOW FROM timestamp)::INTEGER - 1) as weekday,
+                    EXTRACT(HOUR FROM timestamp)::INTEGER as hour,
                     percentage
                 FROM occupancy_logs
                 WHERE timestamp >= $1 AND timestamp < $2
@@ -171,8 +161,8 @@ impl Database {
             GROUP BY weekday, hour
             ORDER BY weekday, hour
             "#,
-            start_str,
-            end_str
+            start,
+            end
         )
         .fetch_all(&self.pool)
         .await
@@ -207,7 +197,7 @@ impl Database {
             r#"
             SELECT
                 id as "id!",
-                timestamp::timestamptz as "timestamp!",
+                timestamp as "timestamp!",
                 percentage as "percentage!"
             FROM occupancy_logs
             ORDER BY timestamp ASC
@@ -290,10 +280,9 @@ impl Database {
             .context("failed to begin transaction")?;
 
         for (timestamp, percentage) in records {
-            let ts = timestamp.to_rfc3339();
             sqlx::query!(
                 "INSERT INTO occupancy_logs (timestamp, percentage) VALUES ($1, $2)",
-                ts,
+                timestamp,
                 percentage
             )
             .execute(&mut *tx)
