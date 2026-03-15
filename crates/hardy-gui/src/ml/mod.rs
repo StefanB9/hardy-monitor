@@ -159,6 +159,12 @@ impl OccupancyPredictor {
         self.feature_extractor.update_historical_stats(baseline);
     }
 
+    /// Generate predictions for each open hour up to the configured horizon.
+    ///
+    /// Uses an autoregressive loop: each prediction is injected into a working
+    /// copy of `recent_data` so that lag features (rolling averages, trend,
+    /// volatility) evolve across the forecast horizon instead of staying frozen
+    /// at the last observed value.
     pub fn predict(
         &self,
         baseline: &[HourlyAverage],
@@ -167,6 +173,7 @@ impl OccupancyPredictor {
     ) -> Vec<PredictionWithConfidence> {
         let now = clock.now_utc();
         let mut predictions = Vec::new();
+        let mut working_buffer = self.recent_data.clone();
 
         for hours_ahead in 1..=self.config.prediction_horizon_hours {
             let target_time = now + chrono::Duration::hours(hours_ahead);
@@ -176,7 +183,21 @@ impl OccupancyPredictor {
                 continue;
             }
 
-            let prediction = self.predict_single(target_time, hours_ahead, baseline, schedule);
+            let prediction = self.predict_single(
+                target_time,
+                hours_ahead,
+                baseline,
+                schedule,
+                &working_buffer,
+            );
+
+            // Inject predicted value so subsequent iterations see evolving lag
+            // features (mirrors the sliding window used during training).
+            while working_buffer.len() >= 360 {
+                working_buffer.pop_front();
+            }
+            working_buffer.push_back((target_time, prediction.predicted_value));
+
             predictions.push(prediction);
         }
 
@@ -189,9 +210,11 @@ impl OccupancyPredictor {
         hours_ahead: i64,
         baseline: &[HourlyAverage],
         schedule: &GymSchedule,
+        recent_data: &VecDeque<(DateTime<Utc>, f64)>,
     ) -> PredictionWithConfidence {
         if self.can_use_ml()
-            && let Some(pred) = self.ml_predict(target_time, hours_ahead, baseline, schedule)
+            && let Some(pred) =
+                self.ml_predict(target_time, hours_ahead, baseline, schedule, recent_data)
         {
             return pred;
         }
@@ -205,13 +228,14 @@ impl OccupancyPredictor {
         hours_ahead: i64,
         baseline: &[HourlyAverage],
         schedule: &GymSchedule,
+        recent_data: &VecDeque<(DateTime<Utc>, f64)>,
     ) -> Option<PredictionWithConfidence> {
         let model = self.model.as_ref()?;
 
         let features = self.feature_extractor.extract(
             target_time,
             hours_ahead,
-            &self.recent_data,
+            recent_data,
             baseline,
             schedule,
         );
@@ -526,7 +550,8 @@ mod tests {
             sample_count: 100,
         }];
 
-        let pred = predictor.ml_predict(target, 1, &baseline, &schedule);
+        let recent_data = VecDeque::new();
+        let pred = predictor.ml_predict(target, 1, &baseline, &schedule, &recent_data);
         assert!(pred.is_some());
         let p = pred.unwrap_or_else(|| unreachable!());
 
@@ -556,7 +581,8 @@ mod tests {
             sample_count: 100,
         }];
 
-        let pred = predictor.ml_predict(target, 1, &baseline, &schedule);
+        let recent_data = VecDeque::new();
+        let pred = predictor.ml_predict(target, 1, &baseline, &schedule, &recent_data);
         assert!(pred.is_some());
         let p = pred.unwrap_or_else(|| unreachable!());
 
@@ -588,7 +614,8 @@ mod tests {
             sample_count: 100,
         }];
 
-        let pred = predictor.ml_predict(target, 1, &baseline, &schedule);
+        let recent_data = VecDeque::new();
+        let pred = predictor.ml_predict(target, 1, &baseline, &schedule, &recent_data);
         assert!(pred.is_some());
         let p = pred.unwrap_or_else(|| unreachable!());
 
@@ -618,7 +645,8 @@ mod tests {
             sample_count: 100,
         }];
 
-        let pred = predictor.ml_predict(target, 1, &baseline, &schedule);
+        let recent_data = VecDeque::new();
+        let pred = predictor.ml_predict(target, 1, &baseline, &schedule, &recent_data);
         assert!(pred.is_some());
         let p = pred.unwrap_or_else(|| unreachable!());
 
@@ -769,5 +797,228 @@ mod tests {
         assert!(info.cv_scores.is_none());
         assert!(info.best_hyperparameters.is_none());
         assert!(info.validation_mse.is_none());
+    }
+
+    // ── Autoregressive prediction tests ─────────────────────────────
+
+    /// Helper: create a predictor with a trained LR model and a populated
+    /// `recent_data` buffer showing a clear upward trend.
+    fn predictor_with_trending_data() -> Result<OccupancyPredictor> {
+        let mut predictor = predictor_with_lr_model()?;
+
+        // Monday 2024-06-17 12:00 UTC — populate 2 hours of minute-level data
+        // with a clear upward trend (20% → 60%).
+        let base = Utc.with_ymd_and_hms(2024, 6, 17, 10, 0, 0).unwrap();
+        #[allow(clippy::cast_precision_loss)]
+        for i in 0..120 {
+            let ts = base + chrono::Duration::minutes(i);
+            let pct = 20.0 + (i as f64 / 120.0) * 40.0;
+            predictor.add_observation(ts, pct);
+        }
+
+        // Provide baseline so historical features are populated
+        let mut baseline = Vec::with_capacity(168);
+        for wd in 0..7 {
+            for h in 0..24 {
+                baseline.push(HourlyAverage {
+                    weekday: wd,
+                    hour: h,
+                    avg_percentage: 40.0 + f64::from(h),
+                    sample_count: 20,
+                });
+            }
+        }
+        predictor.update_baseline(&baseline);
+
+        Ok(predictor)
+    }
+
+    #[test]
+    fn test_predict_autoregressive_features_differ_across_hours() -> Result<()> {
+        let predictor = predictor_with_trending_data()?;
+
+        // Clock at 12:00, observations end at 12:00, predict 6 hours ahead
+        let clock = MockClock::new(Utc.with_ymd_and_hms(2024, 6, 17, 12, 0, 0).unwrap());
+        let schedule = test_schedule();
+        let baseline: Vec<HourlyAverage> = (0..7)
+            .flat_map(|wd| {
+                (0..24).map(move |h| HourlyAverage {
+                    weekday: wd,
+                    hour: h,
+                    avg_percentage: 40.0 + f64::from(h),
+                    sample_count: 20,
+                })
+            })
+            .collect();
+
+        let predictions = predictor.predict(&baseline, &schedule, &clock);
+
+        // With a 6-hour horizon on a weekday at 12:00 (open until 23:00),
+        // we should get predictions for hours 13-18 (6 predictions).
+        assert!(
+            predictions.len() >= 2,
+            "Expected at least 2 predictions, got {}",
+            predictions.len()
+        );
+
+        // The key assertion: predictions should NOT all be identical.
+        // With frozen lag features (the bug), a linear model would produce
+        // very similar values since only cyclical features change.
+        let values: Vec<f64> = predictions.iter().map(|p| p.predicted_value).collect();
+        let all_same = values.windows(2).all(|w| (w[0] - w[1]).abs() < 1e-10);
+        assert!(
+            !all_same,
+            "Predictions should differ across hours due to autoregressive feedback, but all \
+             values were identical: {values:?}"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_predict_working_buffer_does_not_mutate_recent_data() -> Result<()> {
+        let predictor = predictor_with_trending_data()?;
+        let original_len = predictor.recent_data.len();
+        let original_last = predictor.recent_data.back().copied();
+
+        let clock = MockClock::new(Utc.with_ymd_and_hms(2024, 6, 17, 12, 0, 0).unwrap());
+        let schedule = test_schedule();
+        let baseline: Vec<HourlyAverage> = (0..7)
+            .flat_map(|wd| {
+                (0..24).map(move |h| HourlyAverage {
+                    weekday: wd,
+                    hour: h,
+                    avg_percentage: 40.0 + f64::from(h),
+                    sample_count: 20,
+                })
+            })
+            .collect();
+
+        let _predictions = predictor.predict(&baseline, &schedule, &clock);
+
+        // recent_data must be unchanged after predict()
+        assert_eq!(predictor.recent_data.len(), original_len);
+        assert_eq!(predictor.recent_data.back().copied(), original_last);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_predict_empty_recent_data_still_works() -> Result<()> {
+        let predictor = predictor_with_lr_model()?;
+        // No observations added — recent_data is empty
+
+        let clock = MockClock::new(Utc.with_ymd_and_hms(2024, 6, 17, 12, 0, 0).unwrap());
+        let schedule = test_schedule();
+        let baseline: Vec<HourlyAverage> = (0..7)
+            .flat_map(|wd| {
+                (0..24).map(move |h| HourlyAverage {
+                    weekday: wd,
+                    hour: h,
+                    avg_percentage: 40.0 + f64::from(h),
+                    sample_count: 20,
+                })
+            })
+            .collect();
+
+        let predictions = predictor.predict(&baseline, &schedule, &clock);
+
+        // Should still produce predictions (from ML with default features)
+        assert!(
+            !predictions.is_empty(),
+            "Predictions should be produced even with empty recent_data"
+        );
+        for p in &predictions {
+            assert!(
+                (0.0..=100.0).contains(&p.predicted_value),
+                "Predicted value {} out of range",
+                p.predicted_value
+            );
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_predict_single_different_recent_data_different_results() -> Result<()> {
+        let predictor = predictor_with_lr_model()?;
+
+        let target = Utc.with_ymd_and_hms(2024, 6, 17, 14, 0, 0).unwrap();
+        let schedule = test_schedule();
+        let baseline = vec![HourlyAverage {
+            weekday: 0,
+            hour: 14,
+            avg_percentage: 50.0,
+            sample_count: 20,
+        }];
+
+        // Buffer with high occupancy values
+        let now = Utc.with_ymd_and_hms(2024, 6, 17, 13, 0, 0).unwrap();
+        let high_buffer: VecDeque<(DateTime<Utc>, f64)> = (0..60)
+            .map(|i| (now - chrono::Duration::minutes(i), 85.0))
+            .collect();
+
+        // Buffer with low occupancy values
+        let low_buffer: VecDeque<(DateTime<Utc>, f64)> = (0..60)
+            .map(|i| (now - chrono::Duration::minutes(i), 15.0))
+            .collect();
+
+        let pred_high = predictor.predict_single(target, 1, &baseline, &schedule, &high_buffer);
+        let pred_low = predictor.predict_single(target, 1, &baseline, &schedule, &low_buffer);
+
+        assert!(
+            (pred_high.predicted_value - pred_low.predicted_value).abs() > 1e-10,
+            "Different recent_data should produce different predictions, got high={} low={}",
+            pred_high.predicted_value,
+            pred_low.predicted_value
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_predict_all_values_in_valid_range() -> Result<()> {
+        let predictor = predictor_with_trending_data()?;
+
+        let clock = MockClock::new(Utc.with_ymd_and_hms(2024, 6, 17, 12, 0, 0).unwrap());
+        let schedule = test_schedule();
+        let baseline: Vec<HourlyAverage> = (0..7)
+            .flat_map(|wd| {
+                (0..24).map(move |h| HourlyAverage {
+                    weekday: wd,
+                    hour: h,
+                    avg_percentage: 40.0 + f64::from(h),
+                    sample_count: 20,
+                })
+            })
+            .collect();
+
+        let predictions = predictor.predict(&baseline, &schedule, &clock);
+
+        for p in &predictions {
+            assert!(
+                (0.0..=100.0).contains(&p.predicted_value),
+                "predicted_value {} out of [0, 100]",
+                p.predicted_value
+            );
+            assert!(
+                (0.0..=100.0).contains(&p.confidence_low),
+                "confidence_low {} out of [0, 100]",
+                p.confidence_low
+            );
+            assert!(
+                (0.0..=100.0).contains(&p.confidence_high),
+                "confidence_high {} out of [0, 100]",
+                p.confidence_high
+            );
+            assert!(
+                p.confidence_low <= p.confidence_high,
+                "confidence_low {} > confidence_high {}",
+                p.confidence_low,
+                p.confidence_high
+            );
+        }
+
+        Ok(())
     }
 }
