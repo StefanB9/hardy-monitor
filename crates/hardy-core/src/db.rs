@@ -302,6 +302,44 @@ impl Database {
         Ok(())
     }
 
+    /// Delete multiple records by ID in a single query.
+    #[tracing::instrument(skip_all, fields(db.operation = "batch_delete", count = ids.len()))]
+    pub async fn batch_delete(&self, ids: &[i64]) -> Result<u64> {
+        let result = sqlx::query!("DELETE FROM occupancy_logs WHERE id = ANY($1)", ids)
+            .execute(&self.pool)
+            .await
+            .context("Failed to batch delete records")?;
+        Ok(result.rows_affected())
+    }
+
+    /// Update percentage for multiple records in a single transaction.
+    #[tracing::instrument(skip_all, fields(db.operation = "batch_update_percentage", count = updates.len()))]
+    pub async fn batch_update_percentage(&self, updates: &[(i64, f64)]) -> Result<u64> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .context("failed to begin batch update transaction")?;
+
+        let mut total = 0u64;
+        for &(id, percentage) in updates {
+            let result = sqlx::query!(
+                "UPDATE occupancy_logs SET percentage = $1 WHERE id = $2",
+                percentage,
+                id
+            )
+            .execute(&mut *tx)
+            .await
+            .context("Failed to update percentage in batch")?;
+            total += result.rows_affected();
+        }
+
+        tx.commit()
+            .await
+            .context("failed to commit batch update")?;
+        Ok(total)
+    }
+
     pub async fn close(self) {
         self.pool.close().await;
     }
