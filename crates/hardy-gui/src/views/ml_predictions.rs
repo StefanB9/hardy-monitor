@@ -25,6 +25,7 @@ pub struct MLPredictionsProps<'a> {
     pub training_info: Option<&'a TrainingInfo>,
     pub history: &'a [OccupancyLog],
     pub show_model_details: bool,
+    pub retrain_interval_hours: i64,
 }
 
 // ── Prediction Highlights extraction ──────────────────────────────────
@@ -127,6 +128,50 @@ pub fn view(props: MLPredictionsProps<'_>) -> Element<'_, Message> {
         .into()
 }
 
+/// Small styled action button.
+fn build_action_button(label: &str, message: Message) -> Element<'_, Message> {
+    button(text(label).size(11).color(style::TEXT_BRIGHT))
+        .on_press(message)
+        .padding([4, 10])
+        .style(|_theme, status| {
+            let bg = match status {
+                button::Status::Hovered => style::ACCENT_BLUE,
+                _ => style::STROKE_DIM,
+            };
+            button::Style {
+                background: Some(iced::Background::Color(bg)),
+                border: iced::Border {
+                    radius: 4.0.into(),
+                    ..Default::default()
+                },
+                ..Default::default()
+            }
+        })
+        .into()
+}
+
+/// Small cancel button with red-ish styling.
+fn build_cancel_button() -> Element<'static, Message> {
+    button(text("\u{2715}").size(11).color(style::TEXT_BRIGHT))
+        .on_press(Message::CancelTrainingRequested)
+        .padding([4, 8])
+        .style(|_theme, status| {
+            let bg = match status {
+                button::Status::Hovered => style::ACCENT_RED,
+                _ => style::STROKE_DIM,
+            };
+            button::Style {
+                background: Some(iced::Background::Color(bg)),
+                border: iced::Border {
+                    radius: 4.0.into(),
+                    ..Default::default()
+                },
+                ..Default::default()
+            }
+        })
+        .into()
+}
+
 #[allow(clippy::too_many_lines)]
 fn build_status_card<'a>(props: &MLPredictionsProps<'a>) -> Element<'a, Message> {
     let trained_str = props.ml_last_trained.map_or_else(
@@ -145,8 +190,14 @@ fn build_status_card<'a>(props: &MLPredictionsProps<'a>) -> Element<'a, Message>
         // State 1: no model, not training
         (false, false) => {
             col = col.push(
-                row![text("Collecting data...").size(12).color(style::TEXT_MUTED)]
-                    .align_y(Alignment::Center),
+                row![
+                    text("No model loaded").size(12).color(style::TEXT_MUTED),
+                    Space::new().width(Length::Fill),
+                    build_action_button("Load Model", Message::LoadModelRequested),
+                    Space::new().width(8),
+                    build_action_button("Train Model", Message::TrainModelRequested),
+                ]
+                .align_y(Alignment::Center),
             );
         }
         // State 2: no model, training
@@ -155,7 +206,9 @@ fn build_status_card<'a>(props: &MLPredictionsProps<'a>) -> Element<'a, Message>
                 row![
                     text("Training initial model...")
                         .size(12)
-                        .color(style::ACCENT_ORANGE)
+                        .color(style::ACCENT_ORANGE),
+                    Space::new().width(Length::Fill),
+                    build_cancel_button(),
                 ]
                 .align_y(Alignment::Center),
             );
@@ -175,23 +228,40 @@ fn build_status_card<'a>(props: &MLPredictionsProps<'a>) -> Element<'a, Message>
             // R² badge
             if let Some(cv) = props.training_info.and_then(|ti| ti.cv_scores.as_ref()) {
                 let r2_color = r_squared_color(cv.r_squared_mean);
-                status_row = status_row
-                    .push(
-                        text(format!("R\u{00b2} {:.3}", cv.r_squared_mean))
-                            .size(12)
-                            .color(r2_color),
-                    )
-                    .push(Space::new().width(Length::Fill));
-            } else {
-                status_row = status_row.push(Space::new().width(Length::Fill));
+                status_row = status_row.push(
+                    text(format!("R\u{00b2} {:.3}", cv.r_squared_mean))
+                        .size(12)
+                        .color(r2_color),
+                );
             }
 
+            status_row = status_row.push(Space::new().width(Length::Fill));
+
+            // Trained age display
             status_row = status_row
                 .push(text("Trained:").size(12).color(style::TEXT_MUTED))
                 .push(Space::new().width(6))
-                .push(text(trained_str).size(12).color(style::TEXT_BRIGHT));
+                .push(text(trained_str.clone()).size(12).color(style::TEXT_BRIGHT))
+                .push(Space::new().width(12))
+                .push(build_action_button("Retrain", Message::TrainModelRequested));
 
             col = col.push(status_row);
+
+            // Staleness hint
+            if let Some(trained_at) = props.ml_last_trained {
+                let age_hours = (props.now - trained_at).num_hours();
+                if age_hours >= props.retrain_interval_hours {
+                    col = col.push(Space::new().height(4));
+                    col = col.push(
+                        text(format!(
+                            "Trained {age_hours}h ago \u{2014} consider retraining for improved \
+                             accuracy"
+                        ))
+                        .size(11)
+                        .color(style::ACCENT_ORANGE),
+                    );
+                }
+            }
         }
         // State 4: has model, retraining
         (true, true) => {
@@ -207,16 +277,14 @@ fn build_status_card<'a>(props: &MLPredictionsProps<'a>) -> Element<'a, Message>
 
             if let Some(cv) = props.training_info.and_then(|ti| ti.cv_scores.as_ref()) {
                 let r2_color = r_squared_color(cv.r_squared_mean);
-                status_row = status_row
-                    .push(
-                        text(format!("R\u{00b2} {:.3}", cv.r_squared_mean))
-                            .size(12)
-                            .color(r2_color),
-                    )
-                    .push(Space::new().width(Length::Fill));
-            } else {
-                status_row = status_row.push(Space::new().width(Length::Fill));
+                status_row = status_row.push(
+                    text(format!("R\u{00b2} {:.3}", cv.r_squared_mean))
+                        .size(12)
+                        .color(r2_color),
+                );
             }
+
+            status_row = status_row.push(Space::new().width(Length::Fill));
 
             status_row = status_row
                 .push(text("Trained:").size(12).color(style::TEXT_MUTED))
@@ -232,6 +300,8 @@ fn build_status_card<'a>(props: &MLPredictionsProps<'a>) -> Element<'a, Message>
                     text("Showing previous predictions")
                         .size(11)
                         .color(style::TEXT_MUTED),
+                    Space::new().width(Length::Fill),
+                    build_cancel_button(),
                 ]
                 .align_y(Alignment::Center),
             );
