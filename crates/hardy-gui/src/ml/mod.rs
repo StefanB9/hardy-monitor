@@ -256,14 +256,14 @@ impl OccupancyPredictor {
             }
         };
 
-        Some(PredictionWithConfidence {
-            timestamp: normalize_timestamp(target_time),
-            predicted_value: predicted_value.clamp(0.0, 100.0),
+        Some(PredictionWithConfidence::new(
+            normalize_timestamp(target_time),
+            predicted_value,
             confidence_low,
             confidence_high,
             confidence_score,
             method,
-        })
+        ))
     }
 
     fn fallback_predict(
@@ -289,14 +289,14 @@ impl OccupancyPredictor {
                 )
             });
 
-        PredictionWithConfidence {
-            timestamp: normalize_timestamp(target_time),
+        PredictionWithConfidence::new(
+            normalize_timestamp(target_time),
             predicted_value,
             confidence_low,
             confidence_high,
-            confidence_score: 0.5,
-            method: PredictionMethod::HistoricalAverage,
-        }
+            0.5,
+            PredictionMethod::HistoricalAverage,
+        )
     }
 
     /// Compute confidence interval, delegating to residual quantiles when
@@ -758,6 +758,7 @@ mod tests {
                 mse_mean: 17.72,
                 mse_std: 2.95,
             }),
+            None,
         );
 
         let info = TrainingInfo::from_persisted(&persisted);
@@ -787,6 +788,7 @@ mod tests {
                 max_depth: None,
                 feature_importance: None,
             },
+            None,
             None,
             None,
             None,

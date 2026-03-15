@@ -1,10 +1,12 @@
 use std::{collections::HashMap, fs, path::Path};
 
 use chrono::{DateTime, Utc};
+use ndarray::Array1;
 use serde::{Deserialize, Serialize};
 
 use super::{
     features::SlotStats,
+    model::{self, SerializedModelWeights},
     residuals::{ResidualQuantiles, SlotQuantiles},
 };
 
@@ -36,6 +38,8 @@ pub struct PersistedModel {
     pub best_hyperparameters: Option<SerializedHyperparameters>,
     /// Cross-validation scores (v4+).
     pub cv_scores: Option<SerializedCvScores>,
+    /// Serialized model weights for full model reconstruction (v5+).
+    pub model_weights: Option<SerializedModelWeights>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -99,7 +103,7 @@ pub struct ModelSummary {
 }
 
 impl PersistedModel {
-    pub const CURRENT_VERSION: u32 = 4;
+    pub const CURRENT_VERSION: u32 = 5;
 
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -112,6 +116,7 @@ impl PersistedModel {
         quantiles: Option<&ResidualQuantiles>,
         best_hyperparameters: Option<SerializedHyperparameters>,
         cv_scores: Option<SerializedCvScores>,
+        model_weights: Option<SerializedModelWeights>,
     ) -> Self {
         let (residual_quantiles, global_quantiles) = quantiles.map_or((None, None), |q| {
             let slots: Vec<SerializedSlotQuantiles> = q
@@ -142,6 +147,7 @@ impl PersistedModel {
             global_quantiles,
             best_hyperparameters,
             cv_scores,
+            model_weights,
         }
     }
 
@@ -232,6 +238,45 @@ impl PersistedModel {
             self.created_at.format("%Y-%m-%d %H:%M UTC")
         )
     }
+
+    /// Reconstruct a functional `TrainedModel` from the persisted weights.
+    ///
+    /// Returns an error if no weights are stored or if deserialization fails.
+    pub fn to_trained_model(&self) -> Result<model::TrainedModel, PersistenceError> {
+        let weights = self.model_weights.as_ref().ok_or_else(|| {
+            PersistenceError::ModelWeightsInvalid("No model weights in persisted data".to_string())
+        })?;
+
+        let backend = match weights {
+            SerializedModelWeights::LinearRegression {
+                coefficients,
+                intercept,
+            } => {
+                let lr = model::linear::LinearRegressionModel::from_coefficients(
+                    Array1::from_vec(coefficients.clone()),
+                    *intercept,
+                );
+                model::ModelBackend::LinearRegression(lr)
+            }
+            SerializedModelWeights::RandomForest(bytes) => {
+                let n_trees = self
+                    .best_hyperparameters
+                    .as_ref()
+                    .map_or(100, |hp| hp.n_trees);
+                let rf = model::random_forest::RandomForestModel::from_serialized(bytes, n_trees)
+                    .map_err(|e| PersistenceError::ModelWeightsInvalid(e.to_string()))?;
+                model::ModelBackend::RandomForest(rf)
+            }
+        };
+
+        Ok(model::TrainedModel::new(
+            backend,
+            self.training_mse,
+            self.validation_mse,
+            self.training_samples,
+            self.created_at,
+        ))
+    }
 }
 
 /// Decompress zstd data or return raw bytes for backward compatibility.
@@ -251,6 +296,7 @@ pub enum PersistenceError {
     SerializeError(String),
     DeserializeError(String),
     VersionMismatch { expected: u32, found: u32 },
+    ModelWeightsInvalid(String),
 }
 
 impl std::fmt::Display for PersistenceError {
@@ -265,6 +311,9 @@ impl std::fmt::Display for PersistenceError {
                     f,
                     "Model version mismatch: expected v{expected}, found v{found}",
                 )
+            }
+            PersistenceError::ModelWeightsInvalid(e) => {
+                write!(f, "Invalid model weights: {e}")
             }
         }
     }
@@ -307,6 +356,7 @@ mod tests {
                 max_depth: Some(10),
                 feature_importance: None,
             },
+            None,
             None,
             None,
             None,
@@ -453,12 +503,14 @@ mod tests {
             Some(&quantiles),
             None,
             None,
+            None,
         )
     }
 
     #[test]
-    fn test_persisted_model_version_bumped() {
-        assert_eq!(PersistedModel::CURRENT_VERSION, 4);
+    fn test_persisted_model_version_is_5() {
+        let version = PersistedModel::CURRENT_VERSION;
+        assert_eq!(version, 5);
     }
 
     #[test]
@@ -473,7 +525,7 @@ mod tests {
         model.save(&path)?;
         let loaded = PersistedModel::load(&path)?;
 
-        assert_eq!(loaded.version, 4);
+        assert_eq!(loaded.version, PersistedModel::CURRENT_VERSION);
         assert!(loaded.residual_quantiles.is_some());
         assert!(loaded.global_quantiles.is_some());
 
@@ -499,7 +551,7 @@ mod tests {
         model.save(&path)?;
         let loaded = PersistedModel::load(&path)?;
 
-        assert_eq!(loaded.version, 4);
+        assert_eq!(loaded.version, PersistedModel::CURRENT_VERSION);
         assert!(loaded.residual_quantiles.is_none());
         assert!(loaded.global_quantiles.is_none());
 
@@ -602,6 +654,7 @@ mod tests {
             Some(&quantiles),
             Some(create_test_hyperparameters()),
             Some(create_test_cv_scores()),
+            None,
         );
 
         assert!(model.best_hyperparameters.is_some());
@@ -610,7 +663,7 @@ mod tests {
         model.save(&path)?;
         let loaded = PersistedModel::load(&path)?;
 
-        assert_eq!(loaded.version, 4);
+        assert_eq!(loaded.version, PersistedModel::CURRENT_VERSION);
         assert_eq!(loaded.training_samples, 2500);
         assert_relative_eq!(loaded.training_mse, 12.3);
 
@@ -644,7 +697,7 @@ mod tests {
         model.save(&path)?;
         let loaded = PersistedModel::load(&path)?;
 
-        assert_eq!(loaded.version, 4);
+        assert_eq!(loaded.version, PersistedModel::CURRENT_VERSION);
         assert!(loaded.best_hyperparameters.is_none());
         assert!(loaded.cv_scores.is_none());
         assert!(loaded.residual_quantiles.is_none());
@@ -701,5 +754,185 @@ mod tests {
         assert_eq!(loaded.training_samples, 1000);
 
         Ok(())
+    }
+
+    // ── v5: model weights persistence ───────────────────────────────
+
+    #[test]
+    fn test_v5_roundtrip_with_lr_weights() -> Result<()> {
+        let dir = tempdir()?;
+        let path = dir.path().join("model_v5_lr.bin");
+
+        let weights = SerializedModelWeights::LinearRegression {
+            coefficients: vec![1.0, 2.0, 3.0],
+            intercept: 0.5,
+        };
+
+        let model = PersistedModel::new(
+            28,
+            1000,
+            5.5,
+            Some(6.2),
+            vec![],
+            ModelSummary {
+                model_type: "LinearRegression".to_string(),
+                max_depth: None,
+                feature_importance: None,
+            },
+            None,
+            None,
+            None,
+            Some(weights),
+        );
+
+        model.save(&path)?;
+        let loaded = PersistedModel::load(&path)?;
+
+        assert_eq!(loaded.version, PersistedModel::CURRENT_VERSION);
+        assert!(loaded.model_weights.is_some());
+
+        if let Some(SerializedModelWeights::LinearRegression {
+            coefficients,
+            intercept,
+        }) = loaded.model_weights
+        {
+            assert_eq!(coefficients.len(), 3);
+            assert_relative_eq!(intercept, 0.5);
+        } else {
+            anyhow::bail!("Expected LinearRegression weights");
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_v5_roundtrip_with_rf_weights() -> Result<()> {
+        let dir = tempdir()?;
+        let path = dir.path().join("model_v5_rf.bin");
+
+        let weights = SerializedModelWeights::RandomForest(vec![42, 43, 44, 45]);
+
+        let model = PersistedModel::new(
+            28,
+            2000,
+            3.1,
+            Some(4.0),
+            vec![],
+            ModelSummary {
+                model_type: "RandomForest".to_string(),
+                max_depth: Some(10),
+                feature_importance: None,
+            },
+            None,
+            None,
+            None,
+            Some(weights),
+        );
+
+        model.save(&path)?;
+        let loaded = PersistedModel::load(&path)?;
+
+        assert_eq!(loaded.version, PersistedModel::CURRENT_VERSION);
+        if let Some(SerializedModelWeights::RandomForest(bytes)) = loaded.model_weights {
+            assert_eq!(bytes, vec![42, 43, 44, 45]);
+        } else {
+            anyhow::bail!("Expected RandomForest weights");
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_v5_without_weights() -> Result<()> {
+        let dir = tempdir()?;
+        let path = dir.path().join("model_v5_no_weights.bin");
+
+        let model = PersistedModel::new(
+            28,
+            500,
+            8.0,
+            None,
+            vec![],
+            ModelSummary {
+                model_type: "LinearRegression".to_string(),
+                max_depth: None,
+                feature_importance: None,
+            },
+            None,
+            None,
+            None,
+            None,
+        );
+
+        model.save(&path)?;
+        let loaded = PersistedModel::load(&path)?;
+
+        assert_eq!(loaded.version, PersistedModel::CURRENT_VERSION);
+        assert!(loaded.model_weights.is_none());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_to_trained_model_lr() -> Result<()> {
+        use crate::ml::features::PredictionFeatures;
+
+        let n_features = PredictionFeatures::NUM_FEATURES;
+        let coefficients = vec![1.0; n_features];
+        let intercept = 5.0;
+
+        let weights = SerializedModelWeights::LinearRegression {
+            coefficients,
+            intercept,
+        };
+
+        let model = PersistedModel::new(
+            28,
+            1000,
+            5.5,
+            Some(6.2),
+            vec![],
+            ModelSummary {
+                model_type: "LinearRegression".to_string(),
+                max_depth: None,
+                feature_importance: None,
+            },
+            None,
+            None,
+            None,
+            Some(weights),
+        );
+
+        let trained = model.to_trained_model()?;
+        assert_eq!(trained.model_type(), "LinearRegression");
+        assert_eq!(trained.training_samples, 1000);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_to_trained_model_no_weights_returns_error() {
+        let model = PersistedModel::new(
+            28,
+            500,
+            8.0,
+            None,
+            vec![],
+            ModelSummary {
+                model_type: "LinearRegression".to_string(),
+                max_depth: None,
+                feature_importance: None,
+            },
+            None,
+            None,
+            None,
+            None,
+        );
+
+        let result = model.to_trained_model();
+        assert!(
+            matches!(result, Err(PersistenceError::ModelWeightsInvalid(_))),
+            "Should fail when no weights present"
+        );
     }
 }
