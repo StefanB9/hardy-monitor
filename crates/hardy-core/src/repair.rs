@@ -198,8 +198,7 @@ impl DataRepairer {
 
         let deleted_count =
             u32::try_from(ids_to_delete.len()).context("too many records to delete")?;
-        let zeroed_count =
-            u32::try_from(ids_to_zero.len()).context("too many records to zero")?;
+        let zeroed_count = u32::try_from(ids_to_zero.len()).context("too many records to zero")?;
 
         Ok((deleted_count, zeroed_count))
     }

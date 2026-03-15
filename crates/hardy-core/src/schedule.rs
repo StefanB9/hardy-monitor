@@ -125,7 +125,9 @@ pub fn is_bavarian_holiday(date: NaiveDate) -> bool {
 fn easter_date_cached(year: i32) -> Option<NaiveDate> {
     static CACHE: LazyLock<Mutex<HashMap<i32, Option<NaiveDate>>>> =
         LazyLock::new(|| Mutex::new(HashMap::new()));
-    let mut guard = CACHE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut guard = CACHE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     *guard.entry(year).or_insert_with(|| easter_date(year))
 }
 

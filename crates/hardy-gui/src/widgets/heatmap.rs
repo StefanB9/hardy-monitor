@@ -126,10 +126,8 @@ impl<Message> canvas::Program<Message> for HeatmapWidget<'_> {
                         let wrapped_utc = ((utc_seconds % seconds_per_week) + seconds_per_week)
                             % seconds_per_week;
 
-                        let w_idx =
-                            usize::try_from((wrapped_utc / 3600) / 24).unwrap_or_default();
-                        let h_idx =
-                            usize::try_from((wrapped_utc / 3600) % 24).unwrap_or_default();
+                        let w_idx = usize::try_from((wrapped_utc / 3600) / 24).unwrap_or_default();
+                        let h_idx = usize::try_from((wrapped_utc / 3600) % 24).unwrap_or_default();
                         let val = if w_idx < 7 && h_idx < 24 {
                             lookup[w_idx][h_idx]
                         } else {
@@ -182,10 +180,8 @@ impl<Message> canvas::Program<Message> for HeatmapWidget<'_> {
                     let wrapped_utc =
                         ((utc_seconds % seconds_per_week) + seconds_per_week) % seconds_per_week;
 
-                    let w_idx =
-                        usize::try_from((wrapped_utc / 3600) / 24).unwrap_or_default();
-                    let h_idx =
-                        usize::try_from((wrapped_utc / 3600) % 24).unwrap_or_default();
+                    let w_idx = usize::try_from((wrapped_utc / 3600) / 24).unwrap_or_default();
+                    let h_idx = usize::try_from((wrapped_utc / 3600) % 24).unwrap_or_default();
                     let val = if w_idx < 7 && h_idx < 24 {
                         lookup[w_idx][h_idx]
                     } else {

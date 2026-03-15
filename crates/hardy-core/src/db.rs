@@ -334,9 +334,7 @@ impl Database {
             total += result.rows_affected();
         }
 
-        tx.commit()
-            .await
-            .context("failed to commit batch update")?;
+        tx.commit().await.context("failed to commit batch update")?;
         Ok(total)
     }
 

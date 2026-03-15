@@ -18,7 +18,7 @@ pub(super) struct MomentumFeatures {
 /// Replaces 4 separate functions (`extract_momentum`, `extract_avg_6h`,
 /// `extract_volatility`, `extract_day_features`) that each iterated the full
 /// deque independently with intermediate `Vec<f64>` allocations.
-#[allow(clippy::cast_precision_loss)]
+#[allow(clippy::cast_precision_loss, clippy::too_many_lines)]
 pub(super) fn extract_all_momentum(
     recent_data: &VecDeque<(DateTime<Utc>, f64)>,
     local_time: &DateTime<Local>,
@@ -57,8 +57,8 @@ pub(super) fn extract_all_momentum(
     let mut trend_n = 0.0_f64;
     let mut trend_sum_x = 0.0;
     let mut trend_sum_y = 0.0;
-    let mut trend_sum_xy = 0.0;
-    let mut trend_sum_xx = 0.0;
+    let mut trend_cross = 0.0;
+    let mut trend_sum_x_sq = 0.0;
 
     for (timestamp, value) in recent_data {
         let v = *value;
@@ -75,8 +75,8 @@ pub(super) fn extract_all_momentum(
             let x = trend_n;
             trend_sum_x += x;
             trend_sum_y += v;
-            trend_sum_xy += x * v;
-            trend_sum_xx += x * x;
+            trend_cross += x * v;
+            trend_sum_x_sq += x * x;
             trend_n += 1.0;
         }
         if *timestamp >= one_hour_ago {
@@ -118,11 +118,11 @@ pub(super) fn extract_all_momentum(
     let recent_trend = if trend_n < 2.0 {
         0.0
     } else {
-        let denom = trend_n * trend_sum_xx - trend_sum_x * trend_sum_x;
+        let denom = trend_n * trend_sum_x_sq - trend_sum_x * trend_sum_x;
         if denom.abs() < f64::EPSILON {
             0.0
         } else {
-            ((trend_n * trend_sum_xy - trend_sum_x * trend_sum_y) / denom) * 60.0
+            ((trend_n * trend_cross - trend_sum_x * trend_sum_y) / denom) * 60.0
         }
     };
 

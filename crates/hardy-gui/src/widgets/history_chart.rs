@@ -146,10 +146,12 @@ impl canvas::Program<Interaction> for HistoryChart<'_> {
             };
 
             let mut last_history_point: Option<(Point, DateTime<Utc>)> = None;
-            let start_idx =
-                self.history.partition_point(|l| l.timestamp < self.range_start);
-            let end_idx =
-                self.history.partition_point(|l| l.timestamp <= self.range_end);
+            let start_idx = self
+                .history
+                .partition_point(|l| l.timestamp < self.range_start);
+            let end_idx = self
+                .history
+                .partition_point(|l| l.timestamp <= self.range_end);
             let in_range = &self.history[start_idx..end_idx];
             let points: Vec<_> = in_range
                 .iter()
