@@ -2,7 +2,7 @@ use chrono::{Local, Offset};
 use hardy_core::db::HourlyAverage;
 use iced::{
     Color, Point, Rectangle, Renderer, Size, Theme, mouse,
-    widget::canvas::{self, Path, Stroke, Text},
+    widget::canvas::{self, Action, Path, Stroke, Text},
 };
 
 use crate::style;
@@ -14,12 +14,52 @@ pub struct HeatmapWidget<'a> {
 }
 
 impl<Message> canvas::Program<Message> for HeatmapWidget<'_> {
-    type State = ();
+    /// Tracks the current hovered cell `(col, row)` to avoid rebuilding
+    /// tooltip geometry when the cursor stays within the same cell.
+    type State = Option<(i64, i64)>;
+
+    fn update(
+        &self,
+        state: &mut Self::State,
+        event: &iced::Event,
+        bounds: Rectangle,
+        cursor: mouse::Cursor,
+    ) -> Option<Action<Message>> {
+        if let iced::Event::Mouse(mouse::Event::CursorMoved { .. }) = event {
+            let pad_left = 30.0;
+            let pad_bottom = 20.0;
+            let w = bounds.width - pad_left;
+            let h = bounds.height - pad_bottom;
+            let cell_w = w / 24.0;
+            let cell_h = h / 7.0;
+
+            let new_cell = cursor.position_in(bounds).and_then(|pos| {
+                if pos.x <= pad_left || pos.y >= h {
+                    return None;
+                }
+                #[allow(clippy::cast_possible_truncation)]
+                let col = ((pos.x - pad_left) / cell_w).floor() as i64;
+                #[allow(clippy::cast_possible_truncation)]
+                let row = (pos.y / cell_h).floor() as i64;
+                if (0..24).contains(&col) && (0..7).contains(&row) {
+                    Some((col, row))
+                } else {
+                    None
+                }
+            });
+
+            if *state != new_cell {
+                *state = new_cell;
+                self.tooltip_cache.clear();
+            }
+        }
+        None
+    }
 
     #[allow(clippy::too_many_lines)]
     fn draw(
         &self,
-        (): &Self::State,
+        _state: &Self::State,
         renderer: &Renderer,
         _: &Theme,
         bounds: Rectangle,
@@ -32,6 +72,16 @@ impl<Message> canvas::Program<Message> for HeatmapWidget<'_> {
         let days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
         let cell_w = w / 24.0;
         let cell_h = h / 7.0;
+
+        // Build a 2D lookup table for O(1) access instead of O(n) iter().find()
+        let mut lookup = [[0.0_f64; 24]; 7];
+        for h in self.data {
+            let w = usize::try_from(h.weekday).unwrap_or(0);
+            let hr = usize::try_from(h.hour).unwrap_or(0);
+            if w < 7 && hr < 24 {
+                lookup[w][hr] = h.avg_percentage;
+            }
+        }
 
         let grid_geo = self.cache.draw(renderer, bounds.size(), |frame| {
             let offset_seconds = Local::now().offset().fix().local_minus_utc();
@@ -76,14 +126,15 @@ impl<Message> canvas::Program<Message> for HeatmapWidget<'_> {
                         let wrapped_utc = ((utc_seconds % seconds_per_week) + seconds_per_week)
                             % seconds_per_week;
 
-                        let target_w = i32::try_from((wrapped_utc / 3600) / 24).unwrap_or_default();
-                        let target_h = i32::try_from((wrapped_utc / 3600) % 24).unwrap_or_default();
-
-                        let val = self
-                            .data
-                            .iter()
-                            .find(|x| x.weekday == target_w && x.hour == target_h)
-                            .map_or(0.0, |x| x.avg_percentage);
+                        let w_idx =
+                            usize::try_from((wrapped_utc / 3600) / 24).unwrap_or_default();
+                        let h_idx =
+                            usize::try_from((wrapped_utc / 3600) % 24).unwrap_or_default();
+                        let val = if w_idx < 7 && h_idx < 24 {
+                            lookup[w_idx][h_idx]
+                        } else {
+                            0.0
+                        };
 
                         let color = if val == 0.0 {
                             style::BG_DARK
@@ -111,8 +162,6 @@ impl<Message> canvas::Program<Message> for HeatmapWidget<'_> {
             }
         });
 
-        self.tooltip_cache.clear();
-
         let overlay_geo = self.tooltip_cache.draw(renderer, bounds.size(), |frame| {
             if let Some(cursor_pos) = cursor.position_in(bounds)
                 && cursor_pos.x > pad_left
@@ -133,16 +182,18 @@ impl<Message> canvas::Program<Message> for HeatmapWidget<'_> {
                     let wrapped_utc =
                         ((utc_seconds % seconds_per_week) + seconds_per_week) % seconds_per_week;
 
-                    let target_w = i32::try_from((wrapped_utc / 3600) / 24).unwrap_or_default();
-                    let target_h = i32::try_from((wrapped_utc / 3600) % 24).unwrap_or_default();
+                    let w_idx =
+                        usize::try_from((wrapped_utc / 3600) / 24).unwrap_or_default();
+                    let h_idx =
+                        usize::try_from((wrapped_utc / 3600) % 24).unwrap_or_default();
+                    let val = if w_idx < 7 && h_idx < 24 {
+                        lookup[w_idx][h_idx]
+                    } else {
+                        0.0
+                    };
 
-                    let val = self
-                        .data
-                        .iter()
-                        .find(|x| x.weekday == target_w && x.hour == target_h)
-                        .map(|x| x.avg_percentage);
-
-                    if let Some(v) = val {
+                    if val != 0.0 {
+                        let v = val;
                         let text = format!("{v:.1}%");
                         let pos = Point::new(cursor_pos.x + 10.0, cursor_pos.y - 20.0);
 
