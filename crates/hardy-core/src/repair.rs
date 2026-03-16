@@ -129,10 +129,16 @@ impl DataRepairer {
             result.records_smoothed += zeroed;
         }
 
-        if self.ensure_start_of_day_entry(date, open_hour).await? {
+        if self
+            .ensure_start_of_day_entry(&records, date, open_hour)
+            .await?
+        {
             result.boundary_entries_added += 1;
         }
-        if self.ensure_end_of_day_entry(date, close_hour).await? {
+        if self
+            .ensure_end_of_day_entry(&records, date, close_hour)
+            .await?
+        {
             result.boundary_entries_added += 1;
         }
 
@@ -154,14 +160,15 @@ impl DataRepairer {
         open_hour: u32,
         close_hour: u32,
     ) -> Result<(u32, u32)> {
-        let mut deleted_count = 0;
-        let mut zeroed_count = 0;
         let local_tz = Local;
 
         let open_time = NaiveTime::from_hms_opt(open_hour, 0, 0)
             .ok_or_else(|| anyhow::anyhow!("invalid open hour: {open_hour}"))?;
         let close_time = NaiveTime::from_hms_opt(close_hour, 0, 0)
             .ok_or_else(|| anyhow::anyhow!("invalid close hour: {close_hour}"))?;
+
+        let mut ids_to_delete = Vec::new();
+        let mut ids_to_zero = Vec::new();
 
         for record in records {
             let local_dt = record.timestamp.with_timezone(&local_tz);
@@ -173,15 +180,25 @@ impl DataRepairer {
             }
 
             if local_time < open_time || local_time > close_time {
-                self.db.delete_record(record.id).await?;
-                deleted_count += 1;
+                ids_to_delete.push(record.id);
             } else if (local_time == open_time || local_time == close_time)
                 && record.percentage != 0.0
             {
-                self.db.update_percentage(record.id, 0.0).await?;
-                zeroed_count += 1;
+                ids_to_zero.push(record.id);
             }
         }
+
+        if !ids_to_delete.is_empty() {
+            self.db.batch_delete(&ids_to_delete).await?;
+        }
+        if !ids_to_zero.is_empty() {
+            let updates: Vec<(i64, f64)> = ids_to_zero.iter().map(|&id| (id, 0.0)).collect();
+            self.db.batch_update_percentage(&updates).await?;
+        }
+
+        let deleted_count =
+            u32::try_from(ids_to_delete.len()).context("too many records to delete")?;
+        let zeroed_count = u32::try_from(ids_to_zero.len()).context("too many records to zero")?;
 
         Ok((deleted_count, zeroed_count))
     }
@@ -215,14 +232,16 @@ impl DataRepairer {
             }
         }
 
-        let source_values = values.clone();
+        let mut prev_original = values[0];
         for i in 1..values.len() - 1 {
-            let smoothed = (source_values[i - 1] + source_values[i] + source_values[i + 1]) / 3.0;
+            let curr_original = values[i];
+            let smoothed = (prev_original + curr_original + values[i + 1]) / 3.0;
 
             if (values[i] - smoothed).abs() > 1.0 {
                 values[i] = smoothed;
                 changed[i] = true;
             }
+            prev_original = curr_original;
         }
 
         for i in 0..records.len() {
@@ -307,7 +326,12 @@ impl DataRepairer {
         Ok(filled_count)
     }
 
-    async fn ensure_start_of_day_entry(&self, date: NaiveDate, open_hour: u32) -> Result<bool> {
+    async fn ensure_start_of_day_entry(
+        &self,
+        records: &[OccupancyLog],
+        date: NaiveDate,
+        open_hour: u32,
+    ) -> Result<bool> {
         let local_tz = Local;
 
         let start_time = NaiveTime::from_hms_opt(open_hour, 0, 0)
@@ -317,8 +341,6 @@ impl DataRepairer {
             .single()
             .context("Invalid local datetime for start of day entry")?;
         let utc_dt = local_dt.with_timezone(&Utc);
-
-        let records = self.db.get_records_for_date(date).await?;
 
         let exists = records.iter().any(|r| {
             let local = r.timestamp.with_timezone(&local_tz);
@@ -333,7 +355,12 @@ impl DataRepairer {
         }
     }
 
-    async fn ensure_end_of_day_entry(&self, date: NaiveDate, close_hour: u32) -> Result<bool> {
+    async fn ensure_end_of_day_entry(
+        &self,
+        records: &[OccupancyLog],
+        date: NaiveDate,
+        close_hour: u32,
+    ) -> Result<bool> {
         let local_tz = Local;
 
         let end_time = NaiveTime::from_hms_opt(close_hour, 0, 0)
@@ -343,8 +370,6 @@ impl DataRepairer {
             .single()
             .context("Invalid local datetime for end of day entry")?;
         let utc_dt = local_dt.with_timezone(&Utc);
-
-        let records = self.db.get_records_for_date(date).await?;
 
         let exists = records.iter().any(|r| {
             let local = r.timestamp.with_timezone(&local_tz);

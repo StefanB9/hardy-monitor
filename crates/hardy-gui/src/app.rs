@@ -20,6 +20,7 @@ use hardy_core::{
 };
 use iced::{
     Alignment, Border, Color, Element, Length, Shadow, Subscription, Task, Theme, Vector,
+    task::Handle,
     widget::{Space, button, canvas::Cache, column, container, row, stack, text},
     window,
 };
@@ -136,6 +137,7 @@ pub struct HardyMonitorApp {
     notifier: Arc<dyn Notifier>,
     _tray_icon: Option<TrayIcon>,
     error: Option<AppError>,
+    training_handle: Option<Handle>,
 
     data: MonitorState,
     ui: UiState,
@@ -187,6 +189,10 @@ pub enum Message {
     RepairCompleted(Result<RepairSummary, AppError>),
 
     MlTrainingCompleted(Result<Box<TrainingResult>, String>),
+    TrainModelRequested,
+    CancelTrainingRequested,
+    LoadModelRequested,
+    LoadModelCompleted(Result<Box<PersistedModel>, String>),
     ModelPersisted,
     PredictionModeToggled(bool),
     ModelDetailsToggled(bool),
@@ -214,25 +220,35 @@ impl HardyMonitorApp {
         let notif_threshold = config.notifications.threshold_percent;
         let notif_enabled = config.notifications.enabled;
 
-        // Try loading persisted model for immediate calibrated CIs
+        // Try loading persisted model (including full weights) on startup
         let mut predictor = OccupancyPredictor::new(ml_config);
         if let Some(path) = config.ml.resolve_model_path() {
             match PersistedModel::load(&path) {
-                Ok(persisted) if !persisted.is_stale(config.ml.retrain_interval_hours) => {
+                Ok(persisted) => {
+                    // Always load metadata (quantiles, training info)
                     if let Some(quantiles) = persisted.to_residual_quantiles() {
                         predictor.set_residual_quantiles(Some(quantiles));
                     }
                     predictor.set_training_info(Some(TrainingInfo::from_persisted(&persisted)));
-                    tracing::info!(
-                        summary = %persisted.summary(),
-                        "Loaded persisted ML model metadata"
-                    );
-                }
-                Ok(persisted) => {
-                    tracing::info!(
-                        summary = %persisted.summary(),
-                        "Persisted model is stale, will retrain"
-                    );
+
+                    // Attempt to reconstruct full model from weights
+                    match persisted.to_trained_model() {
+                        Ok(model) => {
+                            let trained_at = persisted.created_at;
+                            predictor.set_model(model, trained_at);
+                            tracing::info!(
+                                summary = %persisted.summary(),
+                                "Loaded persisted ML model with weights"
+                            );
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                error = %e,
+                                summary = %persisted.summary(),
+                                "Loaded model metadata but could not restore weights"
+                            );
+                        }
+                    }
                 }
                 Err(e) => {
                     tracing::debug!(error = %e, "No persisted model loaded");
@@ -248,6 +264,7 @@ impl HardyMonitorApp {
             notifier,
             _tray_icon: tray_icon,
             error: None,
+            training_handle: None,
             data: MonitorState {
                 occupancy: None,
                 history: Vec::new(),
@@ -639,6 +656,90 @@ impl HardyMonitorApp {
                 self.ui.show_model_details = expanded;
                 Task::none()
             }
+            Message::TrainModelRequested => {
+                if self.data.ml_training_in_progress {
+                    return Task::none();
+                }
+                self.data.ml_training_in_progress = true;
+                tracing::info!("ML model training requested by user");
+                let task = Self::train_ml_model(
+                    self.db.clone(),
+                    self.clock.clone(),
+                    self.schedule.clone(),
+                    self.config.ml.clone(),
+                );
+                let (task, handle) = task.abortable();
+                self.training_handle = Some(handle);
+                task
+            }
+            Message::CancelTrainingRequested => {
+                if let Some(handle) = self.training_handle.take() {
+                    handle.abort();
+                }
+                self.data.ml_training_in_progress = false;
+                tracing::info!("ML model training cancelled by user");
+                Task::none()
+            }
+            Message::LoadModelRequested => {
+                let path = self.config.ml.resolve_model_path();
+                Task::perform(
+                    async move {
+                        let path = path.ok_or_else(|| "No model path configured".to_string())?;
+                        PersistedModel::load(&path)
+                            .map(Box::new)
+                            .map_err(|e| e.to_string())
+                    },
+                    Message::LoadModelCompleted,
+                )
+            }
+            Message::LoadModelCompleted(result) => {
+                match result {
+                    Ok(persisted) => {
+                        if let Some(quantiles) = persisted.to_residual_quantiles() {
+                            self.data.predictor.set_residual_quantiles(Some(quantiles));
+                        }
+                        self.data
+                            .predictor
+                            .set_training_info(Some(TrainingInfo::from_persisted(&persisted)));
+
+                        match persisted.to_trained_model() {
+                            Ok(model) => {
+                                let trained_at = persisted.created_at;
+                                self.data.predictor.set_model(model, trained_at);
+                                self.data
+                                    .predictor
+                                    .update_baseline(&self.data.prediction_baseline);
+                                self.data.ml_predictions = self.data.predictor.predict(
+                                    &self.data.prediction_baseline,
+                                    &self.schedule,
+                                    self.clock.as_ref(),
+                                );
+                                self.data.ml_predictions_simple = self
+                                    .data
+                                    .ml_predictions
+                                    .iter()
+                                    .map(PredictionWithConfidence::to_simple)
+                                    .collect();
+                                self.ui.ml_predictions_chart_cache.clear();
+                                tracing::info!(
+                                    trained_at = %trained_at,
+                                    "Loaded ML model from disk"
+                                );
+                            }
+                            Err(e) => {
+                                tracing::warn!(
+                                    error = %e,
+                                    "Loaded model metadata but weights invalid"
+                                );
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "Failed to load ML model from disk");
+                    }
+                }
+                Task::none()
+            }
             Message::MlTrainingCompleted(result) => {
                 self.data.ml_training_in_progress = false;
                 match result {
@@ -754,6 +855,7 @@ impl HardyMonitorApp {
                 training_info: self.data.predictor.training_info(),
                 history: &self.data.history,
                 show_model_details: self.ui.show_model_details,
+                retrain_interval_hours: self.config.ml.retrain_interval_hours,
             }),
             ViewMode::DataRepair => views::data_repair::view(DataRepairProps {
                 start_date: &self.repair.start_date,
@@ -1038,18 +1140,8 @@ impl HardyMonitorApp {
                     ),
                 ];
 
-                if !self.data.ml_training_in_progress
-                    && self.data.predictor.needs_retraining(self.clock.as_ref())
-                {
-                    self.data.ml_training_in_progress = true;
-                    tasks.push(Self::train_ml_model(
-                        self.db.clone(),
-                        self.clock.clone(),
-                        self.schedule.clone(),
-                        self.config.ml.clone(),
-                    ));
-                    tracing::debug!("ML model retraining triggered");
-                }
+                // Training is user-initiated only (via TrainModelRequested
+                // message). No auto-training on fetch.
 
                 let cooldown_elapsed = self.notifications.last_notified_at.is_none_or(|t| {
                     t.elapsed().as_secs() >= self.config.notifications.cooldown_secs
@@ -1197,10 +1289,27 @@ impl HardyMonitorApp {
     ) -> Task<Message> {
         Task::perform(
             async move {
-                crate::ml::training::train_model(db.as_ref(), clock.as_ref(), &schedule, &config)
-                    .await
-                    .map(Box::new)
-                    .map_err(|e| e.to_string())
+                let join_result = tokio::task::spawn_blocking(move || {
+                    tokio::runtime::Handle::current().block_on(async {
+                        crate::ml::training::train_model(
+                            db.as_ref(),
+                            clock.as_ref(),
+                            &schedule,
+                            &config,
+                        )
+                        .await
+                    })
+                })
+                .await;
+
+                match join_result {
+                    // Thread succeeded, and training succeeded
+                    Ok(Ok(training_result)) => Ok(Box::new(training_result)),
+                    // Thread succeeded, but training returned an error
+                    Ok(Err(training_err)) => Err(training_err.to_string()),
+                    // The thread itself panicked or was cancelled
+                    Err(join_err) => Err(format!("Task panicked or cancelled: {join_err}")),
+                }
             },
             Message::MlTrainingCompleted,
         )

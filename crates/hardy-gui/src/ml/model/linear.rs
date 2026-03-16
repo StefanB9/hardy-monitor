@@ -5,17 +5,24 @@ use ndarray::{Array1, Array2, Axis};
 use super::TrainingError;
 use crate::ml::{evaluation, features::PredictionFeatures};
 
-/// Linear regression model backend using linfa.
+/// Linear regression model backend.
+///
+/// Stores raw coefficients and intercept rather than wrapping linfa's
+/// `FittedLinearRegression`. This makes the model trivially serializable
+/// for persistence without requiring serde support from linfa.
 #[derive(Debug, Clone)]
 pub(crate) struct LinearRegressionModel {
-    model: linfa_linear::FittedLinearRegression<f64>,
+    coefficients: Array1<f64>,
+    intercept: f64,
 }
 
 impl LinearRegressionModel {
     /// Train a new linear regression model from features and targets.
     ///
-    /// When `ridge_lambda > 0`, augments the data matrix with a scaled identity
-    /// matrix for L2 regularization, stabilizing near-singular Gram matrices.
+    /// Uses linfa for the fitting step, then extracts coefficients and
+    /// intercept for storage. When `ridge_lambda > 0`, augments the data
+    /// matrix with a scaled identity matrix for L2 regularization,
+    /// stabilizing near-singular Gram matrices.
     pub fn train(
         features: &[PredictionFeatures],
         targets: &[f64],
@@ -57,40 +64,55 @@ impl LinearRegressionModel {
             Dataset::new(x, y)
         };
 
-        let model = LinearRegression::default()
+        let fitted = LinearRegression::default()
             .with_intercept(fit_intercept)
             .fit(&fit_dataset)
             .map_err(|e: linfa_linear::LinearError<f64>| TrainingError::FitError(e.to_string()))?;
 
-        Ok(Self { model })
+        Ok(Self {
+            coefficients: fitted.params().clone(),
+            intercept: fitted.intercept(),
+        })
+    }
+
+    /// Reconstruct a model from previously extracted coefficients and
+    /// intercept, enabling deserialization without linfa.
+    pub fn from_coefficients(coefficients: Array1<f64>, intercept: f64) -> Self {
+        Self {
+            coefficients,
+            intercept,
+        }
     }
 
     /// Predict a single sample from a flat feature vector.
     pub fn predict(&self, features: &[f64]) -> Option<f64> {
-        let array = Array2::from_shape_vec((1, features.len()), features.to_vec()).ok()?;
-        let predictions = self.model.predict(&array);
-        predictions.first().copied()
+        if features.len() != self.coefficients.len() {
+            return None;
+        }
+        let x = Array1::from_vec(features.to_vec());
+        Some(x.dot(&self.coefficients) + self.intercept)
     }
 
     /// Predict a batch of samples from a 2D feature matrix.
     pub fn predict_batch(&self, feature_matrix: &Array2<f64>) -> Vec<f64> {
-        self.model.predict(feature_matrix).to_vec()
+        let predictions = feature_matrix.dot(&self.coefficients) + self.intercept;
+        predictions.to_vec()
     }
 
     /// Return the fitted coefficients.
     pub fn coefficients(&self) -> &Array1<f64> {
-        self.model.params()
+        &self.coefficients
     }
 
     /// Return the fitted intercept.
     pub fn intercept(&self) -> f64 {
-        self.model.intercept()
+        self.intercept
     }
 
     /// Compute training MSE given features and original targets.
     pub fn compute_training_mse(&self, x: &Array2<f64>, targets: &[f64]) -> f64 {
-        let predictions = self.model.predict(x);
-        evaluation::mse(&predictions.to_vec(), targets).unwrap_or(f64::MAX)
+        let predictions = self.predict_batch(x);
+        evaluation::mse(&predictions, targets).unwrap_or(f64::MAX)
     }
 }
 
@@ -271,6 +293,32 @@ mod tests {
         // When fit_intercept is false, intercept should be 0
         let model_no_intercept = LinearRegressionModel::train(&features, &targets, false, 0.0)?;
         assert_relative_eq!(model_no_intercept.intercept(), 0.0, epsilon = 1e-10);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_lr_from_coefficients_roundtrip() -> Result<()> {
+        let features = create_test_features(100);
+        let targets: Vec<f64> = features.iter().map(|f| f.historical_avg).collect();
+
+        let trained = LinearRegressionModel::train(&features, &targets, true, 0.0)?;
+
+        // Extract coefficients and intercept, reconstruct
+        let coefficients = trained.coefficients().clone();
+        let intercept = trained.intercept();
+        let reconstructed = LinearRegressionModel::from_coefficients(coefficients, intercept);
+
+        // Predictions should match exactly
+        for feature in &features[0..10] {
+            let vec = feature.to_vec();
+            let original = trained.predict(&vec);
+            let rebuilt = reconstructed.predict(&vec);
+            assert_eq!(
+                original, rebuilt,
+                "Predictions should match exactly after roundtrip"
+            );
+        }
 
         Ok(())
     }

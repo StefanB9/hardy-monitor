@@ -146,11 +146,16 @@ impl canvas::Program<Interaction> for HistoryChart<'_> {
             };
 
             let mut last_history_point: Option<(Point, DateTime<Utc>)> = None;
-            let points: Vec<_> = self
+            let start_idx = self
                 .history
+                .partition_point(|l| l.timestamp < self.range_start);
+            let end_idx = self
+                .history
+                .partition_point(|l| l.timestamp <= self.range_end);
+            let in_range = &self.history[start_idx..end_idx];
+            let points: Vec<_> = in_range
                 .iter()
                 .map(|l| (l.timestamp, l.percentage))
-                .filter(|(d, _)| *d >= self.range_start && *d <= self.range_end)
                 .collect();
 
             if !points.is_empty() {
@@ -294,11 +299,17 @@ impl canvas::Program<Interaction> for HistoryChart<'_> {
                 let time_offset = ratio * dur;
                 #[allow(clippy::cast_possible_truncation)]
                 let hover_time = self.range_start + ChronoDuration::seconds(time_offset as i64);
-                let closest = self
-                    .history
-                    .iter()
-                    .map(|l| (l.timestamp, l.percentage))
-                    .min_by_key(|(d, _)| (*d - hover_time).num_seconds().abs());
+                let idx = self.history.partition_point(|l| l.timestamp < hover_time);
+                let candidates = [
+                    idx.checked_sub(1).and_then(|i| self.history.get(i)),
+                    self.history.get(idx),
+                ];
+                let closest = candidates
+                    .into_iter()
+                    .flatten()
+                    .filter(|l| l.timestamp >= self.range_start && l.timestamp <= self.range_end)
+                    .min_by_key(|l| (l.timestamp - hover_time).num_seconds().abs())
+                    .map(|l| (l.timestamp, l.percentage));
 
                 if let Some((d, val)) = closest
                     && d >= self.range_start

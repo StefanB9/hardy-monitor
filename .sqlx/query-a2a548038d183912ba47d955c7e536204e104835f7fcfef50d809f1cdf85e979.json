@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n            SELECT\n                id as \"id!\",\n                timestamp::timestamptz as \"timestamp!\",\n                percentage as \"percentage!\"\n            FROM occupancy_logs\n            WHERE timestamp >= $1\n            ORDER BY timestamp ASC\n            ",
+  "query": "\n            SELECT\n                id as \"id!\",\n                timestamp as \"timestamp!\",\n                percentage as \"percentage!\"\n            FROM occupancy_logs\n            WHERE timestamp >= $1 AND timestamp <= $2\n            ORDER BY timestamp ASC\n            ",
   "describe": {
     "columns": [
       {
@@ -18,7 +18,12 @@
         "ordinal": 1,
         "name": "timestamp!",
         "type_info": "Timestamptz",
-        "origin": "Expression"
+        "origin": {
+          "Table": {
+            "table": "occupancy_logs",
+            "name": "timestamp"
+          }
+        }
       },
       {
         "ordinal": 2,
@@ -34,14 +39,15 @@
     ],
     "parameters": {
       "Left": [
-        "Text"
+        "Timestamptz",
+        "Timestamptz"
       ]
     },
     "nullable": [
       false,
-      null,
+      false,
       false
     ]
   },
-  "hash": "8c441edd5d767bbea8b6484e07bd7faf5074f6caeb6c31a9eb403c1944a1c479"
+  "hash": "a2a548038d183912ba47d955c7e536204e104835f7fcfef50d809f1cdf85e979"
 }

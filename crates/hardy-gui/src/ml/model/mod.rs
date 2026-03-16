@@ -4,8 +4,24 @@ pub(crate) mod random_forest;
 use chrono::{DateTime, Utc};
 use ndarray::Array2;
 use random_forest::features_to_dense_matrix;
+use serde::{Deserialize, Serialize};
 
 use super::{evaluation, features::PredictionFeatures};
+
+/// Serialized model weights for persistence.
+///
+/// Captures everything needed to reconstruct a functional model
+/// without retraining.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum SerializedModelWeights {
+    /// Random Forest: bincode-serialized `RandomForestRegressor`.
+    RandomForest(Vec<u8>),
+    /// Linear Regression: raw coefficients and intercept.
+    LinearRegression {
+        coefficients: Vec<f64>,
+        intercept: f64,
+    },
+}
 
 /// Internal enum dispatching to the concrete model backend.
 #[derive(Debug, Clone)]
@@ -124,6 +140,23 @@ impl TrainedModel {
         match &self.backend {
             ModelBackend::LinearRegression(_) => None,
             ModelBackend::RandomForest(rf) => Some(rf.n_trees()),
+        }
+    }
+
+    /// Serialize the model weights for persistence.
+    ///
+    /// Returns `None` only if RF serialization fails (should not happen
+    /// in practice). LR serialization is infallible.
+    pub(crate) fn serialize_weights(&self) -> Option<SerializedModelWeights> {
+        match &self.backend {
+            ModelBackend::LinearRegression(lr) => Some(SerializedModelWeights::LinearRegression {
+                coefficients: lr.coefficients().to_vec(),
+                intercept: lr.intercept(),
+            }),
+            ModelBackend::RandomForest(rf) => {
+                let bytes = rf.serialize().ok()?;
+                Some(SerializedModelWeights::RandomForest(bytes))
+            }
         }
     }
 }
@@ -775,5 +808,57 @@ mod tests {
             result,
             Err(TrainingError::MismatchedLengths { .. })
         ));
+    }
+
+    // ── serialize_weights ─────────────────────────────────────────────
+
+    #[test]
+    fn test_serialize_weights_lr() -> Result<()> {
+        let features = create_test_features(100);
+        let targets: Vec<f64> = features.iter().map(|f| f.historical_avg).collect();
+
+        let model = ModelBuilder::new().train(&features, &targets)?;
+        let weights = model.serialize_weights();
+        assert!(
+            weights.is_some(),
+            "LR model should produce serialized weights"
+        );
+
+        if let Some(SerializedModelWeights::LinearRegression {
+            coefficients,
+            intercept,
+        }) = weights
+        {
+            assert_eq!(coefficients.len(), PredictionFeatures::NUM_FEATURES);
+            assert!(intercept.is_finite());
+        } else {
+            anyhow::bail!("Expected LinearRegression variant");
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_serialize_weights_rf() -> Result<()> {
+        let features = create_test_features(200);
+        let targets: Vec<f64> = features.iter().map(|f| f.historical_avg).collect();
+
+        let model = ModelBuilder::new()
+            .n_trees(10)
+            .max_depth(5)
+            .train_rf(&features, &targets)?;
+        let weights = model.serialize_weights();
+        assert!(
+            weights.is_some(),
+            "RF model should produce serialized weights"
+        );
+
+        if let Some(SerializedModelWeights::RandomForest(bytes)) = weights {
+            assert!(!bytes.is_empty());
+        } else {
+            anyhow::bail!("Expected RandomForest variant");
+        }
+
+        Ok(())
     }
 }

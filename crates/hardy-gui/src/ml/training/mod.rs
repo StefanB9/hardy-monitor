@@ -84,6 +84,8 @@ fn build_training_result(
         mse_std: cv.mse.std_dev,
     });
 
+    let model_weights = model.serialize_weights();
+
     let persisted = PersistedModel::new(
         config.training_window_days,
         model.training_samples,
@@ -101,6 +103,7 @@ fn build_training_result(
         residual_quantiles.as_ref(),
         serialized_hp,
         serialized_cv,
+        model_weights,
     );
 
     TrainingResult {

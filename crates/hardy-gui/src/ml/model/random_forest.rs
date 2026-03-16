@@ -90,6 +90,27 @@ impl RandomForestModel {
         self.n_trees
     }
 
+    /// Serialize the inner `RandomForestRegressor` to bytes using bincode.
+    pub fn serialize(&self) -> Result<Vec<u8>, TrainingError> {
+        bincode::serde::encode_to_vec(&*self.model, bincode::config::standard())
+            .map_err(|e| TrainingError::FitError(format!("RF serialization failed: {e}")))
+    }
+
+    /// Reconstruct a `RandomForestModel` from previously serialized bytes.
+    #[allow(clippy::type_complexity)]
+    pub fn from_serialized(bytes: &[u8], n_trees: usize) -> Result<Self, TrainingError> {
+        let (model, _): (
+            RandomForestRegressor<f64, f64, DenseMatrix<f64>, Vec<f64>>,
+            _,
+        ) = bincode::serde::decode_from_slice(bytes, bincode::config::standard())
+            .map_err(|e| TrainingError::FitError(format!("RF deserialization failed: {e}")))?;
+
+        Ok(Self {
+            model: Arc::new(model),
+            n_trees,
+        })
+    }
+
     /// Feature importance (stub — smartcore v0.4 does not expose this).
     #[allow(clippy::unused_self)]
     pub fn feature_importance(&self) -> Option<Vec<f64>> {
@@ -297,6 +318,49 @@ mod tests {
     fn test_dense_matrix_empty_fails() {
         let result = features_to_dense_matrix(&[]);
         assert!(matches!(result, Err(TrainingError::InsufficientData(0))));
+    }
+
+    #[test]
+    fn test_rf_serialize_roundtrip() -> Result<()> {
+        let features = create_test_features(200);
+        let targets: Vec<f64> = features.iter().map(|f| f.historical_avg).collect();
+
+        let matrix = features_to_dense_matrix(&features)?;
+        let params = RfHyperparameters {
+            n_trees: 10,
+            max_depth: Some(5),
+            ..Default::default()
+        };
+
+        let original = RandomForestModel::train(&matrix, &targets, &params)?;
+
+        // Serialize then deserialize
+        let bytes = original.serialize().map_err(|e| anyhow::anyhow!("{e}"))?;
+        assert!(!bytes.is_empty(), "Serialized bytes should not be empty");
+
+        let restored =
+            RandomForestModel::from_serialized(&bytes, 10).map_err(|e| anyhow::anyhow!("{e}"))?;
+
+        // Predictions should match
+        for feature in &features[0..10] {
+            let vec = feature.to_vec();
+            let original_pred = original.predict(&vec);
+            let restored_pred = restored.predict(&vec);
+            assert_eq!(
+                original_pred, restored_pred,
+                "Predictions should match after serialization roundtrip"
+            );
+        }
+
+        assert_eq!(restored.n_trees(), 10);
+        Ok(())
+    }
+
+    #[test]
+    fn test_rf_deserialize_invalid_bytes() {
+        // A single byte is definitely too short for a valid RF model
+        let result = RandomForestModel::from_serialized(&[0xFF], 10);
+        assert!(result.is_err(), "Should fail on invalid bytes");
     }
 
     proptest! {
