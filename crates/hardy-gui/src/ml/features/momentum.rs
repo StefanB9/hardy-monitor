@@ -2,12 +2,171 @@ use std::collections::VecDeque;
 
 use chrono::{DateTime, Local, Utc};
 
+/// All momentum-derived features extracted in a single pass over `recent_data`.
+pub(super) struct MomentumFeatures {
+    pub recent_avg_1h: f64,
+    pub recent_avg_3h: f64,
+    pub recent_trend: f64,
+    pub recent_avg_6h: f64,
+    pub occupancy_volatility: f64,
+    pub day_avg_so_far: f64,
+    pub prev_day_avg: f64,
+}
+
+/// Extract all momentum features in a single pass over `recent_data`.
+///
+/// Replaces 4 separate functions (`extract_momentum`, `extract_avg_6h`,
+/// `extract_volatility`, `extract_day_features`) that each iterated the full
+/// deque independently with intermediate `Vec<f64>` allocations.
+#[allow(clippy::cast_precision_loss, clippy::too_many_lines)]
+pub(super) fn extract_all_momentum(
+    recent_data: &VecDeque<(DateTime<Utc>, f64)>,
+    local_time: &DateTime<Local>,
+) -> MomentumFeatures {
+    if recent_data.is_empty() {
+        return MomentumFeatures {
+            recent_avg_1h: 50.0,
+            recent_avg_3h: 50.0,
+            recent_trend: 0.0,
+            recent_avg_6h: 50.0,
+            occupancy_volatility: 0.0,
+            day_avg_so_far: 50.0,
+            prev_day_avg: 50.0,
+        };
+    }
+
+    let now = recent_data.back().map_or_else(Utc::now, |(t, _)| *t);
+    let one_hour_ago = now - chrono::Duration::hours(1);
+    let three_hours_ago = now - chrono::Duration::hours(3);
+    let six_hours_ago = now - chrono::Duration::hours(6);
+
+    let today = local_time.date_naive();
+    let yesterday = today - chrono::Duration::days(1);
+
+    // Accumulators for window averages
+    let (mut sum_1h, mut count_1h) = (0.0, 0_usize);
+    let (mut sum_3h, mut count_3h) = (0.0, 0_usize);
+    let (mut sum_6h, mut count_6h) = (0.0, 0_usize);
+    let (mut sum_today, mut count_today) = (0.0, 0_usize);
+    let (mut sum_yesterday, mut count_yesterday) = (0.0, 0_usize);
+
+    // Volatility: sum of squares for 1h window (two-pass avoided via E[X²]-E[X]²)
+    let mut sum_sq_1h = 0.0;
+
+    // Online linear regression for 3h trend (Welford-style accumulators)
+    let mut trend_n = 0.0_f64;
+    let mut trend_sum_x = 0.0;
+    let mut trend_sum_y = 0.0;
+    let mut trend_cross = 0.0;
+    let mut trend_sum_x_sq = 0.0;
+
+    for (timestamp, value) in recent_data {
+        let v = *value;
+
+        if *timestamp >= six_hours_ago {
+            sum_6h += v;
+            count_6h += 1;
+        }
+        if *timestamp >= three_hours_ago {
+            sum_3h += v;
+            count_3h += 1;
+
+            // Online regression: x = 0-indexed position within 3h window
+            let x = trend_n;
+            trend_sum_x += x;
+            trend_sum_y += v;
+            trend_cross += x * v;
+            trend_sum_x_sq += x * x;
+            trend_n += 1.0;
+        }
+        if *timestamp >= one_hour_ago {
+            sum_1h += v;
+            sum_sq_1h += v * v;
+            count_1h += 1;
+        }
+
+        let local_ts = timestamp.with_timezone(&Local);
+        let date = local_ts.date_naive();
+        if date == today {
+            sum_today += v;
+            count_today += 1;
+        } else if date == yesterday {
+            sum_yesterday += v;
+            count_yesterday += 1;
+        }
+    }
+
+    let recent_avg_1h = if count_1h == 0 {
+        50.0
+    } else {
+        sum_1h / count_1h as f64
+    };
+
+    let recent_avg_3h = if count_3h == 0 {
+        50.0
+    } else {
+        sum_3h / count_3h as f64
+    };
+
+    let recent_avg_6h = if count_6h == 0 {
+        50.0
+    } else {
+        sum_6h / count_6h as f64
+    };
+
+    // Trend: online least-squares slope * 60
+    let recent_trend = if trend_n < 2.0 {
+        0.0
+    } else {
+        let denom = trend_n * trend_sum_x_sq - trend_sum_x * trend_sum_x;
+        if denom.abs() < f64::EPSILON {
+            0.0
+        } else {
+            ((trend_n * trend_cross - trend_sum_x * trend_sum_y) / denom) * 60.0
+        }
+    };
+
+    // Volatility: population std dev over 1h window
+    let occupancy_volatility = if count_1h < 2 {
+        0.0
+    } else {
+        let n = count_1h as f64;
+        let mean = sum_1h / n;
+        let variance = sum_sq_1h / n - mean * mean;
+        // Guard against floating-point rounding producing tiny negatives
+        if variance > 0.0 { variance.sqrt() } else { 0.0 }
+    };
+
+    let day_avg_so_far = if count_today == 0 {
+        50.0
+    } else {
+        sum_today / count_today as f64
+    };
+
+    let prev_day_avg = if count_yesterday == 0 {
+        50.0
+    } else {
+        sum_yesterday / count_yesterday as f64
+    };
+
+    MomentumFeatures {
+        recent_avg_1h,
+        recent_avg_3h,
+        recent_trend,
+        recent_avg_6h,
+        occupancy_volatility,
+        day_avg_so_far,
+        prev_day_avg,
+    }
+}
+
 /// Extract 1h rolling average, 3h rolling average, and linear trend from recent
 /// observations.
 ///
 /// Returns `(avg_1h, avg_3h, trend)`. Defaults to `(50.0, 50.0, 0.0)` when no
 /// data is available.
-pub(super) fn extract_momentum(recent_data: &VecDeque<(DateTime<Utc>, f64)>) -> (f64, f64, f64) {
+#[cfg(test)]
+fn extract_momentum(recent_data: &VecDeque<(DateTime<Utc>, f64)>) -> (f64, f64, f64) {
     if recent_data.is_empty() {
         return (50.0, 50.0, 0.0);
     }
@@ -53,7 +212,8 @@ pub(super) fn extract_momentum(recent_data: &VecDeque<(DateTime<Utc>, f64)>) -> 
 ///
 /// Returns the slope scaled by 60 (units per hour at 1-minute resolution).
 /// Returns `0.0` for series with fewer than 2 values or constant x-variance.
-pub(super) fn calculate_trend(values: &[f64]) -> f64 {
+#[cfg(test)]
+fn calculate_trend(values: &[f64]) -> f64 {
     if values.len() < 2 {
         return 0.0;
     }
@@ -84,7 +244,8 @@ pub(super) fn calculate_trend(values: &[f64]) -> f64 {
 ///
 /// Returns `50.0` (neutral default) if no data is available in the 6-hour
 /// window.
-pub(super) fn extract_avg_6h(recent_data: &VecDeque<(DateTime<Utc>, f64)>) -> f64 {
+#[cfg(test)]
+fn extract_avg_6h(recent_data: &VecDeque<(DateTime<Utc>, f64)>) -> f64 {
     if recent_data.is_empty() {
         return 50.0;
     }
@@ -110,7 +271,8 @@ pub(super) fn extract_avg_6h(recent_data: &VecDeque<(DateTime<Utc>, f64)>) -> f6
 /// Population standard deviation of occupancy values within the last 1 hour.
 ///
 /// Returns `0.0` if fewer than 2 data points are available in the window.
-pub(super) fn extract_volatility(recent_data: &VecDeque<(DateTime<Utc>, f64)>) -> f64 {
+#[cfg(test)]
+fn extract_volatility(recent_data: &VecDeque<(DateTime<Utc>, f64)>) -> f64 {
     if recent_data.is_empty() {
         return 0.0;
     }
@@ -134,50 +296,6 @@ pub(super) fn extract_volatility(recent_data: &VecDeque<(DateTime<Utc>, f64)>) -
     let variance = recent_1h.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / n;
 
     variance.sqrt()
-}
-
-/// Today's average-so-far and yesterday's average from recent observations.
-///
-/// Returns `(day_avg_so_far, prev_day_avg)`. Defaults to `50.0` for each if
-/// no data is available for that day.
-pub(super) fn extract_day_features(
-    recent_data: &VecDeque<(DateTime<Utc>, f64)>,
-    local_time: &DateTime<Local>,
-) -> (f64, f64) {
-    let today = local_time.date_naive();
-    let yesterday = today - chrono::Duration::days(1);
-
-    let mut today_values = Vec::new();
-    let mut yesterday_values = Vec::new();
-
-    for (timestamp, value) in recent_data {
-        let local_ts = timestamp.with_timezone(&Local);
-        let date = local_ts.date_naive();
-
-        if date == today {
-            today_values.push(*value);
-        } else if date == yesterday {
-            yesterday_values.push(*value);
-        }
-    }
-
-    let day_avg_so_far = if today_values.is_empty() {
-        50.0
-    } else {
-        #[allow(clippy::cast_precision_loss)]
-        let today_count_f64 = today_values.len() as f64;
-        today_values.iter().sum::<f64>() / today_count_f64
-    };
-
-    let prev_day_avg = if yesterday_values.is_empty() {
-        50.0
-    } else {
-        #[allow(clippy::cast_precision_loss)]
-        let yesterday_count_f64 = yesterday_values.len() as f64;
-        yesterday_values.iter().sum::<f64>() / yesterday_count_f64
-    };
-
-    (day_avg_so_far, prev_day_avg)
 }
 
 #[cfg(test)]

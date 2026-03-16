@@ -1,0 +1,45 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT\n                weekday as \"weekday!: i32\",\n                hour as \"hour!: i32\",\n                AVG(percentage) as \"avg_percentage!: f64\",\n                COUNT(*) as \"sample_count!: i64\"\n            FROM (\n                SELECT\n                    (EXTRACT(ISODOW FROM timestamp)::INTEGER - 1) as weekday,\n                    EXTRACT(HOUR FROM timestamp)::INTEGER as hour,\n                    percentage\n                FROM occupancy_logs\n                WHERE timestamp >= $1 AND timestamp < $2\n            ) AS subquery\n            GROUP BY weekday, hour\n            ORDER BY weekday, hour\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "weekday!: i32",
+        "type_info": "Int4",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 1,
+        "name": "hour!: i32",
+        "type_info": "Int4",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 2,
+        "name": "avg_percentage!: f64",
+        "type_info": "Float8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 3,
+        "name": "sample_count!: i64",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Timestamptz",
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "8796eb881e742ee349902141e546a515d1ed6243e8ff9656010cc56da7fdcf94"
+}

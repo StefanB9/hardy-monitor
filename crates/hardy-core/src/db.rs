@@ -49,11 +49,9 @@ impl Database {
 
     #[tracing::instrument(skip_all, fields(db.operation = "insert", %timestamp))]
     pub async fn insert_record(&self, timestamp: DateTime<Utc>, percentage: f64) -> Result<i64> {
-        let timestamp_str = timestamp.to_rfc3339();
-
         let result = sqlx::query_scalar!(
             "INSERT INTO occupancy_logs (timestamp, percentage) VALUES ($1, $2) RETURNING id",
-            timestamp_str,
+            timestamp,
             percentage
         )
         .fetch_one(&self.pool)
@@ -76,7 +74,7 @@ impl Database {
             r#"
             SELECT
                 id as "id!",
-                timestamp::timestamptz as "timestamp!",
+                timestamp as "timestamp!",
                 percentage as "percentage!"
             FROM occupancy_logs
             ORDER BY timestamp DESC
@@ -96,22 +94,19 @@ impl Database {
         start: DateTime<Utc>,
         end: DateTime<Utc>,
     ) -> Result<Vec<OccupancyLog>> {
-        let start_str = start.to_rfc3339();
-        let end_str = end.to_rfc3339();
-
         let logs = sqlx::query_as!(
             OccupancyLog,
             r#"
             SELECT
                 id as "id!",
-                timestamp::timestamptz as "timestamp!",
+                timestamp as "timestamp!",
                 percentage as "percentage!"
             FROM occupancy_logs
             WHERE timestamp >= $1 AND timestamp <= $2
             ORDER BY timestamp ASC
             "#,
-            start_str,
-            end_str
+            start,
+            end
         )
         .fetch_all(&self.pool)
         .await
@@ -121,20 +116,18 @@ impl Database {
     }
 
     async fn get_history_from(&self, cutoff: DateTime<Utc>) -> Result<Vec<OccupancyLog>> {
-        let cutoff_str = cutoff.to_rfc3339();
-
         let logs = sqlx::query_as!(
             OccupancyLog,
             r#"
             SELECT
                 id as "id!",
-                timestamp::timestamptz as "timestamp!",
+                timestamp as "timestamp!",
                 percentage as "percentage!"
             FROM occupancy_logs
             WHERE timestamp >= $1
             ORDER BY timestamp ASC
             "#,
-            cutoff_str
+            cutoff
         )
         .fetch_all(&self.pool)
         .await
@@ -149,9 +142,6 @@ impl Database {
         start: DateTime<Utc>,
         end: DateTime<Utc>,
     ) -> Result<Vec<HourlyAverage>> {
-        let start_str = start.to_rfc3339();
-        let end_str = end.to_rfc3339();
-
         let logs = sqlx::query_as!(
             HourlyAverage,
             r#"
@@ -162,8 +152,8 @@ impl Database {
                 COUNT(*) as "sample_count!: i64"
             FROM (
                 SELECT
-                    (EXTRACT(ISODOW FROM timestamp::timestamptz)::INTEGER - 1) as weekday,
-                    EXTRACT(HOUR FROM timestamp::timestamptz)::INTEGER as hour,
+                    (EXTRACT(ISODOW FROM timestamp)::INTEGER - 1) as weekday,
+                    EXTRACT(HOUR FROM timestamp)::INTEGER as hour,
                     percentage
                 FROM occupancy_logs
                 WHERE timestamp >= $1 AND timestamp < $2
@@ -171,8 +161,8 @@ impl Database {
             GROUP BY weekday, hour
             ORDER BY weekday, hour
             "#,
-            start_str,
-            end_str
+            start,
+            end
         )
         .fetch_all(&self.pool)
         .await
@@ -207,7 +197,7 @@ impl Database {
             r#"
             SELECT
                 id as "id!",
-                timestamp::timestamptz as "timestamp!",
+                timestamp as "timestamp!",
                 percentage as "percentage!"
             FROM occupancy_logs
             ORDER BY timestamp ASC
@@ -290,10 +280,9 @@ impl Database {
             .context("failed to begin transaction")?;
 
         for (timestamp, percentage) in records {
-            let ts = timestamp.to_rfc3339();
             sqlx::query!(
                 "INSERT INTO occupancy_logs (timestamp, percentage) VALUES ($1, $2)",
-                ts,
+                timestamp,
                 percentage
             )
             .execute(&mut *tx)
@@ -311,6 +300,42 @@ impl Database {
             .await
             .context("Failed to delete record")?;
         Ok(())
+    }
+
+    /// Delete multiple records by ID in a single query.
+    #[tracing::instrument(skip_all, fields(db.operation = "batch_delete", count = ids.len()))]
+    pub async fn batch_delete(&self, ids: &[i64]) -> Result<u64> {
+        let result = sqlx::query!("DELETE FROM occupancy_logs WHERE id = ANY($1)", ids)
+            .execute(&self.pool)
+            .await
+            .context("Failed to batch delete records")?;
+        Ok(result.rows_affected())
+    }
+
+    /// Update percentage for multiple records in a single transaction.
+    #[tracing::instrument(skip_all, fields(db.operation = "batch_update_percentage", count = updates.len()))]
+    pub async fn batch_update_percentage(&self, updates: &[(i64, f64)]) -> Result<u64> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .context("failed to begin batch update transaction")?;
+
+        let mut total = 0u64;
+        for &(id, percentage) in updates {
+            let result = sqlx::query!(
+                "UPDATE occupancy_logs SET percentage = $1 WHERE id = $2",
+                percentage,
+                id
+            )
+            .execute(&mut *tx)
+            .await
+            .context("Failed to update percentage in batch")?;
+            total += result.rows_affected();
+        }
+
+        tx.commit().await.context("failed to commit batch update")?;
+        Ok(total)
     }
 
     pub async fn close(self) {
