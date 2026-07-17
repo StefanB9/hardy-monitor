@@ -69,7 +69,7 @@ impl Notifier for CombinedNotifier {
             {
                 Err(e) => warn!(error = %e, "desktop notification task panicked"),
                 Ok(Err(e)) => warn!(error = %e, "desktop notification failed"),
-                Ok(Ok(())) => {}
+                Ok(Ok(_)) => {}
             }
 
             if let Some(ref topic) = self.ntfy_topic {
