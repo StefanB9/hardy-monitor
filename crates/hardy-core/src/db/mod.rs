@@ -13,6 +13,9 @@ use sqlx::{FromRow, PgPool, postgres::PgPoolOptions};
 use crate::{config::DatabaseConfig, traits::Clock};
 
 mod alert_settings;
+mod ml;
+
+pub use ml::{MlState, ModelInfo, NewModel};
 
 /// Where a stored value came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, sqlx::Type)]

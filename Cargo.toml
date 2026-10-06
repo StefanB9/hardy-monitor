@@ -88,3 +88,11 @@ overflow-checks = true
 panic = "unwind"
 rpath = true
 strip = false
+
+# Random forest training is ~20x slower unoptimised. smartcore's generic
+# code is instantiated in hardy-ml, so both need optimising to keep tests fast.
+[profile.dev.package.smartcore]
+opt-level = 3
+
+[profile.dev.package.hardy-ml]
+opt-level = 3

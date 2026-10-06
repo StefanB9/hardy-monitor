@@ -1,0 +1,50 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT retrain_requested_at, last_attempt_at, last_error FROM ml_state WHERE id = 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "retrain_requested_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "ml_state",
+            "name": "retrain_requested_at"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "last_attempt_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "ml_state",
+            "name": "last_attempt_at"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "last_error",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "ml_state",
+            "name": "last_error"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "d6bb0239ff705a8cca7d944255e4c0efe1bfb680e61fdc97c14ac696d69d1d24"
+}

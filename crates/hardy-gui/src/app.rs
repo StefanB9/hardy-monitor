@@ -14,19 +14,15 @@ use hardy_core::{
         midnight_local_as_utc,
     },
     config::AppConfig,
-    db::{Database, HourlyAverage, OccupancyLog},
+    db::{Database, HourlyAverage, MlState, ModelInfo, OccupancyLog},
     error::AppError,
     repair::DataRepairer,
     schedule::GymSchedule,
     traits::{Clock, Notifier},
 };
-use hardy_ml::{
-    CvScoresSummary, HyperparametersSummary, MlConfig, OccupancyPredictor, PersistedModel,
-    PredictionWithConfidence, TrainingInfo, TrainingResult,
-};
+use hardy_ml::{ModelArtifact, PredictionWithConfidence, features::FEATURE_VERSION};
 use iced::{
     Alignment, Border, Color, Element, Length, Shadow, Subscription, Task, Theme, Vector,
-    task::Handle,
     widget::{Space, button, canvas::Cache, column, container, row, stack, text},
     window,
 };
@@ -35,6 +31,7 @@ use tray_icon::{TrayIcon, TrayIconEvent};
 
 use crate::{
     alerts::AlertControls,
+    forecasting::Forecasting,
     style,
     views::{
         self, DashboardProps, DataRepairProps, InsightsProps, MLPredictionsProps,
@@ -93,10 +90,8 @@ struct MonitorState {
     quiet_hours: Vec<(i32, i32, f64)>,
     trend: Option<TrendDirection>,
     baseline_for_comparison: Vec<HourlyAverage>,
-    predictor: OccupancyPredictor,
-    ml_predictions: Vec<PredictionWithConfidence>,
+    forecasting: Forecasting,
     ml_predictions_simple: Vec<(DateTime<Utc>, f64)>,
-    ml_training_in_progress: bool,
 }
 
 const LOADING_DEBOUNCE_MS: u64 = 200;
@@ -133,7 +128,6 @@ pub struct HardyMonitorApp {
     notifier: Arc<dyn Notifier>,
     _tray_icon: Option<TrayIcon>,
     error: Option<AppError>,
-    training_handle: Option<Handle>,
 
     data: MonitorState,
     ui: UiState,
@@ -187,12 +181,12 @@ pub enum Message {
     RepairProgress(RepairProgress),
     RepairCompleted(Result<RepairSummary, AppError>),
 
-    MlTrainingCompleted(Result<Box<TrainingResult>, String>),
+    /// New rows for the forecasting history.
+    ForecastHistoryLoaded(Result<Vec<OccupancyLog>, AppError>),
+    /// Newest stored model and training state.
+    ModelStatusLoaded(Result<(Option<ModelInfo>, MlState), AppError>),
+    ModelLoaded(Result<(ModelInfo, Arc<ModelArtifact>), AppError>),
     TrainModelRequested,
-    CancelTrainingRequested,
-    LoadModelRequested,
-    LoadModelCompleted(Result<Box<PersistedModel>, String>),
-    ModelPersisted,
     PredictionModeToggled(bool),
     ModelDetailsToggled(bool),
 }
@@ -216,44 +210,7 @@ impl HardyMonitorApp {
             .to_string();
 
         let schedule = GymSchedule::new(&config.schedule);
-        let ml_config = config.ml.clone();
-
-        // Try loading persisted model (including full weights) on startup
-        let mut predictor = OccupancyPredictor::new(ml_config);
-        if let Some(path) = config.ml.resolve_model_path() {
-            match PersistedModel::load(&path) {
-                Ok(persisted) => {
-                    // Always load metadata (quantiles, training info)
-                    if let Some(quantiles) = persisted.to_residual_quantiles() {
-                        predictor.set_residual_quantiles(Some(quantiles));
-                    }
-                    predictor.set_training_info(Some(TrainingInfo::from_persisted(&persisted)));
-
-                    // Attempt to reconstruct full model from weights
-                    match persisted.to_trained_model() {
-                        Ok(model) => {
-                            let trained_at = persisted.created_at;
-                            predictor.set_model(model, trained_at);
-                            tracing::info!(
-                                summary = %persisted.summary(),
-                                "Loaded persisted ML model with weights"
-                            );
-                        }
-                        Err(e) => {
-                            tracing::warn!(
-                                error = %e,
-                                summary = %persisted.summary(),
-                                "Loaded model metadata but could not restore weights"
-                            );
-                        }
-                    }
-                }
-                Err(e) => {
-                    tracing::debug!(error = %e, "No persisted model loaded");
-                }
-            }
-        }
-
+        let horizon_hours = u32::try_from(config.ml.prediction_horizon_hours).unwrap_or(6);
         let app = Self {
             db: db.clone(),
             config,
@@ -262,7 +219,6 @@ impl HardyMonitorApp {
             notifier,
             _tray_icon: tray_icon,
             error: None,
-            training_handle: None,
             data: MonitorState {
                 occupancy: None,
                 history: Vec::new(),
@@ -278,10 +234,8 @@ impl HardyMonitorApp {
                 quiet_hours: Vec::new(),
                 trend: None,
                 baseline_for_comparison: Vec::new(),
-                predictor,
-                ml_predictions: Vec::new(),
+                forecasting: Forecasting::new(horizon_hours),
                 ml_predictions_simple: Vec::new(),
-                ml_training_in_progress: false,
             },
             ui: UiState {
                 is_loading: false,
@@ -315,6 +269,8 @@ impl HardyMonitorApp {
         let prediction_days = app.config.analytics.prediction_window_days;
         let initial_tasks = vec![
             Self::load_alert_settings(db.clone()),
+            app.load_forecast_history(),
+            Self::load_model_status(db.clone()),
             Self::load_history(db.clone()),
             Self::load_analytics(
                 db.clone(),
@@ -351,23 +307,10 @@ impl HardyMonitorApp {
             Message::Tick => {
                 self.data.predictions =
                     analytics::calculate_predictions(&self.data.prediction_baseline);
-                self.data.ml_predictions = self.data.predictor.predict(
-                    &self.data.prediction_baseline,
-                    &self.schedule,
-                    self.clock.as_ref(),
-                );
-                self.data.ml_predictions_simple = self
-                    .data
-                    .ml_predictions
-                    .iter()
-                    .map(PredictionWithConfidence::to_simple)
-                    .collect();
-                self.ui.ml_predictions_chart_cache.clear();
+                self.refresh_forecasts();
                 Task::none()
             }
-            Message::ChartInteraction | Message::NotificationSent | Message::ModelPersisted => {
-                Task::none()
-            }
+            Message::ChartInteraction | Message::NotificationSent => Task::none(),
             Message::FetchAlignmentComplete => {
                 self.ui.is_poll_aligned = true;
                 if self.schedule.is_open(&self.clock.now_utc()) {
@@ -699,149 +642,61 @@ impl HardyMonitorApp {
                 Task::none()
             }
             Message::TrainModelRequested => {
-                if self.data.ml_training_in_progress {
-                    return Task::none();
-                }
-                self.data.ml_training_in_progress = true;
-                tracing::info!("ML model training requested by user");
-                let task = Self::train_ml_model(
-                    self.db.clone(),
-                    self.clock.clone(),
-                    self.schedule.clone(),
-                    self.config.ml.clone(),
-                );
-                let (task, handle) = task.abortable();
-                self.training_handle = Some(handle);
-                task
-            }
-            Message::CancelTrainingRequested => {
-                if let Some(handle) = self.training_handle.take() {
-                    handle.abort();
-                }
-                self.data.ml_training_in_progress = false;
-                tracing::info!("ML model training cancelled by user");
-                Task::none()
-            }
-            Message::LoadModelRequested => {
-                let path = self.config.ml.resolve_model_path();
+                let db = self.db.clone();
+                let now = self.clock.now_utc();
+                tracing::info!("model retraining requested");
                 Task::perform(
                     async move {
-                        let path = path.ok_or_else(|| "No model path configured".to_string())?;
-                        PersistedModel::load(&path)
-                            .map(Box::new)
-                            .map_err(|e| e.to_string())
+                        db.request_retrain(now).await?;
+                        db.get_ml_state().await
                     },
-                    Message::LoadModelCompleted,
+                    |r: Result<MlState, anyhow::Error>| match r {
+                        Ok(state) => Message::ModelStatusLoaded(Ok((None, state))),
+                        Err(e) => Message::ModelStatusLoaded(Err(AppError::from_anyhow_db(
+                            e,
+                            "request_retrain",
+                        ))),
+                    },
                 )
             }
-            Message::LoadModelCompleted(result) => {
+            Message::ForecastHistoryLoaded(result) => {
                 match result {
-                    Ok(persisted) => {
-                        if let Some(quantiles) = persisted.to_residual_quantiles() {
-                            self.data.predictor.set_residual_quantiles(Some(quantiles));
-                        }
-                        self.data
-                            .predictor
-                            .set_training_info(Some(TrainingInfo::from_persisted(&persisted)));
-
-                        match persisted.to_trained_model() {
-                            Ok(model) => {
-                                let trained_at = persisted.created_at;
-                                self.data.predictor.set_model(model, trained_at);
-                                self.data
-                                    .predictor
-                                    .update_baseline(&self.data.prediction_baseline);
-                                self.data.ml_predictions = self.data.predictor.predict(
-                                    &self.data.prediction_baseline,
-                                    &self.schedule,
-                                    self.clock.as_ref(),
-                                );
-                                self.data.ml_predictions_simple = self
-                                    .data
-                                    .ml_predictions
-                                    .iter()
-                                    .map(PredictionWithConfidence::to_simple)
-                                    .collect();
-                                self.ui.ml_predictions_chart_cache.clear();
-                                tracing::info!(
-                                    trained_at = %trained_at,
-                                    "Loaded ML model from disk"
-                                );
-                            }
-                            Err(e) => {
-                                tracing::warn!(
-                                    error = %e,
-                                    "Loaded model metadata but weights invalid"
-                                );
-                            }
-                        }
+                    Ok(logs) => {
+                        self.data.forecasting.add_history(&logs);
+                        self.refresh_forecasts();
                     }
-                    Err(e) => {
-                        tracing::warn!(error = %e, "Failed to load ML model from disk");
-                    }
+                    Err(e) => self.error = Some(e),
                 }
                 Task::none()
             }
-            Message::MlTrainingCompleted(result) => {
-                self.data.ml_training_in_progress = false;
-                match result {
-                    Ok(training) => {
-                        // Build TrainingInfo before moving fields out of
-                        // training
-                        let training_info = Self::build_training_info(&training, &self.config.ml);
-                        self.data.predictor.set_training_info(Some(training_info));
-
-                        let trained_at = training.persisted.created_at;
-                        tracing::info!(
-                            trained_at = %trained_at,
-                            training_mse = training.persisted.training_mse,
-                            validation_mse = ?training.persisted.validation_mse,
-                            "ML model training completed"
-                        );
-
-                        self.data.predictor.set_model(training.model, trained_at);
-                        self.data
-                            .predictor
-                            .set_residual_quantiles(training.residual_quantiles);
-                        self.data
-                            .predictor
-                            .update_baseline(&self.data.prediction_baseline);
-                        self.data.ml_predictions = self.data.predictor.predict(
-                            &self.data.prediction_baseline,
-                            &self.schedule,
-                            self.clock.as_ref(),
-                        );
-                        self.data.ml_predictions_simple = self
-                            .data
-                            .ml_predictions
-                            .iter()
-                            .map(PredictionWithConfidence::to_simple)
-                            .collect();
-                        self.ui.ml_predictions_chart_cache.clear();
-
-                        // Persist model metadata to disk (fire-and-forget)
-                        if let Some(path) = self.config.ml.resolve_model_path() {
-                            let persisted = training.persisted;
-                            return Task::perform(
-                                async move {
-                                    if let Err(e) = persisted.save(&path) {
-                                        tracing::warn!(
-                                            error = %e,
-                                            "Failed to save ML model metadata"
-                                        );
-                                    }
-                                },
-                                |()| Message::ModelPersisted,
-                            );
+            Message::ModelStatusLoaded(result) => match result {
+                Ok((latest, state)) => {
+                    self.data.forecasting.set_state(state);
+                    match latest {
+                        Some(info) if self.data.forecasting.is_new_model(Some(&info)) => {
+                            Self::load_model(self.db.clone(), info)
                         }
-
-                        Task::none()
-                    }
-                    Err(e) => {
-                        tracing::warn!(error = %e, "ML model training failed");
-                        Task::none()
+                        _ => Task::none(),
                     }
                 }
+                Err(e) => {
+                    self.error = Some(e);
+                    Task::none()
+                }
+            },
+            Message::ModelLoaded(result) => {
+                match result {
+                    Ok((info, artifact)) => {
+                        tracing::info!(id = info.id, trained_at = %info.trained_at, "loaded model");
+                        self.data.forecasting.set_model(&info, artifact);
+                        self.refresh_forecasts();
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "could not load stored model");
+                        self.error = Some(e);
+                    }
+                }
+                Task::none()
             }
         }
     }
@@ -869,10 +724,10 @@ impl HardyMonitorApp {
                 history_start_date: &self.ui.history_start_date,
                 history_end_date: &self.ui.history_end_date,
                 history_days_preset: self.ui.history_days_preset,
-                ml_predictions: &self.data.ml_predictions,
+                ml_predictions: self.data.forecasting.forecasts(),
                 ml_predictions_simple: &self.data.ml_predictions_simple,
                 show_ml_prediction: self.ui.show_ml_prediction,
-                ml_has_model: self.data.predictor.has_model(),
+                ml_has_model: self.data.forecasting.has_model(),
             }),
             ViewMode::WeeklyPattern => views::weekly_pattern::view(WeeklyPatternProps {
                 analytics_data: &self.data.analytics_data,
@@ -888,23 +743,22 @@ impl HardyMonitorApp {
                 quiet_hours: &self.data.quiet_hours,
                 day_analysis: &self.data.day_analysis,
                 insights: &self.data.insights,
-                ml_has_model: self.data.predictor.has_model(),
-                ml_training_in_progress: self.data.ml_training_in_progress,
-                ml_last_trained: self.data.predictor.last_training(),
+                ml_has_model: self.data.forecasting.has_model(),
+                ml_training_in_progress: self.data.forecasting.retrain_pending(),
+                ml_last_trained: self.data.forecasting.summary().map(|m| m.trained_at),
             }),
             ViewMode::MLPredictions => views::ml_predictions::view(MLPredictionsProps {
                 timezone: self.schedule.timezone(),
-                ml_predictions: &self.data.ml_predictions,
+                ml_predictions: self.data.forecasting.forecasts(),
                 ml_predictions_simple: &self.data.ml_predictions_simple,
-                ml_has_model: self.data.predictor.has_model(),
-                ml_training_in_progress: self.data.ml_training_in_progress,
-                ml_last_trained: self.data.predictor.last_training(),
+                ml_has_model: self.data.forecasting.has_model(),
+                retrain_pending: self.data.forecasting.retrain_pending(),
+                last_training_error: self.data.forecasting.last_error(),
                 chart_cache: &self.ui.ml_predictions_chart_cache,
                 now: self.clock.now_utc(),
-                training_info: self.data.predictor.training_info(),
+                model: self.data.forecasting.summary(),
                 history: &self.data.history,
                 show_model_details: self.ui.show_model_details,
-                retrain_interval_hours: self.config.ml.retrain_interval_hours,
             }),
             ViewMode::DataRepair => views::data_repair::view(DataRepairProps {
                 start_date: &self.repair.start_date,
@@ -1166,23 +1020,12 @@ impl HardyMonitorApp {
                 self.error = None;
                 self.ui.gauge_cache.clear();
 
-                self.data.predictor.add_observation(now, percentage);
                 self.data.predictions =
                     analytics::calculate_predictions(&self.data.prediction_baseline);
-                self.data.ml_predictions = self.data.predictor.predict(
-                    &self.data.prediction_baseline,
-                    &self.schedule,
-                    self.clock.as_ref(),
-                );
-                self.data.ml_predictions_simple = self
-                    .data
-                    .ml_predictions
-                    .iter()
-                    .map(PredictionWithConfidence::to_simple)
-                    .collect();
-                self.ui.ml_predictions_chart_cache.clear();
 
                 let mut tasks = vec![
+                    self.load_forecast_history(),
+                    Self::load_model_status(self.db.clone()),
                     Self::load_history(self.db.clone()),
                     Self::load_analytics(
                         self.db.clone(),
@@ -1362,64 +1205,63 @@ impl HardyMonitorApp {
         )
     }
 
-    fn train_ml_model(
-        db: Arc<Database>,
-        clock: Arc<dyn Clock>,
-        schedule: GymSchedule,
-        config: MlConfig,
-    ) -> Task<Message> {
+    /// Fetches readings newer than those already held for forecasting.
+    fn load_forecast_history(&self) -> Task<Message> {
+        let db = self.db.clone();
+        let now = self.clock.now_utc();
+        let start = self.data.forecasting.history_fetch_start(now);
         Task::perform(
-            async move {
-                let join_result = tokio::task::spawn_blocking(move || {
-                    tokio::runtime::Handle::current().block_on(async {
-                        hardy_ml::training::train_model(
-                            db.as_ref(),
-                            clock.as_ref(),
-                            &schedule,
-                            &config,
-                        )
-                        .await
-                    })
-                })
-                .await;
-
-                match join_result {
-                    // Thread succeeded, and training succeeded
-                    Ok(Ok(training_result)) => Ok(Box::new(training_result)),
-                    // Thread succeeded, but training returned an error
-                    Ok(Err(training_err)) => Err(training_err.to_string()),
-                    // The thread itself panicked or was cancelled
-                    Err(join_err) => Err(format!("Task panicked or cancelled: {join_err}")),
-                }
+            async move { db.get_history_range(start, now).await },
+            |r: Result<Vec<OccupancyLog>, anyhow::Error>| {
+                Message::ForecastHistoryLoaded(
+                    r.map_err(|e| AppError::from_anyhow_db(e, "get_forecast_history")),
+                )
             },
-            Message::MlTrainingCompleted,
         )
     }
 
-    fn build_training_info(training: &TrainingResult, ml_config: &MlConfig) -> TrainingInfo {
-        TrainingInfo {
-            algorithm: training.model.model_type().to_string(),
-            training_samples: training.model.training_samples,
-            training_window_days: ml_config.training_window_days,
-            training_mse: training.model.training_mse,
-            validation_mse: training.model.validation_mse,
-            cv_scores: training.cv_scores.as_ref().map(|cv| CvScoresSummary {
-                rmse_mean: cv.rmse.mean,
-                rmse_std: cv.rmse.std_dev,
-                mae_mean: cv.mae.mean,
-                mae_std: cv.mae.std_dev,
-                r_squared_mean: cv.r_squared.mean,
-                r_squared_std: cv.r_squared.std_dev,
-            }),
-            best_hyperparameters: training.best_hyperparameters.as_ref().map(|hp| {
-                HyperparametersSummary {
-                    n_trees: hp.n_trees,
-                    max_depth: hp.max_depth,
-                    min_samples_leaf: hp.min_samples_leaf,
-                    max_features: hp.max_features,
-                }
-            }),
-        }
+    fn load_model_status(db: Arc<Database>) -> Task<Message> {
+        Task::perform(
+            async move {
+                let latest = db.latest_model_info(FEATURE_VERSION).await?;
+                let state = db.get_ml_state().await?;
+                Ok((latest, state))
+            },
+            |r: Result<(Option<ModelInfo>, MlState), anyhow::Error>| {
+                Message::ModelStatusLoaded(
+                    r.map_err(|e| AppError::from_anyhow_db(e, "load_model_status")),
+                )
+            },
+        )
+    }
+
+    fn load_model(db: Arc<Database>, info: ModelInfo) -> Task<Message> {
+        Task::perform(
+            async move {
+                let bytes = db
+                    .load_model(info.id)
+                    .await
+                    .map_err(|e| AppError::from_anyhow_db(e, "load_model"))?;
+                let artifact = ModelArtifact::from_bytes(&bytes)
+                    .map_err(|e| AppError::MlTraining(e.to_string()))?;
+                Ok((info, Arc::new(artifact)))
+            },
+            Message::ModelLoaded,
+        )
+    }
+
+    fn refresh_forecasts(&mut self) {
+        self.data
+            .forecasting
+            .refresh(&self.schedule, self.clock.now_utc());
+        self.data.ml_predictions_simple = self
+            .data
+            .forecasting
+            .forecasts()
+            .iter()
+            .map(PredictionWithConfidence::to_simple)
+            .collect();
+        self.ui.ml_predictions_chart_cache.clear();
     }
 
     fn load_insights_data(db: Arc<Database>, clock: &dyn Clock, tz: Tz) -> Task<Message> {

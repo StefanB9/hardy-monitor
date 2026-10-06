@@ -208,3 +208,36 @@ async fn test_alert_settings_migration_reverts() {
 
     raw.cleanup().await;
 }
+
+const ML_MODELS_VERSION: i64 = 20_261_006_191_435;
+
+#[tokio::test]
+async fn test_ml_models_migration_seeds_state_and_reverts() {
+    let raw = common::RawTestDatabase::new().await;
+    let migrator = sqlx::migrate!("../../migrations");
+    migrator.run(&raw.pool).await.unwrap();
+
+    let rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM ml_state")
+        .fetch_one(&raw.pool)
+        .await
+        .unwrap();
+    assert_eq!(rows, 1);
+    let second = sqlx::query("INSERT INTO ml_state (id) VALUES (2)")
+        .execute(&raw.pool)
+        .await;
+    assert!(second.is_err(), "only one state row may exist");
+
+    migrator
+        .undo(&raw.pool, ML_MODELS_VERSION - 1)
+        .await
+        .expect("down migration applies");
+    let exists: bool = sqlx::query_scalar(
+        "SELECT to_regclass('ml_models') IS NOT NULL OR to_regclass('ml_state') IS NOT NULL",
+    )
+    .fetch_one(&raw.pool)
+    .await
+    .unwrap();
+    assert!(!exists);
+
+    raw.cleanup().await;
+}
