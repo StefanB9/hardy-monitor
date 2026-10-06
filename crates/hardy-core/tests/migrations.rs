@@ -156,3 +156,55 @@ async fn test_data_integrity_migration_reverts_and_restores_quarantine() {
 
     raw.cleanup().await;
 }
+
+const ALERT_SETTINGS_VERSION: i64 = 20_261_006_175_013;
+
+#[tokio::test]
+async fn test_alert_settings_migration_seeds_single_disarmed_row() {
+    let raw = common::RawTestDatabase::new().await;
+    sqlx::migrate!("../../migrations")
+        .run(&raw.pool)
+        .await
+        .unwrap();
+
+    let row: (bool, f64, String) =
+        sqlx::query_as("SELECT enabled, threshold_percent, updated_by FROM alert_settings")
+            .fetch_one(&raw.pool)
+            .await
+            .expect("exactly one seeded row");
+    assert_eq!(row, (false, 30.0, "migration".to_string()));
+
+    let second = sqlx::query(
+        "INSERT INTO alert_settings (id, enabled, threshold_percent, updated_by) VALUES (2, true, \
+         10, 'gui')",
+    )
+    .execute(&raw.pool)
+    .await;
+    assert!(second.is_err(), "only one settings row may exist");
+
+    let bad_threshold = sqlx::query("UPDATE alert_settings SET threshold_percent = 150")
+        .execute(&raw.pool)
+        .await;
+    assert!(bad_threshold.is_err(), "threshold must stay within 0..=100");
+
+    raw.cleanup().await;
+}
+
+#[tokio::test]
+async fn test_alert_settings_migration_reverts() {
+    let raw = common::RawTestDatabase::new().await;
+    let migrator = sqlx::migrate!("../../migrations");
+    migrator.run(&raw.pool).await.unwrap();
+    migrator
+        .undo(&raw.pool, ALERT_SETTINGS_VERSION - 1)
+        .await
+        .expect("down migration applies");
+
+    let exists: bool = sqlx::query_scalar("SELECT to_regclass('alert_settings') IS NOT NULL")
+        .fetch_one(&raw.pool)
+        .await
+        .unwrap();
+    assert!(!exists);
+
+    raw.cleanup().await;
+}

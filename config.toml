@@ -29,14 +29,35 @@ data_fetch_interval_secs = 60
 tray_poll_interval_ms = 50
 
 [notifications]
-enabled = false
-threshold_percent = 30.0
-# Ntfy.sh topic for phone notifications (install ntfy app and subscribe to this topic)
+# Low-occupancy alerts are sent by the daemon. Turn them on/off and set the
+# threshold from the desktop app or from your phone (see control_topic) —
+# that state is stored in the database, not here.
+#
+# ntfy topic the daemon publishes alerts and command replies to (subscribe to
+# it in the ntfy app). Anyone who knows a topic name on ntfy.sh can read it:
+# prefer a random name and/or an access token.
 ntfy_topic = "hardys-occupancy-1993"
 # Override to point at a self-hosted ntfy instance
 ntfy_server = "https://ntfy.sh"
-# Minimum seconds between consecutive notifications (prevents rapid threshold crossing spam)
+# Access token for protected topics: set HARDY__NOTIFICATIONS__NTFY_TOKEN in
+# the environment, never here.
+#
+# Topic the daemon reads commands from (must differ from ntfy_topic). Send:
+#   on            arm until closing at the current threshold
+#   on 25 2h      arm below 25% for 2 hours (1-12h), or "always"/"closing"
+#   off           disarm
+#   status        reply with the current state
+# control_topic = "pick-a-random-name"
+# Minimum seconds between consecutive alerts
 cooldown_secs = 300
+# No alerts this long after opening (it is always empty at opening time)
+opening_grace_minutes = 60
+# Optional gym-local times in which alerts may fire; empty = any opening hour.
+# days: "daily", "weekdays" or "weekends" (holidays count as weekends)
+# windows = [
+#     { days = "weekdays", start = "16:00", end = "21:00" },
+#     { days = "weekends", start = "10:00", end = "18:00" },
+# ]
 
 [thresholds]
 low_occupancy_percent = 30.0

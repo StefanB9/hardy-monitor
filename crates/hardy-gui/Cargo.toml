@@ -20,7 +20,6 @@ muda = { workspace = true }
 ndarray = { workspace = true }
 notify-rust = { workspace = true }
 rayon = { workspace = true }
-reqwest = { workspace = true }
 serde = { workspace = true }
 smartcore = { workspace = true }
 tokio = { workspace = true }

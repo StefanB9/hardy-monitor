@@ -4,10 +4,10 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use hardy_core::{config::AppConfig, db};
+use hardy_core::{alert::AlertRules, config::AppConfig, db};
 use hardy_gui::{
     app::{HardyMonitorApp, Message},
-    notifier::CombinedNotifier,
+    notifier::SystemNotifier,
 };
 use image::GenericImageView;
 use muda::{Menu, MenuItem, PredefinedMenuItem};
@@ -103,6 +103,12 @@ fn main() -> Result<()> {
     })?;
 
     let tray_icon_data = tray_icon_data.context("Failed to load tray icon")?;
+    let alert_rules = AlertRules::new(
+        config.notifications.cooldown_secs,
+        config.notifications.opening_grace_minutes,
+        config.notifications.windows.clone(),
+    )
+    .context("Invalid alert configuration")?;
     let window_width = config.window.width;
     let window_height = config.window.height;
 
@@ -126,10 +132,9 @@ fn main() -> Result<()> {
                 .map_err(|e| tracing::error!("Failed to build tray icon: {e}"))
                 .ok();
 
-            let notifier = CombinedNotifier::new(
-                config.notifications.ntfy_topic.clone(),
-                config.notifications.ntfy_server.clone(),
-            );
+            // Phone alerts are sent by the daemon; the GUI only shows
+            // desktop popups.
+            let notifier = SystemNotifier;
 
             HardyMonitorApp::new(
                 database.clone(),
@@ -137,6 +142,7 @@ fn main() -> Result<()> {
                 config.clone(),
                 Arc::new(hardy_core::SystemClock),
                 Arc::new(notifier),
+                alert_rules.clone(),
             )
         },
         update,
