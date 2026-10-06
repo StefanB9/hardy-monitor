@@ -89,3 +89,17 @@ Pure logic (quiet window, occupancy scale, chart range) is unit- and
 property-tested. Each view is rendered headless (Xvfb + iced's tiny-skia
 renderer, temporary Linux features not committed) against eight weeks of
 synthetic data and inspected via screenshots before committing.
+
+## Implementation notes
+
+- The "consistency" tile measures how much hourly averages differ across the
+  week, so it is labelled **Impact of timing** (small/noticeable/large) rather
+  than shown as a red "varies a lot" warning.
+- Single values (averages, badges, the gauge label) use the three occupancy
+  levels; the heatmap, bars and gradient legend use the continuous scale.
+- The heatmap shows only the hours between the earliest opening and the
+  latest closing; closed slots are left blank instead of greyed.
+- The chart's value axis scales to the data (40–100%) instead of a fixed
+  0–100%; the alert threshold is drawn while alerts are on.
+- Card drop shadows were dropped: flat cards with a border read cleaner and
+  avoid blur artefacts in software rendering.
