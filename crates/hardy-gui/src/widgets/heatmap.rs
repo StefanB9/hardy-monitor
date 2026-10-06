@@ -1,4 +1,3 @@
-use chrono::{Local, Offset};
 use hardy_core::db::HourlyAverage;
 use iced::{
     Color, Point, Rectangle, Renderer, Size, Theme, mouse,
@@ -84,9 +83,6 @@ impl<Message> canvas::Program<Message> for HeatmapWidget<'_> {
         }
 
         let grid_geo = self.cache.draw(renderer, bounds.size(), |frame| {
-            let offset_seconds = Local::now().offset().fix().local_minus_utc();
-            let seconds_per_week = 7 * 24 * 3600;
-
             for (d_idx, day) in days.iter().enumerate() {
                 #[allow(clippy::cast_precision_loss)]
                 let label_y = d_idx as f32 * cell_h + cell_h / 2.0;
@@ -100,7 +96,7 @@ impl<Message> canvas::Program<Message> for HeatmapWidget<'_> {
                     ..Default::default()
                 });
 
-                for hour in 0..24 {
+                for (hour, &val) in lookup[d_idx].iter().enumerate() {
                     #[allow(clippy::cast_precision_loss)]
                     let x = pad_left + hour as f32 * cell_w;
 
@@ -120,19 +116,8 @@ impl<Message> canvas::Program<Message> for HeatmapWidget<'_> {
                     );
 
                     if is_open_hour {
-                        let d_idx_i64 = i64::try_from(d_idx).unwrap_or_default();
-                        let local_seconds = (d_idx_i64 * 24 + i64::from(hour)) * 3600;
-                        let utc_seconds = local_seconds - i64::from(offset_seconds);
-                        let wrapped_utc = ((utc_seconds % seconds_per_week) + seconds_per_week)
-                            % seconds_per_week;
-
-                        let w_idx = usize::try_from((wrapped_utc / 3600) / 24).unwrap_or_default();
-                        let h_idx = usize::try_from((wrapped_utc / 3600) % 24).unwrap_or_default();
-                        let val = if w_idx < 7 && h_idx < 24 {
-                            lookup[w_idx][h_idx]
-                        } else {
-                            0.0
-                        };
+                        // Slots are already gym-local (bucketed in SQL), so the
+                        // grid cell maps 1:1 onto the lookup table.
 
                         let color = if val == 0.0 {
                             style::BG_DARK
@@ -172,21 +157,10 @@ impl<Message> canvas::Program<Message> for HeatmapWidget<'_> {
                 let row = (cursor_pos.y / cell_h).floor() as i64;
 
                 if (0..24).contains(&col) && (0..7).contains(&row) {
-                    let offset_seconds = Local::now().offset().fix().local_minus_utc();
-                    let seconds_per_week = 7 * 24 * 3600;
-
-                    let local_seconds = (row * 24 + col) * 3600;
-                    let utc_seconds = local_seconds - i64::from(offset_seconds);
-                    let wrapped_utc =
-                        ((utc_seconds % seconds_per_week) + seconds_per_week) % seconds_per_week;
-
-                    let w_idx = usize::try_from((wrapped_utc / 3600) / 24).unwrap_or_default();
-                    let h_idx = usize::try_from((wrapped_utc / 3600) % 24).unwrap_or_default();
-                    let val = if w_idx < 7 && h_idx < 24 {
-                        lookup[w_idx][h_idx]
-                    } else {
-                        0.0
-                    };
+                    let val = usize::try_from(row)
+                        .ok()
+                        .zip(usize::try_from(col).ok())
+                        .map_or(0.0, |(r, c)| lookup[r][c]);
 
                     if val != 0.0 {
                         let v = val;

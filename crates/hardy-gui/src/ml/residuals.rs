@@ -49,7 +49,7 @@ pub struct ResidualQuantiles {
     clippy::cast_sign_loss
 )]
 fn compute_quantile(sorted: &[f64], percentile: f64) -> f64 {
-    debug_assert!(!sorted.is_empty());
+    debug_assert_ne!(sorted, &[] as &[f64]);
     debug_assert!((0.0..=100.0).contains(&percentile));
 
     if sorted.len() == 1 {

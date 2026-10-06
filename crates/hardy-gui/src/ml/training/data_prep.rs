@@ -270,8 +270,8 @@ mod tests {
             })
             .collect();
 
-        // Look up value at day 14 (hour 168+6=174), should find value from day 7 (hour
-        // 6)
+        // Look up value at day 14 (hour 168+6=174), should find value from day
+        // 7 (hour 6)
         let target_time = base_time + Duration::hours(174); // 7 days + 6 hours after base
         let result = lookup_prev_week(&logs, target_time);
 
@@ -293,8 +293,9 @@ mod tests {
             })
             .collect();
 
-        // target_time - 7 days = base_time + 14 days - 7 days = base_time + 7 days
-        // Logs only cover 24 hours from base_time, so 7 days later has no data
+        // target_time - 7 days = base_time + 14 days - 7 days = base_time + 7
+        // days Logs only cover 24 hours from base_time, so 7 days later
+        // has no data
         let target_time = base_time + Duration::days(14);
         let result = lookup_prev_week(&logs, target_time);
 
@@ -316,8 +317,9 @@ mod tests {
         let preparer = TrainingDataPreparer::new(config);
         let (features, _targets) = preparer.prepare(&logs, &baseline, &schedule)?;
 
-        // Features after the first week should have non-default prev_week_same_slot
-        // (i.e., different from historical_avg for at least some entries)
+        // Features after the first week should have non-default
+        // prev_week_same_slot (i.e., different from historical_avg for
+        // at least some entries)
         let after_first_week = &features[168..]; // hour 168 = start of week 2
         let has_non_default = after_first_week
             .iter()

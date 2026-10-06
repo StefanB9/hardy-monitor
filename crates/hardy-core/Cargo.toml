@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 anyhow = { workspace = true }
 chrono = { workspace = true }
+chrono-tz = { workspace = true }
 config = { workspace = true }
 csv = { workspace = true }
 dirs = { workspace = true }

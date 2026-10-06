@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
+use chrono_tz::Tz;
 use config::{Config, Environment, File};
 use serde::Deserialize;
 use tracing::warn;
@@ -205,13 +206,23 @@ impl Default for AnalyticsConfig {
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct ScheduleConfig {
+    /// IANA timezone the gym operates in. Opening hours, holidays and all
+    /// local-time aggregation are interpreted in this zone, so results do not
+    /// depend on the timezone of the host running the binary.
+    #[serde(default = "default_gym_timezone")]
+    pub timezone: Tz,
     pub weekday: ScheduleHours,
     pub weekend: ScheduleHours,
+}
+
+fn default_gym_timezone() -> Tz {
+    chrono_tz::Europe::Berlin
 }
 
 impl Default for ScheduleConfig {
     fn default() -> Self {
         Self {
+            timezone: default_gym_timezone(),
             weekday: ScheduleHours {
                 open_hour: 6,
                 close_hour: 23,
@@ -336,6 +347,7 @@ impl AppConfig {
             .set_default("thresholds.low_occupancy_percent", 40.0)?
             .set_default("thresholds.high_occupancy_percent", 75.0)?
             .set_default("analytics.prediction_window_days", 28)?
+            .set_default("schedule.timezone", "Europe/Berlin")?
             .set_default("schedule.weekday.open_hour", 6)?
             .set_default("schedule.weekday.close_hour", 23)?
             .set_default("schedule.weekend.open_hour", 9)?
@@ -431,7 +443,7 @@ mod tests {
     fn test_loaded_config_has_expected_structure() -> Result<()> {
         let config = AppConfig::load()?;
 
-        assert!(!config.gym.api_url.is_empty());
+        assert_ne!(config.gym.api_url, "");
         assert!(config.network.request_timeout_secs > 0);
         assert!(config.window.width > 0.0);
         assert!(config.refresh.data_fetch_interval_secs > 0);
@@ -787,6 +799,61 @@ mod tests {
             data_dir.is_some(),
             "dirs::data_dir() should be available on this platform"
         );
+    }
+
+    #[test]
+    fn test_schedule_config_default_timezone_is_europe_berlin() {
+        let config = ScheduleConfig::default();
+        assert_eq!(config.timezone, chrono_tz::Europe::Berlin);
+    }
+
+    #[test]
+    fn test_schedule_config_deserialize_timezone() -> Result<()> {
+        let toml_str = r#"
+            timezone = "America/New_York"
+            [weekday]
+            open_hour = 6
+            close_hour = 23
+            [weekend]
+            open_hour = 9
+            close_hour = 21
+        "#;
+
+        let config: ScheduleConfig = toml::from_str(toml_str)?;
+        assert_eq!(config.timezone, chrono_tz::America::New_York);
+        Ok(())
+    }
+
+    #[test]
+    fn test_schedule_config_deserialize_without_timezone_uses_default() -> Result<()> {
+        let toml_str = r"
+            [weekday]
+            open_hour = 6
+            close_hour = 23
+            [weekend]
+            open_hour = 9
+            close_hour = 21
+        ";
+
+        let config: ScheduleConfig = toml::from_str(toml_str)?;
+        assert_eq!(config.timezone, chrono_tz::Europe::Berlin);
+        Ok(())
+    }
+
+    #[test]
+    fn test_schedule_config_rejects_unknown_timezone() {
+        let toml_str = r#"
+            timezone = "Mars/Olympus_Mons"
+            [weekday]
+            open_hour = 6
+            close_hour = 23
+            [weekend]
+            open_hour = 9
+            close_hour = 21
+        "#;
+
+        let result: Result<ScheduleConfig, _> = toml::from_str(toml_str);
+        assert!(result.is_err());
     }
 
     #[test]

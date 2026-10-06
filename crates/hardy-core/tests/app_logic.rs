@@ -8,6 +8,7 @@
 #![allow(clippy::manual_string_new)]
 
 use chrono::{Duration as ChronoDuration, TimeZone, Timelike, Utc};
+use chrono_tz::Europe::Berlin;
 use hardy_core::{
     Clock, MockClock, MockNotifier, Notifier, calculate_predictions_with_clock,
     config::{ScheduleConfig, ScheduleHours},
@@ -23,6 +24,7 @@ fn create_test_schedule(
     weekend_close: u32,
 ) -> GymSchedule {
     let config = ScheduleConfig {
+        timezone: chrono_tz::Europe::Berlin,
         weekday: ScheduleHours {
             open_hour: weekday_open,
             close_hour: weekday_close,
@@ -179,7 +181,9 @@ async fn test_notification_message_format() {
 
 #[test]
 fn test_predictions_use_mock_clock_time() {
-    let clock = MockClock::new(Utc.with_ymd_and_hms(2024, 6, 17, 10, 0, 0).unwrap());
+    // Monday 08:00 UTC is 10:00 CEST, so the next slots are local 11 and 12,
+    // plotted at 09:00 and 10:00 UTC.
+    let clock = MockClock::new(Utc.with_ymd_and_hms(2024, 6, 17, 8, 0, 0).unwrap());
     let schedule = create_test_schedule(0, 24, 0, 24);
 
     let baseline = vec![
@@ -200,15 +204,16 @@ fn test_predictions_use_mock_clock_time() {
     let predictions = calculate_predictions_with_clock(&baseline, &schedule, &clock);
 
     assert_eq!(predictions.len(), 2);
-    assert_eq!(predictions[0].0.hour(), 11);
+    assert_eq!(predictions[0].0.hour(), 9);
     assert_eq!(predictions[0].1, 30.0);
-    assert_eq!(predictions[1].0.hour(), 12);
+    assert_eq!(predictions[1].0.hour(), 10);
     assert_eq!(predictions[1].1, 50.0);
 }
 
 #[test]
 fn test_predictions_update_as_time_advances() {
-    let clock = MockClock::new(Utc.with_ymd_and_hms(2024, 6, 17, 10, 0, 0).unwrap());
+    // Monday 10:00 CEST.
+    let clock = MockClock::new(Utc.with_ymd_and_hms(2024, 6, 17, 8, 0, 0).unwrap());
     let schedule = create_test_schedule(0, 24, 0, 24);
 
     let baseline = vec![
@@ -247,7 +252,9 @@ fn test_predictions_update_as_time_advances() {
 
 #[test]
 fn test_predictions_skip_closed_hours() {
-    let clock = MockClock::new(Utc.with_ymd_and_hms(2024, 6, 17, 21, 0, 0).unwrap());
+    // Monday 21:00 CEST: 22:00 is the closing minute (still open), 23:00 is
+    // closed.
+    let clock = MockClock::new(Utc.with_ymd_and_hms(2024, 6, 17, 19, 0, 0).unwrap());
     let schedule = create_test_schedule(6, 22, 8, 20);
 
     let baseline = vec![
@@ -267,10 +274,12 @@ fn test_predictions_skip_closed_hours() {
 
     let predictions = calculate_predictions_with_clock(&baseline, &schedule, &clock);
 
-    assert!(
-        predictions.len() <= 2,
+    assert_eq!(
+        predictions.len(),
+        1,
         "Predictions should be filtered by schedule"
     );
+    assert_eq!(predictions[0].1, 40.0);
 }
 
 #[test]
@@ -298,7 +307,7 @@ fn test_find_best_time_uses_mock_clock_day() {
         },
     ];
 
-    let result = find_best_time_today_with_clock(&data, &clock);
+    let result = find_best_time_today_with_clock(&data, Berlin, &clock);
     assert!(result.is_some());
     let (_, avg) = result.expect("should find best time for Monday");
     assert_eq!(avg, 15.0, "Should find best time for Monday only");
@@ -306,7 +315,8 @@ fn test_find_best_time_uses_mock_clock_day() {
 
 #[test]
 fn test_analytics_at_day_boundary() {
-    let clock = MockClock::new(Utc.with_ymd_and_hms(2024, 6, 16, 23, 59, 0).unwrap());
+    // Sunday 23:59 CEST; two minutes later it is Monday in the gym.
+    let clock = MockClock::new(Utc.with_ymd_and_hms(2024, 6, 16, 21, 59, 0).unwrap());
 
     let data = vec![HourlyAverage {
         weekday: 6,
@@ -315,7 +325,7 @@ fn test_analytics_at_day_boundary() {
         sample_count: 5,
     }];
 
-    let result = find_best_time_today_with_clock(&data, &clock);
+    let result = find_best_time_today_with_clock(&data, Berlin, &clock);
 
     clock.advance(ChronoDuration::minutes(2));
 
@@ -326,40 +336,45 @@ fn test_analytics_at_day_boundary() {
         sample_count: 5,
     }];
 
-    let result2 = find_best_time_today_with_clock(&monday_data, &clock);
-    assert!(
-        result.is_some() || result2.is_some(),
-        "Should find data for at least one of the days"
-    );
+    let result2 = find_best_time_today_with_clock(&monday_data, Berlin, &clock);
+    assert!(result.is_some(), "Sunday slot should match before midnight");
+    assert!(result2.is_some(), "Monday slot should match after midnight");
 }
 
 #[test]
 fn test_schedule_with_mock_clock() {
+    // 10:00 UTC on a Monday in June is 12:00 CEST in the gym.
     let clock = MockClock::new(Utc.with_ymd_and_hms(2024, 6, 17, 10, 0, 0).unwrap());
     let schedule = create_test_schedule(6, 22, 8, 20);
 
-    let local_time = clock.now_local();
-    let is_open = schedule.is_open(&local_time);
-
-    assert!(is_open, "Gym should be open at 10:00 on Monday");
+    assert!(
+        schedule.is_open(&clock.now_utc()),
+        "Gym should be open at 12:00 local on Monday"
+    );
 }
 
 #[test]
 fn test_schedule_open_close_transitions() {
+    // 05:00 UTC = 07:00 CEST (open), 12:00 UTC = 14:00 (open),
+    // 00:00 UTC = 02:00 (closed) — independent of the host timezone.
     let clock = MockClock::new(Utc.with_ymd_and_hms(2024, 6, 17, 5, 0, 0).unwrap());
     let schedule = create_test_schedule(6, 22, 8, 20);
 
-    let early_status = schedule.is_open(&clock.now_local());
+    assert!(
+        schedule.is_open(&clock.now_utc()),
+        "Should be open at 07:00"
+    );
 
     clock.advance(ChronoDuration::hours(7));
-    let midday_status = schedule.is_open(&clock.now_local());
-    assert!(midday_status, "Should be open at midday");
+    assert!(
+        schedule.is_open(&clock.now_utc()),
+        "Should be open at 14:00"
+    );
 
     clock.advance(ChronoDuration::hours(12));
-    let midnight_status = schedule.is_open(&clock.now_local());
     assert!(
-        !midnight_status || early_status,
-        "Either midnight is closed or early morning varies by timezone"
+        !schedule.is_open(&clock.now_utc()),
+        "Should be closed at 02:00"
     );
 }
 

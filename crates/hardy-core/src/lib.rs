@@ -16,6 +16,7 @@ pub use analytics::{
     weekday_short,
 };
 pub use api::{GymApiClient, GymResponse};
+pub use chrono_tz::Tz;
 pub use config::{AppConfig, MlAlgorithm, MlConfig};
 pub use db::{Database, HourlyAverage, OccupancyLog};
 pub use error::{AppError, DatabaseError, NetworkErrorKind};

@@ -10,7 +10,8 @@
 
 mod common;
 
-use chrono::{DateTime, Duration, TimeZone, Utc};
+use chrono::{DateTime, Duration, NaiveDate, TimeZone, Utc};
+use chrono_tz::{America::New_York, Europe::Berlin};
 use hardy_core::MockClock;
 
 #[tokio::test]
@@ -109,6 +110,7 @@ async fn test_get_averages_range() {
         .get_averages_range(
             base_time - Duration::hours(1),
             base_time + Duration::hours(1),
+            Berlin,
         )
         .await
         .expect("averages query should succeed");
@@ -123,6 +125,138 @@ async fn test_get_averages_range() {
         "average of 30, 40, 50 should be 40.0; got {:.4}",
         averages[0].avg_percentage
     );
+
+    tdb.cleanup().await;
+}
+
+fn utc(y: i32, mo: u32, d: u32, h: u32, mi: u32) -> DateTime<Utc> {
+    Utc.with_ymd_and_hms(y, mo, d, h, mi, 0).unwrap()
+}
+
+/// Returns `(weekday, hour, avg)` triples for compact assertions.
+async fn bucket_averages(
+    tdb: &common::TestDatabase,
+    start: DateTime<Utc>,
+    end: DateTime<Utc>,
+    tz: chrono_tz::Tz,
+) -> Vec<(i32, i32, f64)> {
+    tdb.db
+        .get_averages_range(start, end, tz)
+        .await
+        .expect("averages query should succeed")
+        .into_iter()
+        .map(|a| (a.weekday, a.hour, a.avg_percentage))
+        .collect()
+}
+
+#[tokio::test]
+async fn test_get_averages_range_buckets_by_gym_local_hour() {
+    let tdb = common::TestDatabase::new().await;
+
+    // Saturday 10:30 UTC is 12:30 CEST in the gym.
+    tdb.db
+        .insert_record(utc(2024, 6, 15, 10, 30), 42.0)
+        .await
+        .expect("insert should succeed");
+
+    let buckets =
+        bucket_averages(&tdb, utc(2024, 6, 15, 0, 0), utc(2024, 6, 16, 0, 0), Berlin).await;
+    assert_eq!(buckets, vec![(5, 12, 42.0)]);
+
+    tdb.cleanup().await;
+}
+
+#[tokio::test]
+async fn test_get_averages_range_merges_same_local_hour_across_dst() {
+    let tdb = common::TestDatabase::new().await;
+
+    // Both are Mondays at 10:15 gym-local time: CET (UTC+1) and CEST (UTC+2).
+    tdb.db
+        .insert_record(utc(2024, 1, 15, 9, 15), 20.0)
+        .await
+        .expect("insert should succeed");
+    tdb.db
+        .insert_record(utc(2024, 7, 15, 8, 15), 40.0)
+        .await
+        .expect("insert should succeed");
+
+    let buckets =
+        bucket_averages(&tdb, utc(2024, 1, 1, 0, 0), utc(2024, 12, 31, 0, 0), Berlin).await;
+    assert_eq!(buckets, vec![(0, 10, 30.0)]);
+
+    tdb.cleanup().await;
+}
+
+#[tokio::test]
+async fn test_get_averages_range_local_weekday_rolls_over_at_local_midnight() {
+    let tdb = common::TestDatabase::new().await;
+
+    // Sunday 22:30 UTC is already Monday 00:30 CEST.
+    tdb.db
+        .insert_record(utc(2024, 6, 16, 22, 30), 5.0)
+        .await
+        .expect("insert should succeed");
+
+    let buckets =
+        bucket_averages(&tdb, utc(2024, 6, 16, 0, 0), utc(2024, 6, 17, 6, 0), Berlin).await;
+    assert_eq!(buckets, vec![(0, 0, 5.0)]);
+
+    tdb.cleanup().await;
+}
+
+#[tokio::test]
+async fn test_get_averages_range_respects_requested_timezone() {
+    let tdb = common::TestDatabase::new().await;
+
+    // Saturday 10:30 UTC is 06:30 EDT.
+    tdb.db
+        .insert_record(utc(2024, 6, 15, 10, 30), 42.0)
+        .await
+        .expect("insert should succeed");
+
+    let buckets = bucket_averages(
+        &tdb,
+        utc(2024, 6, 15, 0, 0),
+        utc(2024, 6, 16, 0, 0),
+        New_York,
+    )
+    .await;
+    assert_eq!(buckets, vec![(5, 6, 42.0)]);
+
+    tdb.cleanup().await;
+}
+
+#[tokio::test]
+async fn test_get_records_for_date_uses_gym_local_day() {
+    let tdb = common::TestDatabase::new().await;
+
+    let date = NaiveDate::from_ymd_opt(2024, 6, 15).unwrap();
+    // 00:30 local on the 15th (previous UTC day) — inside.
+    tdb.db
+        .insert_record(utc(2024, 6, 14, 22, 30), 1.0)
+        .await
+        .expect("insert should succeed");
+    // 23:59:59.5 local on the 15th — inside (sub-second before midnight).
+    tdb.db
+        .insert_record(
+            utc(2024, 6, 15, 21, 59) + Duration::milliseconds(59_500),
+            2.0,
+        )
+        .await
+        .expect("insert should succeed");
+    // 00:30 local on the 16th (same UTC day) — outside.
+    tdb.db
+        .insert_record(utc(2024, 6, 15, 22, 30), 3.0)
+        .await
+        .expect("insert should succeed");
+
+    let records = tdb
+        .db
+        .get_records_for_date(date, Berlin)
+        .await
+        .expect("query should succeed");
+    let values: Vec<f64> = records.iter().map(|r| r.percentage).collect();
+    assert_eq!(values, vec![1.0, 2.0]);
 
     tdb.cleanup().await;
 }

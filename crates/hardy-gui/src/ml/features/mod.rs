@@ -3,7 +3,7 @@ mod momentum;
 
 use std::collections::{HashMap, VecDeque};
 
-use chrono::{DateTime, Datelike, Local, Timelike, Utc};
+use chrono::{DateTime, Datelike, Timelike, Utc};
 use hardy_core::{
     db::HourlyAverage,
     schedule::{GymSchedule, is_bavarian_holiday},
@@ -171,7 +171,7 @@ impl FeatureExtractor {
         baseline: &[HourlyAverage],
         schedule: &GymSchedule,
     ) -> PredictionFeatures {
-        let local_time = target_time.with_timezone(&Local);
+        let local_time = target_time.with_timezone(&schedule.timezone());
         let hour = local_time.hour().cast_signed();
         let weekday = local_time.weekday().num_days_from_monday().cast_signed();
         let week_of_year = local_time.iso_week().week();
@@ -341,7 +341,8 @@ mod tests {
     // ── Property-based tests for PredictionFeatures (Step 7) ─────────
 
     fn arb_prediction_features() -> impl Strategy<Value = PredictionFeatures> {
-        // Split into three groups to stay within proptest's 12-element tuple limit.
+        // Split into three groups to stay within proptest's 12-element tuple
+        // limit.
         let group1 = (
             -1.0_f64..=1.0,  // hour_sin
             -1.0_f64..=1.0,  // hour_cos
@@ -480,7 +481,7 @@ mod tests {
 
         let features = extractor.extract(ts, 0, &recent, &[], &schedule);
 
-        let local = ts.with_timezone(&Local);
+        let local = ts.with_timezone(&schedule.timezone());
         let expected_hour = f64::from(local.hour().cast_signed());
         let expected_weekday = f64::from(local.weekday().num_days_from_monday().cast_signed());
 
@@ -493,7 +494,15 @@ mod tests {
         let extractor = FeatureExtractor::new();
         // Monday 2024-06-17 at 14:00 local → close at 23 → 9 hours to close
         // We need to pick a UTC time that maps to hour 14 local.
-        let local_14 = chrono::TimeZone::with_ymd_and_hms(&Local, 2024, 6, 17, 14, 0, 0);
+        let local_14 = chrono::TimeZone::with_ymd_and_hms(
+            &GymSchedule::default().timezone(),
+            2024,
+            6,
+            17,
+            14,
+            0,
+            0,
+        );
         let ts = local_14.unwrap().to_utc();
         let recent: VecDeque<(DateTime<Utc>, f64)> = VecDeque::new();
         let schedule = GymSchedule::default(); // weekday_close = 23
@@ -507,7 +516,15 @@ mod tests {
     fn test_extract_time_to_close_clamped() {
         let extractor = FeatureExtractor::new();
         // Monday at 23:00 local → close at 23 → clamped to 0.0
-        let local_23 = chrono::TimeZone::with_ymd_and_hms(&Local, 2024, 6, 17, 23, 0, 0);
+        let local_23 = chrono::TimeZone::with_ymd_and_hms(
+            &GymSchedule::default().timezone(),
+            2024,
+            6,
+            17,
+            23,
+            0,
+            0,
+        );
         let ts = local_23.unwrap().to_utc();
         let recent: VecDeque<(DateTime<Utc>, f64)> = VecDeque::new();
         let schedule = GymSchedule::default();
@@ -550,7 +567,15 @@ mod tests {
         extractor.update_historical_stats(&baseline);
 
         // Monday at hour 14 local
-        let local_14 = chrono::TimeZone::with_ymd_and_hms(&Local, 2024, 6, 17, 14, 0, 0);
+        let local_14 = chrono::TimeZone::with_ymd_and_hms(
+            &GymSchedule::default().timezone(),
+            2024,
+            6,
+            17,
+            14,
+            0,
+            0,
+        );
         let ts = local_14.unwrap().to_utc();
         let recent: VecDeque<(DateTime<Utc>, f64)> = VecDeque::new();
         let schedule = GymSchedule::default();

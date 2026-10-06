@@ -94,8 +94,8 @@ impl TimeSeriesSplit {
     /// Returns `None` if there aren't enough samples to produce all `k` folds
     /// with at least 1 training sample and 1 validation sample each.
     pub fn split(&self, n_samples: usize) -> Option<Vec<Fold>> {
-        // Each fold needs: at least 1 train sample + gap + at least 1 val sample.
-        // The first fold needs the least training data.
+        // Each fold needs: at least 1 train sample + gap + at least 1 val
+        // sample. The first fold needs the least training data.
         // val_size is the same for all folds.
         //
         // Layout: the data is divided into (k + 1) roughly equal segments.
@@ -190,7 +190,7 @@ mod tests {
         let scores = FoldScores::from_scores(vec![]);
         assert_relative_eq!(scores.mean, 0.0);
         assert_relative_eq!(scores.std_dev, 0.0);
-        assert!(scores.per_fold.is_empty());
+        assert_eq!(scores.per_fold, Vec::<f64>::new());
     }
 
     proptest! {
@@ -352,8 +352,8 @@ mod tests {
             .and_then(|s| s.split(1000))
             .unwrap_or_default();
 
-        // Validation ranges should be contiguous and cover from first val_start to
-        // n_samples
+        // Validation ranges should be contiguous and cover from first val_start
+        // to n_samples
         for i in 1..folds.len() {
             assert_eq!(
                 folds[i].val_start,

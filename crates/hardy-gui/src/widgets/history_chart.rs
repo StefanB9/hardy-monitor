@@ -1,5 +1,5 @@
-use chrono::{DateTime, Duration as ChronoDuration, Local, Timelike, Utc};
-use hardy_core::{analytics::midnight_utc, db::OccupancyLog};
+use chrono::{DateTime, Duration as ChronoDuration, Timelike, Utc};
+use hardy_core::{Tz, analytics::midnight_local_as_utc, db::OccupancyLog};
 use iced::{
     Color, Point, Rectangle, Renderer, Size, Theme, mouse,
     widget::canvas::{self, Action, Frame, LineDash, Path, Stroke, Text},
@@ -18,6 +18,8 @@ pub struct HistoryChart<'a> {
     pub confidence_band: &'a [PredictionWithConfidence],
     pub range_start: DateTime<Utc>,
     pub range_end: DateTime<Utc>,
+    /// Gym timezone; axis ticks and labels follow its wall clock.
+    pub timezone: Tz,
     pub cache: &'a canvas::Cache,
 }
 
@@ -90,7 +92,7 @@ impl canvas::Program<Interaction> for HistoryChart<'_> {
                 let mut current = self.range_start;
 
                 if tick_interval == 3600 * 4 {
-                    let rem = current.hour() % 4;
+                    let rem = current.with_timezone(&self.timezone).hour() % 4;
                     if rem != 0 {
                         current += ChronoDuration::hours(i64::from(4 - rem));
                     }
@@ -99,7 +101,9 @@ impl canvas::Program<Interaction> for HistoryChart<'_> {
                         .and_then(|t| t.with_second(0))
                         .unwrap_or(current);
                 } else if tick_interval >= 86400 {
-                    current = midnight_utc(current.date_naive() + ChronoDuration::days(1));
+                    let local_date = current.with_timezone(&self.timezone).date_naive();
+                    current =
+                        midnight_local_as_utc(local_date + ChronoDuration::days(1), self.timezone);
                 }
 
                 while current < self.range_end {
@@ -117,9 +121,15 @@ impl canvas::Program<Interaction> for HistoryChart<'_> {
                             .with_width(0.5),
                     );
                     let label = if tick_interval < 86400 {
-                        current.with_timezone(&Local).format("%H:%M").to_string()
+                        current
+                            .with_timezone(&self.timezone)
+                            .format("%H:%M")
+                            .to_string()
                     } else {
-                        current.with_timezone(&Local).format("%b %d").to_string()
+                        current
+                            .with_timezone(&self.timezone)
+                            .format("%b %d")
+                            .to_string()
                     };
                     frame.fill_text(Text {
                         content: label,
@@ -159,8 +169,8 @@ impl canvas::Program<Interaction> for HistoryChart<'_> {
                 .collect();
 
             if !points.is_empty() {
-                // Group points into segments to avoid drawing lines across large gaps (e.g.,
-                // overnight)
+                // Group points into segments to avoid drawing lines across
+                // large gaps (e.g., overnight)
                 let mut segments: Vec<Vec<(DateTime<Utc>, f64)>> = Vec::new();
                 let mut current_segment = vec![points[0]];
 
@@ -168,7 +178,8 @@ impl canvas::Program<Interaction> for HistoryChart<'_> {
                     let p1 = window[0];
                     let p2 = window[1];
 
-                    // Break the segment if the gap between points is larger than 2 hours
+                    // Break the segment if the gap between points is larger
+                    // than 2 hours
                     if p2.0 - p1.0 > ChronoDuration::hours(2) {
                         segments.push(current_segment);
                         current_segment = vec![p2];
@@ -339,8 +350,11 @@ impl canvas::Program<Interaction> for HistoryChart<'_> {
                     );
                     frame.fill(&Path::circle(Point::new(x, y), 4.0), style::ACCENT_CYAN);
 
-                    let text_str =
-                        format!("{}\n{:.1}%", d.with_timezone(&Local).format("%H:%M"), val);
+                    let text_str = format!(
+                        "{}\n{:.1}%",
+                        d.with_timezone(&self.timezone).format("%H:%M"),
+                        val
+                    );
                     let (box_w, box_h) = (60.0, 35.0);
                     let box_x = if x + 10.0 + box_w > bounds.width {
                         x - 10.0 - box_w

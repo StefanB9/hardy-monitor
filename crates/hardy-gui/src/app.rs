@@ -4,12 +4,13 @@ use std::{
     time::{Duration, Instant},
 };
 
-use chrono::{DateTime, Datelike, Duration as ChronoDuration, Local, NaiveDate, Utc};
+use chrono::{DateTime, Datelike, Duration as ChronoDuration, NaiveDate, Utc};
 use hardy_core::{
+    Tz,
     analytics::{
         self, ComparisonMode, DayAnalysis, Insight, OccupancyStats, TrendDirection, analyze_days,
         calculate_stats, compare_periods, find_peak_hours, find_quiet_hours, generate_insights,
-        midnight_local_as_utc, midnight_utc,
+        midnight_local_as_utc,
     },
     config::AppConfig,
     db::{Database, HourlyAverage, OccupancyLog},
@@ -209,8 +210,9 @@ impl HardyMonitorApp {
     ) -> (Self, Task<Message>) {
         let db = Arc::new(db);
         let now = clock.now_utc();
-        let today_str = now.date_naive().format("%Y-%m-%d").to_string();
-        let tomorrow_str = (now.date_naive() + ChronoDuration::days(1))
+        let gym_today = now.with_timezone(&config.schedule.timezone).date_naive();
+        let today_str = gym_today.format("%Y-%m-%d").to_string();
+        let tomorrow_str = (gym_today + ChronoDuration::days(1))
             .format("%Y-%m-%d")
             .to_string();
 
@@ -322,8 +324,18 @@ impl HardyMonitorApp {
         let prediction_days = app.config.analytics.prediction_window_days;
         let initial_tasks = vec![
             Self::load_history(db.clone()),
-            Self::load_analytics(db.clone(), AnalyticsRange::ThisWeek, app.clock.as_ref()),
-            Self::load_prediction_baseline(db.clone(), prediction_days, app.clock.as_ref()),
+            Self::load_analytics(
+                db.clone(),
+                AnalyticsRange::ThisWeek,
+                app.clock.as_ref(),
+                app.schedule.timezone(),
+            ),
+            Self::load_prediction_baseline(
+                db.clone(),
+                prediction_days,
+                app.clock.as_ref(),
+                app.schedule.timezone(),
+            ),
         ];
 
         let seconds_to_next_minute = 60 - now.timestamp() % 60;
@@ -366,7 +378,7 @@ impl HardyMonitorApp {
             }
             Message::FetchAlignmentComplete => {
                 self.ui.is_poll_aligned = true;
-                if self.schedule.is_open(&self.clock.now_local()) {
+                if self.schedule.is_open(&self.clock.now_utc()) {
                     self.start_loading();
                     Self::fetch_latest_from_db(self.db.clone())
                 } else {
@@ -376,7 +388,7 @@ impl HardyMonitorApp {
                 }
             }
             Message::FetchTick => {
-                if self.schedule.is_open(&self.clock.now_local()) {
+                if self.schedule.is_open(&self.clock.now_utc()) {
                     self.start_loading();
                     Self::fetch_latest_from_db(self.db.clone())
                 } else {
@@ -396,11 +408,13 @@ impl HardyMonitorApp {
                         self.db.clone(),
                         self.ui.analytics_range,
                         self.clock.as_ref(),
+                        self.schedule.timezone(),
                     ),
                     Self::load_prediction_baseline(
                         self.db.clone(),
                         prediction_days,
                         self.clock.as_ref(),
+                        self.schedule.timezone(),
                     ),
                 ])
             }
@@ -421,8 +435,11 @@ impl HardyMonitorApp {
                 if let Ok(data) = result {
                     self.data.analytics_data = data;
                     self.ui.heatmap_cache.clear();
-                    self.data.best_time_today =
-                        analytics::find_best_time_today(&self.data.analytics_data);
+                    self.data.best_time_today = analytics::find_best_time_today_with_clock(
+                        &self.data.analytics_data,
+                        self.schedule.timezone(),
+                        self.clock.as_ref(),
+                    );
                 } else if let Err(e) = result {
                     self.error = Some(e);
                 }
@@ -452,7 +469,11 @@ impl HardyMonitorApp {
             Message::SwitchView(mode) => {
                 self.ui.current_view = mode;
                 if mode == ViewMode::Insights {
-                    Self::load_insights_data(self.db.clone(), self.clock.as_ref())
+                    Self::load_insights_data(
+                        self.db.clone(),
+                        self.clock.as_ref(),
+                        self.schedule.timezone(),
+                    )
                 } else {
                     Task::none()
                 }
@@ -460,7 +481,12 @@ impl HardyMonitorApp {
             Message::SwitchAnalyticsRange(range) => {
                 self.ui.analytics_range = range;
                 self.ui.heatmap_cache.clear();
-                Self::load_analytics(self.db.clone(), range, self.clock.as_ref())
+                Self::load_analytics(
+                    self.db.clone(),
+                    range,
+                    self.clock.as_ref(),
+                    self.schedule.timezone(),
+                )
             }
             Message::HistoryStartDateChanged(d) => {
                 self.ui.history_start_date = d;
@@ -475,16 +501,22 @@ impl HardyMonitorApp {
             Message::HistoryPresetSelected(days) => {
                 self.ui.history_days_preset = Some(days);
                 let now = self.clock.now_utc();
-                let tomorrow = now.date_naive() + ChronoDuration::days(1);
+                let tz = self.schedule.timezone();
+                let tomorrow = now.with_timezone(&tz).date_naive() + ChronoDuration::days(1);
                 let start_date = tomorrow - ChronoDuration::days(days);
                 self.ui.history_start_date = start_date.format("%Y-%m-%d").to_string();
                 self.ui.history_end_date = tomorrow.format("%Y-%m-%d").to_string();
-                Self::load_history_range(self.db.clone(), midnight_utc(start_date), now)
+                Self::load_history_range(
+                    self.db.clone(),
+                    midnight_local_as_utc(start_date, tz),
+                    now,
+                )
             }
             Message::ApplyDateRange => {
+                let tz = self.schedule.timezone();
                 if let (Some(s), Some(e)) = (
-                    parse_date(&self.ui.history_start_date),
-                    parse_date(&self.ui.history_end_date),
+                    parse_date(&self.ui.history_start_date, tz),
+                    parse_date(&self.ui.history_end_date, tz),
                 ) {
                     let range_end = if s == e {
                         e + ChronoDuration::days(1)
@@ -575,8 +607,11 @@ impl HardyMonitorApp {
                 Task::none()
             }
             Message::RepairPresetSelected(preset) => {
-                let now = self.clock.now_utc();
-                let today = now.date_naive();
+                let today = self
+                    .clock
+                    .now_utc()
+                    .with_timezone(&self.schedule.timezone())
+                    .date_naive();
                 match preset {
                     RepairPreset::Last7Days => {
                         let start = today - ChronoDuration::days(7);
@@ -600,15 +635,11 @@ impl HardyMonitorApp {
                     return Task::none();
                 }
 
-                let start = if let Some(d) = parse_date(&self.repair.start_date) {
-                    d.date_naive()
-                } else {
+                let Some(start) = parse_naive_date(&self.repair.start_date) else {
                     self.error = Some(AppError::validation("Invalid start date"));
                     return Task::none();
                 };
-                let end = if let Some(d) = parse_date(&self.repair.end_date) {
-                    d.date_naive()
-                } else {
+                let Some(end) = parse_naive_date(&self.repair.end_date) else {
                     self.error = Some(AppError::validation("Invalid end date"));
                     return Task::none();
                 };
@@ -804,6 +835,7 @@ impl HardyMonitorApp {
         }
     }
 
+    #[allow(clippy::too_many_lines)]
     pub fn view(&self) -> Element<'_, Message> {
         let sidebar = self.view_sidebar();
         let content = match self.ui.current_view {
@@ -834,6 +866,7 @@ impl HardyMonitorApp {
                 heatmap_tooltip_cache: &self.ui.heatmap_tooltip_cache,
             }),
             ViewMode::Insights => views::insights::view(InsightsProps {
+                timezone: self.schedule.timezone(),
                 trend: self.data.trend,
                 stats: self.data.stats.as_ref(),
                 peak_hours: &self.data.peak_hours,
@@ -845,6 +878,7 @@ impl HardyMonitorApp {
                 ml_last_trained: self.data.predictor.last_training(),
             }),
             ViewMode::MLPredictions => views::ml_predictions::view(MLPredictionsProps {
+                timezone: self.schedule.timezone(),
                 ml_predictions: &self.data.ml_predictions,
                 ml_predictions_simple: &self.data.ml_predictions_simple,
                 ml_has_model: self.data.predictor.has_model(),
@@ -1004,7 +1038,11 @@ impl HardyMonitorApp {
     fn view_header(&self) -> Element<'_, Message> {
         let last_update = self.data.last_update.map_or_else(
             || "--:--:--".to_string(),
-            |t| t.with_timezone(&Local).format("%H:%M:%S").to_string(),
+            |t| {
+                t.with_timezone(&self.schedule.timezone())
+                    .format("%H:%M:%S")
+                    .to_string()
+            },
         );
 
         let status = if self.should_show_loading() {
@@ -1137,6 +1175,7 @@ impl HardyMonitorApp {
                         self.db.clone(),
                         self.ui.analytics_range,
                         self.clock.as_ref(),
+                        self.schedule.timezone(),
                     ),
                 ];
 
@@ -1245,11 +1284,10 @@ impl HardyMonitorApp {
         db: Arc<Database>,
         range: AnalyticsRange,
         clock: &dyn Clock,
+        tz: Tz,
     ) -> Task<Message> {
         let now = clock.now_utc();
-        let days_since_monday = i64::from(now.weekday().num_days_from_monday());
-        let this_week_start =
-            midnight_utc(now.date_naive() - ChronoDuration::days(days_since_monday));
+        let this_week_start = gym_week_start(now, tz);
         let start = match range {
             AnalyticsRange::ThisWeek => this_week_start,
             AnalyticsRange::Last2Weeks => this_week_start - ChronoDuration::weeks(1),
@@ -1257,7 +1295,7 @@ impl HardyMonitorApp {
             AnalyticsRange::Last8Weeks => this_week_start - ChronoDuration::weeks(7),
         };
         Task::perform(
-            async move { db.get_averages_range(start, now).await },
+            async move { db.get_averages_range(start, now, tz).await },
             |r: Result<Vec<HourlyAverage>, anyhow::Error>| {
                 Message::AnalyticsLoaded(
                     r.map_err(|e| AppError::from_anyhow_db(e, "get_averages_range")),
@@ -1266,11 +1304,16 @@ impl HardyMonitorApp {
         )
     }
 
-    fn load_prediction_baseline(db: Arc<Database>, days: i64, clock: &dyn Clock) -> Task<Message> {
+    fn load_prediction_baseline(
+        db: Arc<Database>,
+        days: i64,
+        clock: &dyn Clock,
+        tz: Tz,
+    ) -> Task<Message> {
         let now = clock.now_utc();
         Task::perform(
             async move {
-                db.get_averages_range(now - ChronoDuration::days(days), now)
+                db.get_averages_range(now - ChronoDuration::days(days), now, tz)
                     .await
             },
             |r: Result<Vec<HourlyAverage>, anyhow::Error>| {
@@ -1341,11 +1384,9 @@ impl HardyMonitorApp {
         }
     }
 
-    fn load_insights_data(db: Arc<Database>, clock: &dyn Clock) -> Task<Message> {
+    fn load_insights_data(db: Arc<Database>, clock: &dyn Clock, tz: Tz) -> Task<Message> {
         let now = clock.now_utc();
-        let days_since_monday = i64::from(now.weekday().num_days_from_monday());
-        let this_week_start =
-            midnight_utc(now.date_naive() - ChronoDuration::days(days_since_monday));
+        let this_week_start = gym_week_start(now, tz);
 
         let current_start = this_week_start - ChronoDuration::weeks(3);
         let baseline_start = current_start - ChronoDuration::weeks(4);
@@ -1354,9 +1395,9 @@ impl HardyMonitorApp {
         let db_clone = db.clone();
         Task::perform(
             async move {
-                let current = db.get_averages_range(current_start, now).await;
+                let current = db.get_averages_range(current_start, now, tz).await;
                 let baseline = db_clone
-                    .get_averages_range(baseline_start, baseline_end)
+                    .get_averages_range(baseline_start, baseline_end, tz)
                     .await;
                 (current, baseline)
             },
@@ -1375,8 +1416,18 @@ impl HardyMonitorApp {
     }
 }
 
-fn parse_date(s: &str) -> Option<DateTime<Utc>> {
-    NaiveDate::parse_from_str(s, "%Y-%m-%d")
-        .ok()
-        .map(midnight_local_as_utc)
+fn parse_naive_date(s: &str) -> Option<NaiveDate> {
+    NaiveDate::parse_from_str(s, "%Y-%m-%d").ok()
+}
+
+/// Gym-local midnight of the `YYYY-MM-DD` date in `s`.
+fn parse_date(s: &str, tz: Tz) -> Option<DateTime<Utc>> {
+    parse_naive_date(s).map(|d| midnight_local_as_utc(d, tz))
+}
+
+/// Gym-local midnight of the Monday starting the week that contains `now`.
+fn gym_week_start(now: DateTime<Utc>, tz: Tz) -> DateTime<Utc> {
+    let today = now.with_timezone(&tz).date_naive();
+    let days_since_monday = i64::from(today.weekday().num_days_from_monday());
+    midnight_local_as_utc(today - ChronoDuration::days(days_since_monday), tz)
 }

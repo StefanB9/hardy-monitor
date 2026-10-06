@@ -1,4 +1,4 @@
-use chrono::{DateTime, Local, Utc};
+use chrono::{DateTime, Utc};
 use hardy_core::analytics::{self, DayAnalysis, Insight, OccupancyStats, TrendDirection};
 use iced::{
     Alignment, Border, Element, Length,
@@ -9,6 +9,8 @@ use crate::{app::Message, style, views::components::card_container};
 
 #[derive(Clone, Copy)]
 pub struct InsightsProps<'a> {
+    /// Gym timezone used for every displayed wall-clock time.
+    pub timezone: hardy_core::Tz,
     pub trend: Option<TrendDirection>,
     pub stats: Option<&'a OccupancyStats>,
     pub peak_hours: &'a [(i32, i32, f64)],
@@ -282,7 +284,11 @@ pub fn view(props: InsightsProps<'_>) -> Element<'_, Message> {
 
         let trained_str = props.ml_last_trained.map_or_else(
             || "N/A".to_string(),
-            |t| t.with_timezone(&Local).format("%Y-%m-%d %H:%M").to_string(),
+            |t| {
+                t.with_timezone(&props.timezone)
+                    .format("%Y-%m-%d %H:%M")
+                    .to_string()
+            },
         );
 
         card_container(column![
