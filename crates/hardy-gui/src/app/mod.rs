@@ -25,7 +25,12 @@ use iced::{Subscription, Task, Theme, widget::canvas::Cache, window};
 use tray_icon::TrayIcon;
 
 pub use crate::time_range::{AnalyticsRange, ChartRange};
-use crate::{alerts::AlertControls, forecasting::Forecasting, widgets::heatmap::WeekGrid};
+use crate::{
+    alerts::AlertControls,
+    forecasting::Forecasting,
+    freshness::{Freshness, freshness},
+    widgets::heatmap::WeekGrid,
+};
 
 /// The four top-level views.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -84,7 +89,10 @@ struct MonitorState {
     occupancy: Option<f64>,
     /// Readings of the chart range.
     history: Vec<OccupancyLog>,
+    /// When the GUI last polled the database.
     last_update: Option<DateTime<Utc>>,
+    /// When the newest stored reading was taken.
+    latest_reading_at: Option<DateTime<Utc>>,
     /// Hourly averages of the heatmap range.
     week_grid: WeekGrid,
     week_days: Vec<DayAnalysis>,
@@ -139,7 +147,8 @@ pub enum Message {
     FetchAlignmentComplete,
     RefreshNow,
 
-    FetchCompleted(Result<Option<f64>, AppError>),
+    /// Newest stored reading: when it was taken and its value.
+    FetchCompleted(Result<Option<(DateTime<Utc>, f64)>, AppError>),
     HistoryLoaded(Result<Vec<OccupancyLog>, AppError>),
     AnalyticsLoaded(Result<Vec<HourlyAverage>, AppError>),
     InsightsDataLoaded {
@@ -212,6 +221,7 @@ impl HardyMonitorApp {
                 occupancy: None,
                 history: Vec::new(),
                 last_update: None,
+                latest_reading_at: None,
                 week_grid: WeekGrid::default(),
                 week_days: Vec::new(),
                 insights: Vec::new(),
@@ -292,6 +302,18 @@ impl HardyMonitorApp {
     #[allow(clippy::unused_self)]
     pub fn theme(&self) -> Theme {
         Theme::Dark
+    }
+
+    /// Whether the newest reading is live; unknown until the first poll.
+    fn freshness(&self) -> Freshness {
+        if self.data.last_update.is_none() {
+            return Freshness::Live;
+        }
+        freshness(
+            self.data.latest_reading_at,
+            self.clock.now_utc(),
+            &self.schedule,
+        )
     }
 
     fn start_loading(&mut self) {

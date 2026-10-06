@@ -43,7 +43,15 @@ pub(super) fn card<'a>(props: &NowProps<'a>) -> container::Container<'a, Message
             .color(style::TEXT_SECONDARY)
     ]
     .spacing(style::SPACE_M);
-    if is_open && let (Some(current), Some(earlier)) = (props.occupancy, props.reading_15_min_ago) {
+    if let Some(warning) = &props.stale_warning {
+        details = details.push(
+            text(warning.clone())
+                .size(style::TEXT_CAPTION)
+                .color(style::WARNING),
+        );
+    } else if is_open
+        && let (Some(current), Some(earlier)) = (props.occupancy, props.reading_15_min_ago)
+    {
         let (line, color) = trend_line(current, earlier);
         details = details.push(text(line).size(style::TEXT_CAPTION).color(color));
     }

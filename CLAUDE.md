@@ -46,6 +46,7 @@ hardy-monitor/                         (workspace root)
 │           ├── forecasting.rs         Forecast state: history, loaded model, forecasts, quiet window
 │           ├── quiet_window.rs        Next quiet hour (forecast, else slot averages)
 │           ├── time_range.rs          ChartRange / AnalyticsRange and the instants they cover
+│           ├── freshness.rs           Whether the newest reading is live or stale
 │           ├── alerts.rs              Alert controls (shared settings, desktop popups)
 │           ├── notifier.rs            SystemNotifier, CombinedNotifier
 │           ├── widgets/               Canvas widgets: gauge, heatmap (WeekGrid), history_chart

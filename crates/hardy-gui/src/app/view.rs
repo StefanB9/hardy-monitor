@@ -7,6 +7,7 @@ use iced::{
 
 use super::{HardyMonitorApp, Message, ViewMode};
 use crate::{
+    freshness::Freshness,
     style::{self, OccupancyLevel},
     views::{
         self, InsightsProps, ModelDataProps, NowProps, WeekProps, components::secondary_button,
@@ -83,6 +84,7 @@ impl HardyMonitorApp {
                 .forecasting
                 .reading_near(now - chrono::TimeDelta::minutes(15)),
             last_update: self.data.last_update,
+            stale_warning: self.freshness().warning(self.schedule.timezone()),
             low_threshold: self.config.thresholds.low_occupancy_percent,
             high_threshold: self.config.thresholds.high_occupancy_percent,
             quiet_window: self.data.forecasting.quiet_window(),
@@ -228,9 +230,21 @@ impl HardyMonitorApp {
                     .size(style::TEXT_CAPTION)
                     .color(style::TEXT_TERTIARY),
                 headline,
-                text(opening_status(now, &self.schedule))
+                match self
+                    .data
+                    .latest_reading_at
+                    .filter(|_| self.freshness() != Freshness::Live)
+                {
+                    Some(t) => text(format!(
+                        "Last reading {}",
+                        t.with_timezone(&self.schedule.timezone()).format("%H:%M")
+                    ))
                     .size(style::TEXT_CAPTION)
-                    .color(style::TEXT_SECONDARY),
+                    .color(style::WARNING),
+                    None => text(opening_status(now, &self.schedule))
+                        .size(style::TEXT_CAPTION)
+                        .color(style::TEXT_SECONDARY),
+                },
             ]
             .spacing(style::SPACE_XS),
         )
@@ -261,6 +275,8 @@ impl HardyMonitorApp {
             (style::ACCENT, "Updating…".to_string())
         } else if let Some(e) = &self.error {
             (style::DANGER, e.to_string())
+        } else if let Some(warning) = self.freshness().warning(tz) {
+            (style::WARNING, warning)
         } else {
             match self.data.last_update {
                 Some(t) => (

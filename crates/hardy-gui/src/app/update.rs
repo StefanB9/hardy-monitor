@@ -2,6 +2,7 @@
 
 use std::time::Duration;
 
+use chrono::{DateTime, Utc};
 use hardy_core::{
     alert::Alert,
     analytics::{
@@ -17,7 +18,7 @@ use muda::MenuEvent;
 use tray_icon::TrayIconEvent;
 
 use super::{HardyMonitorApp, Message, RepairPreset, ViewMode};
-use crate::{time_range::parse_date, widgets::heatmap::WeekGrid};
+use crate::{freshness::Freshness, time_range::parse_date, widgets::heatmap::WeekGrid};
 
 impl HardyMonitorApp {
     pub fn update(&mut self, message: Message) -> Task<Message> {
@@ -304,11 +305,16 @@ impl HardyMonitorApp {
         }
     }
 
-    fn handle_fetch_completed(&mut self, result: Result<Option<f64>, AppError>) -> Task<Message> {
+    fn handle_fetch_completed(
+        &mut self,
+        result: Result<Option<(DateTime<Utc>, f64)>, AppError>,
+    ) -> Task<Message> {
         self.stop_loading();
-        let percentage = match result {
-            Ok(Some(p)) => p,
+        let now = self.clock.now_utc();
+        let (taken_at, percentage) = match result {
+            Ok(Some(reading)) => reading,
             Ok(None) => {
+                self.data.last_update = Some(now);
                 self.error = None;
                 return Task::none();
             }
@@ -317,11 +323,21 @@ impl HardyMonitorApp {
                 return Task::none();
             }
         };
-        let now = self.clock.now_utc();
-        self.data.occupancy = self.schedule.is_open(&now).then_some(percentage);
+        let is_new = self.data.latest_reading_at != Some(taken_at);
+        self.data.latest_reading_at = Some(taken_at);
         self.data.last_update = Some(now);
         self.error = None;
         self.ui.gauge_cache.clear();
+
+        // An old value must not look live or trigger alerts.
+        let live = self.freshness() == Freshness::Live;
+        self.data.occupancy = (live && self.schedule.is_open(&now)).then_some(percentage);
+        if !live {
+            tracing::warn!(%taken_at, "newest reading is stale");
+        }
+        if !is_new {
+            return Task::none();
+        }
 
         let mut tasks = vec![
             self.load_forecast_history(),
@@ -330,7 +346,10 @@ impl HardyMonitorApp {
         ];
 
         // Desktop popups only; phone alerts come from the daemon.
-        if let Some(alert) = self.alerts.observe(percentage, now, &self.schedule) {
+        if let Some(alert) = live
+            .then(|| self.alerts.observe(percentage, now, &self.schedule))
+            .flatten()
+        {
             let notifier = self.notifier.clone();
             tasks.push(Task::perform(
                 async move {
