@@ -8,6 +8,9 @@ use hardy_ml::{PredictionWithConfidence, SlotProfile};
 pub const WINDOW: TimeDelta = TimeDelta::hours(1);
 /// Spacing of candidate start times.
 const STEP: TimeDelta = TimeDelta::minutes(15);
+/// Windows end at least this long before closing; the last hour is too
+/// late to start a workout.
+pub const CLOSING_MARGIN: TimeDelta = TimeDelta::hours(1);
 /// A forecast point counts for times within this distance of it.
 const FORECAST_REACH: TimeDelta = TimeDelta::minutes(30);
 
@@ -30,7 +33,8 @@ pub struct QuietWindow {
 
 /// Finds the quietest [`WINDOW`]: within the rest of today while the gym is
 /// open, otherwise on the next opening day starting `grace` after opening
-/// (it is always empty right at opening).
+/// (it is always empty right at opening). Windows end [`CLOSING_MARGIN`]
+/// before closing.
 pub fn next_quiet_window(
     now: DateTime<Utc>,
     schedule: &GymSchedule,
@@ -42,7 +46,10 @@ pub fn next_quiet_window(
     let today = now.with_timezone(&tz).date_naive();
 
     let mut candidates = if schedule.is_open(&now) {
-        starts(ceil_step(now), closing_on(schedule, today) - WINDOW)
+        starts(
+            ceil_step(now),
+            closing_on(schedule, today) - WINDOW - CLOSING_MARGIN,
+        )
     } else {
         Vec::new()
     };
@@ -54,7 +61,7 @@ pub fn next_quiet_window(
         };
         candidates = starts(
             schedule.opening_time_on(day) + grace,
-            closing_on(schedule, day) - WINDOW,
+            closing_on(schedule, day) - WINDOW - CLOSING_MARGIN,
         );
     }
 
@@ -219,7 +226,7 @@ mod tests {
 
     #[test]
     fn test_quiet_window_moves_to_tomorrow_near_closing() -> Result<()> {
-        // Monday 22:30: less than an hour left → Tuesday, after the grace.
+        // Monday 22:30: no window ends an hour before closing → Tuesday.
         let w = next_quiet_window(
             local(0, 22, 30),
             &GymSchedule::default(),
@@ -229,6 +236,36 @@ mod tests {
         )
         .context("window")?;
         assert_eq!(w.start, local(1, 14, 0));
+        Ok(())
+    }
+
+    #[test]
+    fn test_quiet_window_skips_last_hour_before_closing() -> Result<()> {
+        // Everything is busy except the last hour (22:00–23:00 on Monday),
+        // which is too late to be useful.
+        let schedule = GymSchedule::default();
+        let mut points = Vec::new();
+        for d in -14..0 {
+            for minute in 0..(24 * 60) {
+                let t = local(d, 0, 0) + TimeDelta::minutes(minute);
+                if schedule.is_open(&t) {
+                    let hour = t
+                        .with_timezone(&schedule.timezone())
+                        .format("%H")
+                        .to_string();
+                    let value = match hour.as_str() {
+                        "22" => 2.0,
+                        "15" => 10.0,
+                        _ => 40.0,
+                    };
+                    points.push((t, value));
+                }
+            }
+        }
+        let profile = SlotProfile::from_history(History::new(points).view(), schedule.timezone());
+        let w = next_quiet_window(local(0, 10, 0), &schedule, &[], &profile, GRACE)
+            .context("window")?;
+        assert_eq!(w.start, local(0, 15, 0));
         Ok(())
     }
 
@@ -258,6 +295,7 @@ mod tests {
                 prop_assert_eq!(w.end - w.start, WINDOW);
                 prop_assert!(schedule.is_open(&w.start));
                 prop_assert!(schedule.is_open(&(w.end - TimeDelta::minutes(1))));
+                prop_assert!(schedule.is_open(&(w.end + CLOSING_MARGIN - TimeDelta::minutes(1))));
                 prop_assert!(w.start - now < TimeDelta::hours(48));
             }
         }

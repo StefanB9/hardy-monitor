@@ -57,8 +57,13 @@ impl HardyMonitorApp {
     pub(super) fn fetch_latest(&self) -> Task<Message> {
         let db = self.db.clone();
         Task::perform(
-            async move { Ok(db.get_latest_record().await?.map(|r| r.percentage)) },
-            |r: anyhow::Result<Option<f64>>| {
+            async move {
+                Ok(db
+                    .get_latest_record()
+                    .await?
+                    .map(|r| (r.timestamp, r.percentage)))
+            },
+            |r: anyhow::Result<Option<(chrono::DateTime<chrono::Utc>, f64)>>| {
                 Message::FetchCompleted(r.map_err(db_err("get_latest_record")))
             },
         )

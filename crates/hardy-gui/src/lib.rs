@@ -1,6 +1,7 @@
 pub(crate) mod alerts;
 pub mod app;
 pub mod forecasting;
+pub(crate) mod freshness;
 pub mod notifier;
 pub mod quiet_window;
 pub mod style;

@@ -22,6 +22,8 @@ pub struct NowProps<'a> {
     pub occupancy: Option<f64>,
     pub reading_15_min_ago: Option<f64>,
     pub last_update: Option<DateTime<Utc>>,
+    /// Set when the newest reading is too old to be live.
+    pub stale_warning: Option<String>,
     pub low_threshold: f64,
     pub high_threshold: f64,
     pub quiet_window: Option<&'a QuietWindow>,
