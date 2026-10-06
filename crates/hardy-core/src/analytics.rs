@@ -17,6 +17,11 @@ const DAY_NAMES_LONG: [&str; 7] = [
     "Sunday",
 ];
 
+/// Slots quieter than this (percent) are not reported as significant changes.
+const SIGNIFICANT_CHANGE_MIN_LEVEL: f64 = 10.0;
+/// Changes smaller than this (percentage points) are not significant.
+const SIGNIFICANT_CHANGE_MIN_POINTS: f64 = 5.0;
+
 const DAY_NAMES_SHORT: [&str; 7] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -357,9 +362,16 @@ pub fn compare_periods(
 
     let overall_trend = determine_trend(&hourly_comparisons);
 
+    // Relative changes on near-empty slots (1% -> 7% = +600%) and changes of
+    // a few points are noise, not something worth avoiding.
     let mut sorted_by_increase: Vec<_> = hourly_comparisons
         .iter()
-        .filter(|c| c.baseline_samples >= 2 && c.current_samples >= 2)
+        .filter(|c| {
+            c.baseline_samples >= 2
+                && c.current_samples >= 2
+                && c.baseline_avg >= SIGNIFICANT_CHANGE_MIN_LEVEL
+                && c.absolute_change.abs() >= SIGNIFICANT_CHANGE_MIN_POINTS
+        })
         .collect();
     sorted_by_increase.sort_by(|a, b| b.percent_change.total_cmp(&a.percent_change));
 
@@ -1500,6 +1512,37 @@ mod tests {
                 avg_percentage: pct,
                 sample_count: samples,
             }
+        }
+
+        #[test]
+        fn test_compare_periods_ignores_changes_on_near_empty_slots() {
+            // Mon 23:00 goes 1% -> 7% (+600%, irrelevant); Wed 18:00 goes
+            // 30% -> 40% (+33%, worth knowing).
+            let baseline = vec![
+                make_hourly_avg(0, 23, 1.0, 10),
+                make_hourly_avg(2, 18, 30.0, 10),
+            ];
+            let current = vec![
+                make_hourly_avg(0, 23, 7.0, 10),
+                make_hourly_avg(2, 18, 40.0, 10),
+            ];
+
+            let result = compare_periods(&baseline, &current, ComparisonMode::WeekOverWeek);
+            let slots: Vec<(i32, i32)> = result
+                .biggest_increases
+                .iter()
+                .map(|&(w, h, _)| (w, h))
+                .collect();
+            assert_eq!(slots, vec![(2, 18)]);
+        }
+
+        #[test]
+        fn test_compare_periods_ignores_tiny_absolute_changes() {
+            // 40% -> 43% is +7.5% relative but only 3 points: not significant.
+            let baseline = vec![make_hourly_avg(1, 10, 40.0, 10)];
+            let current = vec![make_hourly_avg(1, 10, 43.0, 10)];
+            let result = compare_periods(&baseline, &current, ComparisonMode::WeekOverWeek);
+            assert!(result.biggest_increases.is_empty());
         }
 
         #[test]
