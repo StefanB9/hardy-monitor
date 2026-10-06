@@ -1,6 +1,6 @@
 pub(crate) mod alerts;
 pub mod app;
-pub mod ml;
+pub mod forecasting;
 pub mod notifier;
 pub mod style;
 pub mod views;

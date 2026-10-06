@@ -13,6 +13,7 @@ use hardy_core::{
     retry,
     schedule::GymSchedule,
 };
+use hardy_ml::maintenance::ModelMaintenance;
 use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 
 #[cfg(debug_assertions)]
@@ -144,9 +145,15 @@ async fn run(config: &AppConfig) -> Result<()> {
         "alerts configured"
     );
 
+    let mut models = ModelMaintenance::new(config.ml.clone(), schedule.clone());
+    if let Err(e) = models.load_previous(&database).await {
+        tracing::warn!(error = %e, "could not read the stored model");
+    }
+
     fetch_loop(
         &worker,
         &mut alerts,
+        &mut models,
         config.refresh.data_fetch_interval_secs,
         shutdown.as_mut(),
     )
@@ -171,6 +178,7 @@ struct Worker<'a> {
 async fn fetch_loop(
     worker: &Worker<'_>,
     alerts: &mut AlertService,
+    models: &mut ModelMaintenance,
     interval_secs: u64,
     mut shutdown: std::pin::Pin<&mut impl std::future::Future<Output = ()>>,
 ) {
@@ -218,6 +226,12 @@ async fn fetch_loop(
                 tracing::info!("shutdown requested");
                 return;
             }
+        }
+
+        // Starts or collects background training; nightly runs happen while
+        // the gym is closed, so this runs before the closed check.
+        if let Err(e) = models.tick(worker.database, chrono::Utc::now()).await {
+            tracing::warn!(error = %e, "model maintenance failed");
         }
 
         if !worker.schedule.is_open(&slot) {

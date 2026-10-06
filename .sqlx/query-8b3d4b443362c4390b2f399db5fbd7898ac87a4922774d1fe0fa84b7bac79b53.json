@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT model FROM ml_models WHERE id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "model",
+        "type_info": "Bytea",
+        "origin": {
+          "Table": {
+            "table": "ml_models",
+            "name": "model"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "8b3d4b443362c4390b2f399db5fbd7898ac87a4922774d1fe0fa84b7bac79b53"
+}

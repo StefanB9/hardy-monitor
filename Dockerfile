@@ -23,6 +23,7 @@ COPY .cargo ./.cargo
 COPY crates/hardy-core/Cargo.toml crates/hardy-core/Cargo.toml
 COPY crates/hardy-daemon/Cargo.toml crates/hardy-daemon/Cargo.toml
 COPY crates/hardy-gui/Cargo.toml crates/hardy-gui/Cargo.toml
+COPY crates/hardy-ml/Cargo.toml crates/hardy-ml/Cargo.toml
 
 # Create dummy source files to build dependencies
 RUN mkdir -p crates/hardy-core/src && \
@@ -31,7 +32,9 @@ RUN mkdir -p crates/hardy-core/src && \
     echo "fn main() {}" > crates/hardy-daemon/src/main.rs && \
     mkdir -p crates/hardy-gui/src && \
     echo "fn main() {}" > crates/hardy-gui/src/main.rs && \
-    echo "" > crates/hardy-gui/src/lib.rs
+    echo "" > crates/hardy-gui/src/lib.rs && \
+    mkdir -p crates/hardy-ml/src && \
+    echo "" > crates/hardy-ml/src/lib.rs
 
 # Copy actual source code
 COPY crates ./crates

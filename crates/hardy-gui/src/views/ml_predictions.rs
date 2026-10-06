@@ -1,15 +1,13 @@
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use hardy_core::db::OccupancyLog;
+use hardy_ml::PredictionWithConfidence;
 use iced::{
     Alignment, Element, Length,
     widget::{Canvas, Space, button, canvas, column, container, row, scrollable, text},
 };
 
 use crate::{
-    app::Message,
-    ml::{PredictionWithConfidence, TrainingInfo},
-    style,
-    views::components::card_container,
+    app::Message, forecasting::ModelSummary, style, views::components::card_container,
     widgets::history_chart::HistoryChart,
 };
 
@@ -20,14 +18,15 @@ pub struct MLPredictionsProps<'a> {
     pub ml_predictions: &'a [PredictionWithConfidence],
     pub ml_predictions_simple: &'a [(DateTime<Utc>, f64)],
     pub ml_has_model: bool,
-    pub ml_training_in_progress: bool,
-    pub ml_last_trained: Option<DateTime<Utc>>,
+    /// A retrain was requested and the daemon has not started it yet.
+    pub retrain_pending: bool,
+    /// Why the daemon's last training produced no model.
+    pub last_training_error: Option<&'a str>,
     pub chart_cache: &'a canvas::Cache,
     pub now: DateTime<Utc>,
-    pub training_info: Option<&'a TrainingInfo>,
+    pub model: Option<&'a ModelSummary>,
     pub history: &'a [OccupancyLog],
     pub show_model_details: bool,
-    pub retrain_interval_hours: i64,
 }
 
 // ── Prediction Highlights extraction ──────────────────────────────────
@@ -152,173 +151,86 @@ fn build_action_button(label: &str, message: Message) -> Element<'_, Message> {
         .into()
 }
 
-/// Small cancel button with red-ish styling.
-fn build_cancel_button() -> Element<'static, Message> {
-    button(text("\u{2715}").size(11).color(style::TEXT_BRIGHT))
-        .on_press(Message::CancelTrainingRequested)
-        .padding([4, 8])
-        .style(|_theme, status| {
-            let bg = match status {
-                button::Status::Hovered => style::ACCENT_RED,
-                _ => style::STROKE_DIM,
-            };
-            button::Style {
-                background: Some(iced::Background::Color(bg)),
-                border: iced::Border {
-                    radius: 4.0.into(),
-                    ..Default::default()
-                },
-                ..Default::default()
-            }
-        })
-        .into()
-}
-
-#[allow(clippy::too_many_lines)]
 fn build_status_card<'a>(props: &MLPredictionsProps<'a>) -> Element<'a, Message> {
-    let trained_str = props.ml_last_trained.map_or_else(
-        || "N/A".to_string(),
-        |t| t.with_timezone(&props.timezone).format("%H:%M").to_string(),
-    );
-
     let mut col = column![
-        text("ML Prediction Model")
-            .size(14)
-            .color(style::TEXT_MUTED),
+        text("Forecast Model").size(14).color(style::TEXT_MUTED),
         Space::new().height(15),
     ];
 
-    match (props.ml_has_model, props.ml_training_in_progress) {
-        // State 1: no model, not training
-        (false, false) => {
-            col = col.push(
-                row![
-                    text("No model loaded").size(12).color(style::TEXT_MUTED),
-                    Space::new().width(Length::Fill),
-                    build_action_button("Load Model", Message::LoadModelRequested),
-                    Space::new().width(8),
-                    build_action_button("Train Model", Message::TrainModelRequested),
-                ]
-                .align_y(Alignment::Center),
+    let train_label = if props.ml_has_model {
+        "Retrain"
+    } else {
+        "Train now"
+    };
+    let train_button: Element<'a, Message> = if props.retrain_pending {
+        text("Retrain requested\u{2026}")
+            .size(11)
+            .color(style::ACCENT_ORANGE)
+            .into()
+    } else {
+        build_action_button(train_label, Message::TrainModelRequested)
+    };
+
+    let mut status_row = row![].align_y(Alignment::Center);
+    match props.model {
+        None => {
+            status_row = status_row.push(
+                text("No model yet \u{2014} the daemon trains one automatically; showing averages")
+                    .size(12)
+                    .color(style::TEXT_MUTED),
             );
         }
-        // State 2: no model, training
-        (false, true) => {
-            col = col.push(
-                row![
-                    text("Training initial model...")
-                        .size(12)
-                        .color(style::ACCENT_ORANGE),
-                    Space::new().width(Length::Fill),
-                    build_cancel_button(),
-                ]
-                .align_y(Alignment::Center),
-            );
-        }
-        // State 3: has model, not training
-        (true, false) => {
-            let mut status_row = row![].align_y(Alignment::Center);
-
-            let algo_text = props.training_info.map_or_else(
-                || "Active".to_string(),
-                |ti| format!("Active ({})", ti.algorithm),
-            );
+        Some(model) => {
+            let improvement = model.improvement();
             status_row = status_row
-                .push(text(algo_text).size(12).color(style::ACCENT_GREEN))
-                .push(Space::new().width(12));
-
-            // R² badge
-            if let Some(cv) = props.training_info.and_then(|ti| ti.cv_scores.as_ref()) {
-                let r2_color = r_squared_color(cv.r_squared_mean);
-                status_row = status_row.push(
-                    text(format!("R\u{00b2} {:.3}", cv.r_squared_mean))
+                .push(
+                    text(format!("Active ({})", model.algorithm))
                         .size(12)
-                        .color(r2_color),
-                );
-            }
-
-            status_row = status_row.push(Space::new().width(Length::Fill));
-
-            // Trained age display
-            status_row = status_row
-                .push(text("Trained:").size(12).color(style::TEXT_MUTED))
-                .push(Space::new().width(6))
-                .push(text(trained_str.clone()).size(12).color(style::TEXT_BRIGHT))
+                        .color(style::ACCENT_GREEN),
+                )
                 .push(Space::new().width(12))
-                .push(build_action_button("Retrain", Message::TrainModelRequested));
-
-            col = col.push(status_row);
-
-            // Staleness hint
-            if let Some(trained_at) = props.ml_last_trained {
-                let age_hours = (props.now - trained_at).num_hours();
-                if age_hours >= props.retrain_interval_hours {
-                    col = col.push(Space::new().height(4));
-                    col = col.push(
-                        text(format!(
-                            "Trained {age_hours}h ago \u{2014} consider retraining for improved \
-                             accuracy"
-                        ))
-                        .size(11)
-                        .color(style::ACCENT_ORANGE),
-                    );
-                }
-            }
-        }
-        // State 4: has model, retraining
-        (true, true) => {
-            let mut status_row = row![].align_y(Alignment::Center);
-
-            let algo_text = props.training_info.map_or_else(
-                || "Active".to_string(),
-                |ti| format!("Active ({})", ti.algorithm),
-            );
-            status_row = status_row
-                .push(text(algo_text).size(12).color(style::ACCENT_GREEN))
-                .push(Space::new().width(12));
-
-            if let Some(cv) = props.training_info.and_then(|ti| ti.cv_scores.as_ref()) {
-                let r2_color = r_squared_color(cv.r_squared_mean);
-                status_row = status_row.push(
-                    text(format!("R\u{00b2} {:.3}", cv.r_squared_mean))
+                .push(
+                    text(format!("{:.0}% better than averages", improvement * 100.0))
                         .size(12)
-                        .color(r2_color),
-                );
-            }
-
-            status_row = status_row.push(Space::new().width(Length::Fill));
-
-            status_row = status_row
+                        .color(improvement_color(improvement)),
+                )
+                .push(Space::new().width(Length::Fill))
                 .push(text("Trained:").size(12).color(style::TEXT_MUTED))
                 .push(Space::new().width(6))
-                .push(text(trained_str).size(12).color(style::TEXT_BRIGHT));
-
-            col = col.push(status_row);
-            col = col.push(Space::new().height(6));
-            col = col.push(
-                row![
-                    text("Retraining...").size(11).color(style::ACCENT_ORANGE),
-                    Space::new().width(8),
-                    text("Showing previous predictions")
-                        .size(11)
-                        .color(style::TEXT_MUTED),
-                    Space::new().width(Length::Fill),
-                    build_cancel_button(),
-                ]
-                .align_y(Alignment::Center),
-            );
+                .push(
+                    text(
+                        model
+                            .trained_at
+                            .with_timezone(&props.timezone)
+                            .format("%a %H:%M")
+                            .to_string(),
+                    )
+                    .size(12)
+                    .color(style::TEXT_BRIGHT),
+                )
+                .push(Space::new().width(12));
         }
     }
+    if props.model.is_none() {
+        status_row = status_row.push(Space::new().width(Length::Fill));
+    }
+    col = col.push(status_row.push(train_button));
 
-    // Model details toggle (only if training info available)
-    if props.training_info.is_some() {
+    if let Some(error) = props.last_training_error {
+        col = col.push(Space::new().height(6)).push(
+            text(format!("Last training: {error}"))
+                .size(11)
+                .color(style::ACCENT_ORANGE),
+        );
+    }
+
+    if let Some(model) = props.model {
         let toggle_label = if props.show_model_details {
             "Hide model details \u{25b2}"
         } else {
             "Show model details \u{25bc}"
         };
-        col = col.push(Space::new().height(10));
-        col = col.push(
+        col = col.push(Space::new().height(10)).push(
             button(text(toggle_label).size(11).color(style::ACCENT_BLUE))
                 .on_press(Message::ModelDetailsToggled(!props.show_model_details))
                 .padding(0)
@@ -327,14 +239,11 @@ fn build_status_card<'a>(props: &MLPredictionsProps<'a>) -> Element<'a, Message>
                     ..Default::default()
                 }),
         );
-    }
-
-    // Expanded model details
-    if props.show_model_details
-        && let Some(ti) = props.training_info
-    {
-        col = col.push(Space::new().height(10));
-        col = col.push(build_details_content(ti));
+        if props.show_model_details {
+            col = col
+                .push(Space::new().height(10))
+                .push(build_details_content(model));
+        }
     }
 
     card_container(col).width(Length::Fill).into()
@@ -523,135 +432,59 @@ fn build_highlight_item(
 
 // ── Model details content (inline, not wrapped in card) ───────────────
 
-#[allow(clippy::too_many_lines)]
-fn build_details_content(ti: &TrainingInfo) -> Element<'_, Message> {
-    let mut col = column![
-        // Algorithm + samples row
+fn build_details_content(model: &ModelSummary) -> Element<'_, Message> {
+    let detail = |label: &'static str, value: String| {
         row![
-            text("Algorithm:").size(12).color(style::TEXT_MUTED),
+            text(label).size(12).color(style::TEXT_MUTED),
             Space::new().width(6),
-            text(&ti.algorithm).size(12).color(style::TEXT_BRIGHT),
-            Space::new().width(Length::Fill),
-            text("Samples:").size(12).color(style::TEXT_MUTED),
-            Space::new().width(6),
-            text(format!("{}", ti.training_samples))
-                .size(12)
-                .color(style::TEXT_BRIGHT),
+            text(value).size(12).color(style::TEXT_BRIGHT),
         ]
-        .align_y(Alignment::Center),
+        .align_y(Alignment::Center)
+    };
+
+    let horizons = model
+        .mae_by_horizon
+        .iter()
+        .enumerate()
+        .filter(|(_, mae)| mae.is_finite())
+        .map(|(i, mae)| format!("+{}h {mae:.1}", i + 1))
+        .collect::<Vec<_>>()
+        .join("   ");
+
+    column![
+        row![
+            detail("Samples:", model.training_samples.to_string()),
+            Space::new().width(Length::Fill),
+            detail(
+                "Hyperparameters:",
+                if model.tuned {
+                    "tuned this run".to_string()
+                } else {
+                    "reused".to_string()
+                }
+            ),
+        ],
         Space::new().height(4),
-        // Training window + MSE row
-        row![
-            text("Window:").size(12).color(style::TEXT_MUTED),
-            Space::new().width(6),
-            text(format!("{} days", ti.training_window_days))
-                .size(12)
-                .color(style::TEXT_BRIGHT),
-            Space::new().width(Length::Fill),
-            text("Train MSE:").size(12).color(style::TEXT_MUTED),
-            Space::new().width(6),
-            text(format!("{:.2}", ti.training_mse))
-                .size(12)
-                .color(style::TEXT_BRIGHT),
-        ]
-        .align_y(Alignment::Center),
-    ];
-
-    // Hyperparameters section (RF only)
-    if let Some(ref hp) = ti.best_hyperparameters {
-        let features_str = hp
-            .max_features
-            .map_or_else(|| "auto".to_string(), |f| format!("{f}"));
-
-        col = col
-            .push(Space::new().height(10))
-            .push(
-                text("Best Hyperparameters")
-                    .size(12)
-                    .color(style::TEXT_MUTED),
+        detail(
+            "Error on last 7 days:",
+            format!(
+                "{:.1} pts (averages: {:.1} pts)",
+                model.holdout_mae, model.baseline_mae
             )
-            .push(Space::new().height(4))
-            .push(
-                row![
-                    text("Trees:").size(11).color(style::TEXT_MUTED),
-                    Space::new().width(4),
-                    text(format!("{}", hp.n_trees))
-                        .size(11)
-                        .color(style::TEXT_BRIGHT),
-                    Space::new().width(12),
-                    text("Depth:").size(11).color(style::TEXT_MUTED),
-                    Space::new().width(4),
-                    text(format!("{}", hp.max_depth))
-                        .size(11)
-                        .color(style::TEXT_BRIGHT),
-                    Space::new().width(12),
-                    text("Min Leaf:").size(11).color(style::TEXT_MUTED),
-                    Space::new().width(4),
-                    text(format!("{}", hp.min_samples_leaf))
-                        .size(11)
-                        .color(style::TEXT_BRIGHT),
-                    Space::new().width(12),
-                    text("Features:").size(11).color(style::TEXT_MUTED),
-                    Space::new().width(4),
-                    text(features_str).size(11).color(style::TEXT_BRIGHT),
-                ]
-                .align_y(Alignment::Center),
-            );
-    }
-
-    // CV scores section
-    if let Some(ref cv) = ti.cv_scores {
-        let r2_color = r_squared_color(cv.r_squared_mean);
-
-        col = col
-            .push(Space::new().height(10))
-            .push(
-                text("Cross-Validation Scores")
-                    .size(12)
-                    .color(style::TEXT_MUTED),
-            )
-            .push(Space::new().height(4))
-            .push(
-                row![
-                    text("RMSE:").size(11).color(style::TEXT_MUTED),
-                    Space::new().width(4),
-                    text(format!("{:.2} \u{00b1} {:.2}", cv.rmse_mean, cv.rmse_std))
-                        .size(11)
-                        .color(style::TEXT_BRIGHT),
-                    Space::new().width(16),
-                    text("R\u{00b2}:").size(11).color(style::TEXT_MUTED),
-                    Space::new().width(4),
-                    text(format!(
-                        "{:.3} \u{00b1} {:.3}",
-                        cv.r_squared_mean, cv.r_squared_std
-                    ))
-                    .size(11)
-                    .color(r2_color),
-                ]
-                .align_y(Alignment::Center),
-            )
-            .push(Space::new().height(4))
-            .push(
-                row![
-                    text("MAE:").size(11).color(style::TEXT_MUTED),
-                    Space::new().width(4),
-                    text(format!("{:.2} \u{00b1} {:.2}", cv.mae_mean, cv.mae_std))
-                        .size(11)
-                        .color(style::TEXT_BRIGHT),
-                ]
-                .align_y(Alignment::Center),
-            );
-    }
-
-    col.into()
+        ),
+        Space::new().height(4),
+        detail("Error by hours ahead:", horizons),
+    ]
+    .into()
 }
 
 // ── Color helpers ─────────────────────────────────────────────────────
 
-fn r_squared_color(r2: f64) -> iced::Color {
-    if r2 >= 0.8 {
+/// Green for a clear improvement over averages, orange for a small one.
+fn improvement_color(improvement: f64) -> iced::Color {
+    if improvement >= 0.15 {
         style::ACCENT_GREEN
-    } else if r2 >= 0.5 {
+    } else if improvement > 0.0 {
         style::ACCENT_ORANGE
     } else {
         style::ACCENT_RED
@@ -673,9 +506,9 @@ mod tests {
     use anyhow::Context;
     use approx::assert_relative_eq;
     use chrono::TimeZone;
+    use hardy_ml::{PredictionMethod, PredictionWithConfidence};
 
     use super::*;
-    use crate::ml::{PredictionMethod, PredictionWithConfidence};
 
     fn make_prediction(ts: DateTime<Utc>, value: f64, confidence: f64) -> PredictionWithConfidence {
         PredictionWithConfidence {

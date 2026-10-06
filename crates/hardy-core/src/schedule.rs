@@ -109,6 +109,19 @@ impl GymSchedule {
         self.local_hour_on(tomorrow, self.get_close_hour(tomorrow))
     }
 
+    /// The latest closing instant at or before `now`.
+    pub fn last_closing_at_or_before(&self, now: DateTime<Utc>) -> DateTime<Utc> {
+        // Two days back always precedes at least one closing.
+        let mut closing = self.next_closing_after(now - chrono::TimeDelta::days(2));
+        loop {
+            let next = self.next_closing_after(closing);
+            if next > now {
+                return closing;
+            }
+            closing = next;
+        }
+    }
+
     /// `hour:00` gym-local on `date` as UTC; hour 24 means midnight after
     /// `date`.
     fn local_hour_on(&self, date: NaiveDate, hour: u32) -> DateTime<Utc> {
@@ -397,6 +410,21 @@ mod tests {
         assert_eq!(
             schedule.opening_time_on(saturday),
             make_utc(2024, 6, 15, 7, 0)
+        );
+    }
+
+    #[test]
+    fn test_last_closing_at_or_before() {
+        let schedule = GymSchedule::default();
+        // Monday 10:00 CEST → Sunday 21:00 CEST (weekend hours).
+        assert_eq!(
+            schedule.last_closing_at_or_before(make_utc(2024, 6, 17, 8, 0)),
+            make_utc(2024, 6, 16, 19, 0)
+        );
+        // Exactly at Monday's closing (23:00 CEST) → that closing.
+        assert_eq!(
+            schedule.last_closing_at_or_before(make_utc(2024, 6, 17, 21, 0)),
+            make_utc(2024, 6, 17, 21, 0)
         );
     }
 

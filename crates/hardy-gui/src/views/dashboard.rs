@@ -3,6 +3,7 @@ use hardy_core::{
     Tz, alert::AlertDuration, analytics::midnight_local_as_utc, db::OccupancyLog,
     schedule::GymSchedule,
 };
+use hardy_ml::PredictionWithConfidence;
 use iced::{
     Alignment, Border, Color, Element, Length, Theme,
     widget::{
@@ -13,7 +14,6 @@ use iced::{
 
 use crate::{
     app::Message,
-    ml::PredictionWithConfidence,
     style,
     views::components::{
         card_container, preset_btn, primary_btn_style, secondary_btn_style, styled_input,

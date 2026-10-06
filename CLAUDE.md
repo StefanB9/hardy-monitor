@@ -4,7 +4,7 @@ Gym occupancy monitoring application built in Rust. Fetches real-time occupancy 
 
 ## Project Structure
 
-Cargo workspace with 3 members:
+Cargo workspace with 4 members:
 
 ```
 hardy-monitor/                         (workspace root)
@@ -30,6 +30,9 @@ hardy-monitor/                         (workspace root)
 │   │       ├── app_logic.rs           MockClock/MockNotifier behavior tests
 │   │       └── common/mod.rs          TestDatabase helper
 │   │
+│   ├── hardy-ml/                      (library — forecasting, shared by daemon and GUI)
+│   │   └── src/                       features, training, models (linfa/smartcore), persistence
+│   │
 │   ├── hardy-daemon/                  (binary — headless fetch loop)
 │   │   └── src/main.rs               Daemon loop, logging, fetch_and_store
 │   │
@@ -41,12 +44,11 @@ hardy-monitor/                         (workspace root)
 │           ├── app.rs                 HardyMonitorApp, Message, update/view/subscription
 │           ├── style.rs               Iced theme customization
 │           ├── notifier.rs            SystemNotifier, CombinedNotifier
-│           ├── ml/                    OccupancyPredictor, linfa, feature extraction
 │           ├── widgets/               Custom widgets (gauge, heatmap, charts)
 │           └── views/                 Dashboard, weekly, insights, ML predictions, repair
 ```
 
-**Dependency boundary:** Core has zero GUI dependencies. Both binaries depend on core. GUI depends on core + GUI-specific crates. Never reverse.
+**Dependency boundary:** core ← ml ← daemon / gui. Core has zero GUI or ML dependencies; `hardy-ml` depends only on core plus ML crates; both binaries depend on core and ml. GUI-only crates stay in `hardy-gui`. Never reverse.
 
 ## Planning Process
 
@@ -197,7 +199,7 @@ Minimum necessary. `pub(super)` or `pub(crate)` for internal types. Private fiel
 
 **Rule 2: Minimum Features Enabled.** Strictly limit feature opt-ins to the absolute bare minimum required for the code to compile and run. Never use blanket features like `features = ["full"]`. This keeps compile times fast, binary sizes small, and the attack surface minimal.
 
-**Rule 3: GUI deps stay in hardy-gui.** Any dependency only needed for GUI/ML/notifications belongs in `hardy-gui/Cargo.toml`, not `hardy-core`. All versions are defined in the workspace root `[workspace.dependencies]`.
+**Rule 3: Deps live in the narrowest crate.** GUI-only dependencies belong in `hardy-gui/Cargo.toml`, ML-only ones in `hardy-ml/Cargo.toml`, never in `hardy-core`. All versions are defined in the workspace root `[workspace.dependencies]`.
 
 **General:**
 - New dependencies require justification: what problem, why this crate, what alternatives were considered.

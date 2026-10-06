@@ -16,50 +16,26 @@ pub enum MlAlgorithm {
     LinearRegression,
 }
 
-/// Configuration for the ML prediction pipeline.
+/// Configuration for forecasting. Training runs in the daemon.
 #[derive(Debug, Clone, Deserialize)]
 pub struct MlConfig {
     pub enabled: bool,
+    /// Days of history used for training.
     pub training_window_days: i64,
-    pub retrain_interval_hours: i64,
+    /// Furthest forecast, in hours.
     pub prediction_horizon_hours: i64,
+    /// Minimum training samples (15-minute anchors × horizons).
     pub min_samples_for_training: usize,
-    pub model_path: Option<PathBuf>,
-    pub fallback_on_error: bool,
     #[serde(default)]
     pub algorithm: MlAlgorithm,
-    #[serde(default = "default_cv_folds")]
-    pub cv_folds: usize,
-    #[serde(default = "default_cv_gap_hours")]
-    pub cv_gap_hours: i64,
-    #[serde(default = "default_tune_hyperparameters")]
-    pub tune_hyperparameters: bool,
+    /// Most recent days held out to check a new model against the
+    /// slot-average baseline before it is accepted.
+    #[serde(default = "default_holdout_days")]
+    pub holdout_days: i64,
 }
 
-fn default_cv_folds() -> usize {
-    4
-}
-
-fn default_cv_gap_hours() -> i64 {
-    24
-}
-
-fn default_tune_hyperparameters() -> bool {
-    true
-}
-
-impl MlConfig {
-    /// Resolve the model persistence path.
-    ///
-    /// Uses `model_path` if set, otherwise derives a default using
-    /// `dirs::data_dir()` (e.g., `AppData/Roaming/hardy-monitor/model.bin`).
-    /// Returns `None` only if `dirs::data_dir()` is unavailable.
-    pub fn resolve_model_path(&self) -> Option<PathBuf> {
-        if let Some(ref path) = self.model_path {
-            return Some(path.clone());
-        }
-        dirs::data_dir().map(|d| d.join("hardy-monitor").join("model.bin"))
-    }
+fn default_holdout_days() -> i64 {
+    7
 }
 
 impl Default for MlConfig {
@@ -67,15 +43,10 @@ impl Default for MlConfig {
         Self {
             enabled: true,
             training_window_days: 56,
-            retrain_interval_hours: 24,
             prediction_horizon_hours: 6,
             min_samples_for_training: 500,
-            model_path: None,
-            fallback_on_error: true,
             algorithm: MlAlgorithm::default(),
-            cv_folds: default_cv_folds(),
-            cv_gap_hours: default_cv_gap_hours(),
-            tune_hyperparameters: default_tune_hyperparameters(),
+            holdout_days: default_holdout_days(),
         }
     }
 }
@@ -384,6 +355,25 @@ impl AppConfig {
             ));
         }
 
+        if self.ml.holdout_days <= 0 {
+            return Err(AppError::Config(format!(
+                "ml.holdout_days must be > 0, got {}",
+                self.ml.holdout_days
+            )));
+        }
+        if self.ml.training_window_days <= self.ml.holdout_days {
+            return Err(AppError::Config(format!(
+                "ml.training_window_days ({}) must exceed ml.holdout_days ({})",
+                self.ml.training_window_days, self.ml.holdout_days
+            )));
+        }
+        if !(1..=24).contains(&self.ml.prediction_horizon_hours) {
+            return Err(AppError::Config(format!(
+                "ml.prediction_horizon_hours must be 1–24, got {}",
+                self.ml.prediction_horizon_hours
+            )));
+        }
+
         if self.analytics.prediction_window_days <= 0 {
             return Err(AppError::Config(format!(
                 "analytics.prediction_window_days must be > 0, got {}",
@@ -435,11 +425,8 @@ impl AppConfig {
 
             .set_default("ml.enabled", true)?
             .set_default("ml.training_window_days", 56_i64)?
-            .set_default("ml.retrain_interval_hours", 24_i64)?
             .set_default("ml.prediction_horizon_hours", 6_i64)?
             .set_default("ml.min_samples_for_training", 500_i64)?
-            .set_default("ml.model_path", None::<String>)?
-            .set_default("ml.fallback_on_error", true)?
 
             .add_source(File::from(PathBuf::from("config.toml")).required(false))
 
@@ -869,25 +856,16 @@ mod tests {
 
         assert!(config.enabled);
         assert_eq!(config.training_window_days, 56);
-        assert_eq!(config.retrain_interval_hours, 24);
         assert_eq!(config.prediction_horizon_hours, 6);
         assert_eq!(config.min_samples_for_training, 500);
-        assert!(config.fallback_on_error);
+        assert_eq!(config.algorithm, MlAlgorithm::RandomForest);
+        assert_eq!(config.holdout_days, 7);
     }
 
     #[test]
     fn test_ml_algorithm_default() {
         let algo = MlAlgorithm::default();
         assert_eq!(algo, MlAlgorithm::RandomForest);
-    }
-
-    #[test]
-    fn test_ml_config_new_fields_default() {
-        let config = MlConfig::default();
-        assert_eq!(config.algorithm, MlAlgorithm::RandomForest);
-        assert_eq!(config.cv_folds, 4);
-        assert_eq!(config.cv_gap_hours, 24);
-        assert!(config.tune_hyperparameters);
     }
 
     #[test]
@@ -907,44 +885,18 @@ mod tests {
     }
 
     #[test]
-    fn test_resolve_model_path_explicit() {
-        let config = MlConfig {
-            model_path: Some(PathBuf::from("/custom/path/model.bin")),
-            ..MlConfig::default()
-        };
+    fn test_validate_rejects_bad_ml_config() {
+        let mut config = valid_app_config();
+        config.ml.holdout_days = 0;
+        assert!(config.validate().is_err());
 
-        let resolved = config.resolve_model_path();
-        assert_eq!(resolved, Some(PathBuf::from("/custom/path/model.bin")));
-    }
+        let mut config = valid_app_config();
+        config.ml.training_window_days = 7;
+        assert!(config.validate().is_err(), "window must exceed holdout");
 
-    #[test]
-    fn test_resolve_model_path_default() {
-        let config = MlConfig::default();
-        assert!(config.model_path.is_none());
-
-        let resolved = config.resolve_model_path();
-        assert!(resolved.is_some());
-
-        let path = resolved.unwrap_or_else(|| unreachable!());
-        let path_str = path.to_string_lossy();
-        assert!(
-            path_str.contains("hardy-monitor"),
-            "default path should contain 'hardy-monitor': {path_str}"
-        );
-        assert!(
-            path_str.ends_with("model.bin"),
-            "default path should end with 'model.bin': {path_str}"
-        );
-    }
-
-    #[test]
-    fn test_resolve_model_path_default_not_none() {
-        // dirs::data_dir() should return Some on Windows/macOS/Linux
-        let data_dir = dirs::data_dir();
-        assert!(
-            data_dir.is_some(),
-            "dirs::data_dir() should be available on this platform"
-        );
+        let mut config = valid_app_config();
+        config.ml.prediction_horizon_hours = 25;
+        assert!(config.validate().is_err());
     }
 
     #[test]
@@ -1025,21 +977,22 @@ mod tests {
     }
 
     #[test]
-    fn test_ml_config_deserialize_without_new_fields() -> Result<()> {
-        let toml_str = r"
+    fn test_ml_config_ignores_removed_fields() -> Result<()> {
+        // Keys from older config files must not break loading.
+        let toml_str = r#"
             enabled = true
             training_window_days = 56
             retrain_interval_hours = 24
             prediction_horizon_hours = 6
             min_samples_for_training = 500
+            model_path = "C:/old/model.bin"
             fallback_on_error = true
-        ";
+            tune_hyperparameters = false
+        "#;
 
         let config: MlConfig = toml::from_str(toml_str)?;
         assert_eq!(config.algorithm, MlAlgorithm::RandomForest);
-        assert_eq!(config.cv_folds, 4);
-        assert_eq!(config.cv_gap_hours, 24);
-        assert!(config.tune_hyperparameters);
+        assert_eq!(config.holdout_days, 7);
 
         Ok(())
     }
