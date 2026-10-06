@@ -1,5 +1,8 @@
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
-use hardy_core::{Tz, analytics::midnight_local_as_utc, db::OccupancyLog, schedule::GymSchedule};
+use hardy_core::{
+    Tz, alert::AlertDuration, analytics::midnight_local_as_utc, db::OccupancyLog,
+    schedule::GymSchedule,
+};
 use iced::{
     Alignment, Border, Color, Element, Length, Theme,
     widget::{
@@ -18,7 +21,7 @@ use crate::{
     widgets::{gauge::GaugeWidget, history_chart::HistoryChart},
 };
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub struct DashboardProps<'a> {
     pub occupancy: Option<f64>,
     pub history: &'a [OccupancyLog],
@@ -29,8 +32,13 @@ pub struct DashboardProps<'a> {
     pub schedule: &'a GymSchedule,
     pub low_threshold: f64,
     pub high_threshold: f64,
-    pub notification_enabled: bool,
-    pub notification_threshold: f64,
+    /// Alerts armed and not expired.
+    pub alert_active: bool,
+    pub alert_threshold: f64,
+    /// Duration used when arming.
+    pub alert_duration: AlertDuration,
+    /// e.g. "On below 25% until 21:00 · set from phone".
+    pub alert_status: String,
     pub history_start_date: &'a str,
     pub history_end_date: &'a str,
     pub history_days_preset: Option<i64>,
@@ -54,7 +62,7 @@ pub fn view(props: DashboardProps<'_>) -> Element<'_, Message> {
     .width(Length::Fixed(220.0))
     .height(Length::Fixed(220.0));
 
-    let is_checked = props.notification_enabled;
+    let is_checked = props.alert_active;
     let active_rail = if is_checked {
         style::ACCENT_BLUE
     } else {
@@ -74,16 +82,17 @@ pub fn view(props: DashboardProps<'_>) -> Element<'_, Message> {
     let slider_section: Element<'_, Message> = column![
         row![
             text("Threshold:").size(12).color(style::TEXT_MUTED),
-            text(format!("{:.0}%", props.notification_threshold))
+            text(format!("{:.0}%", props.alert_threshold))
                 .size(12)
                 .color(text_color)
         ]
         .spacing(5),
         slider(
             0.0..=60.0,
-            props.notification_threshold,
+            props.alert_threshold,
             Message::NotificationThresholdChanged
         )
+        .on_release(Message::NotificationThresholdReleased)
         .step(5.0)
         .style(move |_: &Theme, _| slider::Style {
             rail: slider::Rail {
@@ -132,7 +141,9 @@ pub fn view(props: DashboardProps<'_>) -> Element<'_, Message> {
         ]
         .spacing(8)
         .align_y(Alignment::Center),
-        slider_section
+        duration_buttons(props.alert_duration),
+        slider_section,
+        text(props.alert_status).size(11).color(style::TEXT_MUTED),
     ]
     .spacing(10)
     .max_width(220);
@@ -307,6 +318,30 @@ pub fn view(props: DashboardProps<'_>) -> Element<'_, Message> {
         .height(Length::Fill)
     ]
     .spacing(20)
+    .into()
+}
+
+/// "Until closing / 2 h / Always" selector used when arming alerts.
+fn duration_buttons(selected: AlertDuration) -> Element<'static, Message> {
+    let option = |label: &'static str, duration: AlertDuration| {
+        let active = selected == duration;
+        button(text(label).size(11))
+            .on_press(Message::NotificationDurationSelected(duration))
+            .padding([4, 8])
+            .style(move |theme: &Theme, status| {
+                if active {
+                    primary_btn_style(theme, status)
+                } else {
+                    secondary_btn_style(theme, status)
+                }
+            })
+    };
+    row![
+        option("Until closing", AlertDuration::UntilClosing),
+        option("2 h", AlertDuration::Hours(2)),
+        option("Always", AlertDuration::Always),
+    ]
+    .spacing(4)
     .into()
 }
 

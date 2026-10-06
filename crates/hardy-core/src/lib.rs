@@ -1,8 +1,10 @@
+pub mod alert;
 pub mod analytics;
 pub mod api;
 pub mod config;
 pub mod db;
 pub mod error;
+pub mod ntfy;
 pub mod repair;
 pub mod retry;
 pub mod schedule;

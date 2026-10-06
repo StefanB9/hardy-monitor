@@ -7,6 +7,7 @@ use std::{
 use chrono::{DateTime, Datelike, Duration as ChronoDuration, NaiveDate, Utc};
 use hardy_core::{
     Tz,
+    alert::{Alert, AlertDuration, AlertRules, AlertSettings},
     analytics::{
         self, ComparisonMode, DayAnalysis, Insight, OccupancyStats, TrendDirection, analyze_days,
         calculate_stats, compare_periods, find_peak_hours, find_quiet_hours, generate_insights,
@@ -29,6 +30,7 @@ use muda::MenuEvent;
 use tray_icon::{TrayIcon, TrayIconEvent};
 
 use crate::{
+    alerts::AlertControls,
     ml::{
         CvScoresSummary, HyperparametersSummary, MlConfig, OccupancyPredictor, PersistedModel,
         PredictionWithConfidence, TrainingInfo, TrainingResult,
@@ -119,13 +121,6 @@ struct UiState {
     is_window_visible: bool,
 }
 
-struct NotificationState {
-    threshold: f64,
-    enabled: bool,
-    was_below_threshold: bool,
-    last_notified_at: Option<Instant>,
-}
-
 struct ExportState {
     status: Option<String>,
 }
@@ -142,7 +137,7 @@ pub struct HardyMonitorApp {
 
     data: MonitorState,
     ui: UiState,
-    notifications: NotificationState,
+    alerts: AlertControls,
     export: ExportState,
     repair: RepairState,
 }
@@ -165,7 +160,10 @@ pub enum Message {
     },
 
     NotificationThresholdChanged(f64),
+    NotificationThresholdReleased,
     NotificationToggled(bool),
+    NotificationDurationSelected(AlertDuration),
+    AlertSettingsLoaded(Result<AlertSettings, AppError>),
     NotificationSent,
 
     SwitchView(ViewMode),
@@ -207,6 +205,7 @@ impl HardyMonitorApp {
         config: Arc<AppConfig>,
         clock: Arc<dyn Clock>,
         notifier: Arc<dyn Notifier>,
+        alert_rules: AlertRules,
     ) -> (Self, Task<Message>) {
         let db = Arc::new(db);
         let now = clock.now_utc();
@@ -218,9 +217,6 @@ impl HardyMonitorApp {
 
         let schedule = GymSchedule::new(&config.schedule);
         let ml_config = config.ml.clone();
-
-        let notif_threshold = config.notifications.threshold_percent;
-        let notif_enabled = config.notifications.enabled;
 
         // Try loading persisted model (including full weights) on startup
         let mut predictor = OccupancyPredictor::new(ml_config);
@@ -305,12 +301,7 @@ impl HardyMonitorApp {
                 show_model_details: false,
                 is_window_visible: true,
             },
-            notifications: NotificationState {
-                threshold: notif_threshold,
-                enabled: notif_enabled,
-                was_below_threshold: false,
-                last_notified_at: None,
-            },
+            alerts: AlertControls::new(alert_rules),
             export: ExportState { status: None },
             repair: RepairState {
                 start_date: today_str.clone(),
@@ -323,6 +314,7 @@ impl HardyMonitorApp {
 
         let prediction_days = app.config.analytics.prediction_window_days;
         let initial_tasks = vec![
+            Self::load_alert_settings(db.clone()),
             Self::load_history(db.clone()),
             Self::load_analytics(
                 db.clone(),
@@ -388,13 +380,15 @@ impl HardyMonitorApp {
                 }
             }
             Message::FetchTick => {
+                // Settings may change from the phone at any time.
+                let reload_settings = Self::load_alert_settings(self.db.clone());
                 if self.schedule.is_open(&self.clock.now_utc()) {
                     self.start_loading();
-                    Self::fetch_latest_from_db(self.db.clone())
+                    Task::batch([Self::fetch_latest_from_db(self.db.clone()), reload_settings])
                 } else {
                     self.data.occupancy = None;
                     self.stop_loading();
-                    Task::none()
+                    reload_settings
                 }
             }
             Message::RefreshNow => {
@@ -457,13 +451,30 @@ impl HardyMonitorApp {
                 self.handle_insights_data_loaded(current, baseline)
             }
             Message::NotificationThresholdChanged(val) => {
-                self.notifications.threshold = val;
+                self.alerts.drag_threshold(val);
                 Task::none()
             }
+            Message::NotificationThresholdReleased => {
+                let change = self.alerts.release_threshold(self.clock.now_utc());
+                self.save_alert_settings(change)
+            }
             Message::NotificationToggled(enabled) => {
-                self.notifications.enabled = enabled;
-                self.notifications.was_below_threshold =
-                    self.data.occupancy.unwrap_or(100.0) < self.notifications.threshold;
+                let change = self
+                    .alerts
+                    .toggle(enabled, self.clock.now_utc(), &self.schedule);
+                self.save_alert_settings(change)
+            }
+            Message::NotificationDurationSelected(duration) => {
+                let change =
+                    self.alerts
+                        .select_duration(duration, self.clock.now_utc(), &self.schedule);
+                self.save_alert_settings(change)
+            }
+            Message::AlertSettingsLoaded(result) => {
+                match result {
+                    Ok(settings) => self.alerts.set_settings(settings),
+                    Err(e) => self.error = Some(e),
+                }
                 Task::none()
             }
             Message::SwitchView(mode) => {
@@ -849,8 +860,12 @@ impl HardyMonitorApp {
                 schedule: &self.schedule,
                 low_threshold: self.config.thresholds.low_occupancy_percent,
                 high_threshold: self.config.thresholds.high_occupancy_percent,
-                notification_enabled: self.notifications.enabled,
-                notification_threshold: self.notifications.threshold,
+                alert_active: self.alerts.is_active(self.clock.now_utc()),
+                alert_threshold: self.alerts.threshold(),
+                alert_duration: self.alerts.duration(),
+                alert_status: self
+                    .alerts
+                    .status_line(self.clock.now_utc(), &self.schedule),
                 history_start_date: &self.ui.history_start_date,
                 history_end_date: &self.ui.history_end_date,
                 history_days_preset: self.ui.history_days_preset,
@@ -1167,8 +1182,6 @@ impl HardyMonitorApp {
                     .collect();
                 self.ui.ml_predictions_chart_cache.clear();
 
-                let is_below = percentage < self.notifications.threshold;
-
                 let mut tasks = vec![
                     Self::load_history(self.db.clone()),
                     Self::load_analytics(
@@ -1182,33 +1195,18 @@ impl HardyMonitorApp {
                 // Training is user-initiated only (via TrainModelRequested
                 // message). No auto-training on fetch.
 
-                let cooldown_elapsed = self.notifications.last_notified_at.is_none_or(|t| {
-                    t.elapsed().as_secs() >= self.config.notifications.cooldown_secs
-                });
-
-                if self.notifications.enabled
-                    && is_below
-                    && !self.notifications.was_below_threshold
-                    && cooldown_elapsed
-                {
-                    self.notifications.last_notified_at = Some(Instant::now());
+                // Desktop popups only; phone alerts come from the daemon.
+                if let Some(alert) = self.alerts.observe(percentage, now, &self.schedule) {
                     let notifier = self.notifier.clone();
                     tasks.push(Task::perform(
                         async move {
-                            if let Err(e) = notifier
-                                .notify(
-                                    "Hardy's Gym Monitor",
-                                    &format!("Gym is empty! {percentage:.0}%"),
-                                )
-                                .await
-                            {
-                                tracing::warn!(error = %e, "occupancy notification failed");
+                            if let Err(e) = notifier.notify(Alert::TITLE, &alert.body()).await {
+                                tracing::warn!(error = %e, "desktop notification failed");
                             }
                         },
                         |()| Message::NotificationSent,
                     ));
                 }
-                self.notifications.was_below_threshold = is_below;
                 Task::batch(tasks)
             }
             Err(e) => {
@@ -1243,6 +1241,46 @@ impl HardyMonitorApp {
             }
         }
         Task::none()
+    }
+
+    fn load_alert_settings(db: Arc<Database>) -> Task<Message> {
+        Task::perform(
+            async move { db.get_alert_settings().await },
+            |r: Result<AlertSettings, anyhow::Error>| {
+                Message::AlertSettingsLoaded(
+                    r.map_err(|e| AppError::from_anyhow_db(e, "get_alert_settings")),
+                )
+            },
+        )
+    }
+
+    /// Saves a settings change and adopts the saved row; `None` = nothing to
+    /// save.
+    fn save_alert_settings(
+        &mut self,
+        change: Option<Result<AlertSettings, AppError>>,
+    ) -> Task<Message> {
+        match change {
+            None => Task::none(),
+            Some(Err(e)) => {
+                self.error = Some(e);
+                Task::none()
+            }
+            Some(Ok(settings)) => {
+                let db = self.db.clone();
+                Task::perform(
+                    async move {
+                        db.save_alert_settings(&settings).await?;
+                        Ok(settings)
+                    },
+                    |r: Result<AlertSettings, anyhow::Error>| {
+                        Message::AlertSettingsLoaded(
+                            r.map_err(|e| AppError::from_anyhow_db(e, "save_alert_settings")),
+                        )
+                    },
+                )
+            }
+        }
     }
 
     fn fetch_latest_from_db(db: Arc<Database>) -> Task<Message> {

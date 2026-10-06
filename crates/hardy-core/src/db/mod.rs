@@ -12,6 +12,8 @@ use sqlx::{FromRow, PgPool, postgres::PgPoolOptions};
 
 use crate::{config::DatabaseConfig, traits::Clock};
 
+mod alert_settings;
+
 /// Where a stored value came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, sqlx::Type)]
 #[sqlx(type_name = "text", rename_all = "lowercase")]

@@ -6,7 +6,7 @@ use config::{Config, Environment, File};
 use serde::Deserialize;
 use tracing::warn;
 
-use crate::error::AppError;
+use crate::{alert::AlertWindow, error::AppError};
 
 /// Which ML algorithm to use for occupancy prediction.
 #[derive(Debug, Clone, Deserialize, Default, PartialEq, Eq)]
@@ -180,23 +180,62 @@ impl Default for RefreshConfig {
     }
 }
 
+/// A secret read from configuration; never shown by `Debug`.
+#[derive(Clone, Deserialize, PartialEq, Eq)]
+#[serde(transparent)]
+pub struct SecretString(String);
+
+impl SecretString {
+    /// The secret value, for the one place that needs it.
+    pub fn expose(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Debug for SecretString {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("<redacted>")
+    }
+}
+
+/// Alert delivery settings. Whether alerts are armed and their threshold
+/// live in the database (`alert_settings`), changed from the GUI or phone.
 #[derive(Debug, Deserialize, Clone)]
 pub struct NotificationConfig {
-    pub enabled: bool,
-    pub threshold_percent: f64,
+    /// Topic the daemon publishes alerts and command replies to.
     pub ntfy_topic: Option<String>,
     pub ntfy_server: String,
+    /// ntfy access token. Set via `HARDY__NOTIFICATIONS__NTFY_TOKEN`, never
+    /// in a committed config file.
+    #[serde(default)]
+    pub ntfy_token: Option<SecretString>,
+    /// Topic the daemon reads phone commands from (`on 25`, `off`, ...).
+    #[serde(default)]
+    pub control_topic: Option<String>,
+    /// Minimum time between two alerts.
     pub cooldown_secs: u64,
+    /// No alerts for this long after the gym opens.
+    #[serde(default = "default_opening_grace_minutes")]
+    pub opening_grace_minutes: u32,
+    /// Gym-local times in which alerts may fire; empty = any opening hour.
+    #[serde(default)]
+    pub windows: Vec<AlertWindow>,
+}
+
+fn default_opening_grace_minutes() -> u32 {
+    60
 }
 
 impl Default for NotificationConfig {
     fn default() -> Self {
         Self {
-            enabled: false,
-            threshold_percent: 30.0,
             ntfy_topic: None,
             ntfy_server: "https://ntfy.sh".to_string(),
+            ntfy_token: None,
+            control_topic: None,
             cooldown_secs: 300,
+            opening_grace_minutes: default_opening_grace_minutes(),
+            windows: Vec::new(),
         }
     }
 }
@@ -322,11 +361,16 @@ impl AppConfig {
             )));
         }
 
-        if !(0.0..=100.0).contains(&self.notifications.threshold_percent) {
-            return Err(AppError::Config(format!(
-                "notifications.threshold_percent must be in [0.0, 100.0], got {}",
-                self.notifications.threshold_percent
-            )));
+        for window in &self.notifications.windows {
+            window.validate()?;
+        }
+        if self.notifications.control_topic.is_some()
+            && self.notifications.control_topic == self.notifications.ntfy_topic
+        {
+            // The daemon's own replies would be read back as commands.
+            return Err(AppError::Config(
+                "notifications.control_topic must differ from ntfy_topic".to_string(),
+            ));
         }
 
         if self.refresh.data_fetch_interval_secs == 0 {
@@ -377,8 +421,6 @@ impl AppConfig {
             .set_default("refresh.ui_interval_secs", 30)?
             .set_default("refresh.data_fetch_interval_secs", 60)?
             .set_default("refresh.tray_poll_interval_ms", 50)?
-            .set_default("notifications.enabled", false)?
-            .set_default("notifications.threshold_percent", 30.0)?
             .set_default("notifications.ntfy_topic", None::<String>)?
             .set_default("notifications.ntfy_server", "https://ntfy.sh")?
             .set_default("notifications.cooldown_secs", 300)?
@@ -445,8 +487,47 @@ mod tests {
     #[test]
     fn test_notification_config_defaults() {
         let config = NotificationConfig::default();
-        assert!(!config.enabled);
-        assert_relative_eq!(config.threshold_percent, 30.0);
+        assert_eq!(config.ntfy_server, "https://ntfy.sh");
+        assert_eq!(config.cooldown_secs, 300);
+        assert_eq!(config.opening_grace_minutes, 60);
+        assert!(config.control_topic.is_none());
+        assert!(config.ntfy_token.is_none());
+        assert_eq!(config.windows, Vec::new());
+    }
+
+    #[test]
+    fn test_notification_config_deserializes_new_fields() -> Result<()> {
+        let config: NotificationConfig = toml::from_str(
+            r#"
+            ntfy_server = "https://ntfy.example"
+            cooldown_secs = 120
+            control_topic = "hardy-ctl"
+            opening_grace_minutes = 30
+            windows = [{ days = "weekends", start = "10:00", end = "18:00" }]
+            "#,
+        )?;
+        assert_eq!(config.control_topic.as_deref(), Some("hardy-ctl"));
+        assert_eq!(config.opening_grace_minutes, 30);
+        assert_eq!(config.windows.len(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn test_secret_string_debug_is_redacted() -> Result<()> {
+        let config: NotificationConfig = toml::from_str(
+            r#"
+            ntfy_server = "https://ntfy.sh"
+            cooldown_secs = 300
+            ntfy_token = "tk_very_secret"
+            "#,
+        )?;
+        let debug = format!("{config:?}");
+        assert!(!debug.contains("tk_very_secret"), "{debug}");
+        assert_eq!(
+            config.ntfy_token.as_ref().map(SecretString::expose),
+            Some("tk_very_secret")
+        );
+        Ok(())
     }
 
     #[test]
@@ -579,13 +660,23 @@ mod tests {
     fn test_env_var_overrides_notifications() -> Result<()> {
         temp_env::with_vars(
             vec![
-                ("HARDY__NOTIFICATIONS__ENABLED", Some("true")),
-                ("HARDY__NOTIFICATIONS__THRESHOLD_PERCENT", Some("15.5")),
+                ("HARDY__NOTIFICATIONS__NTFY_TOKEN", Some("tk_from_env")),
+                ("HARDY__NOTIFICATIONS__CONTROL_TOPIC", Some("ctl-from-env")),
             ],
             || -> Result<()> {
                 let config = AppConfig::load()?;
-                assert!(config.notifications.enabled);
-                assert_relative_eq!(config.notifications.threshold_percent, 15.5);
+                assert_eq!(
+                    config
+                        .notifications
+                        .ntfy_token
+                        .as_ref()
+                        .map(SecretString::expose),
+                    Some("tk_from_env")
+                );
+                assert_eq!(
+                    config.notifications.control_topic.as_deref(),
+                    Some("ctl-from-env")
+                );
                 Ok(())
             },
         )?;
@@ -662,14 +753,29 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_notifications_threshold_out_of_range_fails() {
+    fn test_validate_rejects_control_topic_equal_to_alert_topic() {
         let mut cfg = valid_app_config();
-        cfg.notifications.threshold_percent = -0.1;
+        cfg.notifications.ntfy_topic = Some("same".to_string());
+        cfg.notifications.control_topic = Some("same".to_string());
         assert!(cfg.validate().is_err());
 
+        cfg.notifications.control_topic = Some("other".to_string());
+        assert!(cfg.validate().is_ok());
+    }
+
+    #[test]
+    fn test_validate_rejects_inverted_alert_window() -> Result<()> {
         let mut cfg = valid_app_config();
-        cfg.notifications.threshold_percent = 100.1;
+        let parsed: NotificationConfig = toml::from_str(
+            r#"
+            ntfy_server = "https://ntfy.sh"
+            cooldown_secs = 300
+            windows = [{ days = "daily", start = "21:00", end = "16:00" }]
+            "#,
+        )?;
+        cfg.notifications = parsed;
         assert!(cfg.validate().is_err());
+        Ok(())
     }
 
     #[test]

@@ -1,3 +1,4 @@
+pub(crate) mod alerts;
 pub mod app;
 pub mod ml;
 pub mod notifier;

@@ -6,6 +6,7 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use hardy_core::{
     AppError, RetryPolicy,
+    alert::AlertService,
     api::GymApiClient,
     config::AppConfig,
     db::{Database, minute_slot},
@@ -131,8 +132,21 @@ async fn run(config: &AppConfig) -> Result<()> {
             .max(Duration::from_secs(1)),
     };
 
+    let mut alerts = AlertService::new(
+        &config.notifications,
+        &config.network,
+        schedule.clone(),
+        chrono::Utc::now(),
+    )?;
+    tracing::info!(
+        alert_topic = config.notifications.ntfy_topic.is_some(),
+        control_topic = config.notifications.control_topic.is_some(),
+        "alerts configured"
+    );
+
     fetch_loop(
         &worker,
+        &mut alerts,
         config.refresh.data_fetch_interval_secs,
         shutdown.as_mut(),
     )
@@ -156,6 +170,7 @@ struct Worker<'a> {
 /// Runs fetch cycles aligned to full minutes until `shutdown` completes.
 async fn fetch_loop(
     worker: &Worker<'_>,
+    alerts: &mut AlertService,
     interval_secs: u64,
     mut shutdown: std::pin::Pin<&mut impl std::future::Future<Output = ()>>,
 ) {
@@ -190,6 +205,21 @@ async fn fetch_loop(
         // The slot is fixed when the tick fires, so retries store the reading
         // in the minute it belongs to.
         let slot = minute_slot(chrono::Utc::now());
+
+        // Phone commands are handled even while the gym is closed, so alerts
+        // can be armed ahead of time.
+        tokio::select! {
+            result = alerts.process_commands(worker.database, chrono::Utc::now()) => {
+                if let Err(e) = result {
+                    tracing::warn!(error = %e, "failed to process phone commands");
+                }
+            }
+            () = &mut shutdown => {
+                tracing::info!("shutdown requested");
+                return;
+            }
+        }
+
         if !worker.schedule.is_open(&slot) {
             tracing::debug!(
                 gym_time = %slot.with_timezone(&worker.schedule.timezone()).format("%H:%M"),
@@ -213,9 +243,27 @@ async fn fetch_loop(
             // slot is unique, so no partial or duplicate row can result.
             (tokio::time::timeout(SHUTDOWN_GRACE, &mut cycle).await, true)
         };
+        let stored_percentage = match &outcome {
+            Ok(Ok(Stored::Inserted(percentage))) => Some(*percentage),
+            _ => None,
+        };
         log_outcome(slot, outcome);
         if stop {
             return;
+        }
+
+        if let Some(percentage) = stored_percentage {
+            tokio::select! {
+                result = alerts.process_reading(worker.database, percentage, slot) => {
+                    if let Err(e) = result {
+                        tracing::warn!(error = %e, "failed to evaluate alert");
+                    }
+                }
+                () = &mut shutdown => {
+                    tracing::info!("shutdown requested");
+                    return;
+                }
+            }
         }
     }
 }
