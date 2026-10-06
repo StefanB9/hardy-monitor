@@ -1542,7 +1542,7 @@ mod tests {
             let baseline = vec![make_hourly_avg(1, 10, 40.0, 10)];
             let current = vec![make_hourly_avg(1, 10, 43.0, 10)];
             let result = compare_periods(&baseline, &current, ComparisonMode::WeekOverWeek);
-            assert!(result.biggest_increases.is_empty());
+            assert_eq!(result.biggest_increases.len(), 0);
         }
 
         #[test]
