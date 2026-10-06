@@ -116,12 +116,6 @@ impl RandomForestModel {
     pub fn feature_importance(&self) -> Option<Vec<f64>> {
         None
     }
-
-    /// Per-tree predictions (stub — smartcore v0.4 does not expose this).
-    #[allow(clippy::unused_self)]
-    pub fn per_tree_predictions(&self) -> Option<Vec<f64>> {
-        None
-    }
 }
 
 /// Convert a slice of `PredictionFeatures` into a `DenseMatrix`.
@@ -272,24 +266,6 @@ mod tests {
 
         let model = RandomForestModel::train(&matrix, &targets, &params)?;
         assert!(model.feature_importance().is_none());
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_rf_per_tree_predictions_returns_none() -> Result<()> {
-        let features = create_test_features(200);
-        let targets: Vec<f64> = features.iter().map(|f| f.historical_avg).collect();
-
-        let matrix = features_to_dense_matrix(&features)?;
-        let params = RfHyperparameters {
-            n_trees: 10,
-            max_depth: Some(5),
-            ..Default::default()
-        };
-
-        let model = RandomForestModel::train(&matrix, &targets, &params)?;
-        assert!(model.per_tree_predictions().is_none());
 
         Ok(())
     }

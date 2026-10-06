@@ -118,6 +118,15 @@ fn build_training_result(
     }
 }
 
+/// Model plus the optional by-products of tuning: CV scores, the chosen
+/// hyperparameters and residual quantiles.
+type TunedTraining = (
+    TrainedModel,
+    Option<CrossValidationScores>,
+    Option<HyperparameterSet>,
+    Option<ResidualQuantiles>,
+);
+
 /// Train a Random Forest model with optional grid-search hyperparameter
 /// tuning.
 fn train_rf_with_tuning(
@@ -126,15 +135,7 @@ fn train_rf_with_tuning(
     config: &MlConfig,
     logs: &[OccupancyLog],
     grid: &[HyperparameterSet],
-) -> Result<
-    (
-        TrainedModel,
-        Option<CrossValidationScores>,
-        Option<HyperparameterSet>,
-        Option<ResidualQuantiles>,
-    ),
-    TrainingError,
-> {
+) -> Result<TunedTraining, TrainingError> {
     if config.tune_hyperparameters {
         let sph = estimate_samples_per_hour(logs);
         #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
@@ -270,7 +271,7 @@ pub async fn train_model(
     }
 
     let baseline = db
-        .get_averages_range(start, end)
+        .get_averages_range(start, end, schedule.timezone())
         .await
         .map_err(|e| TrainingError::FitError(format!("Database error: {e}")))?;
 

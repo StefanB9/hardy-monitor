@@ -11,7 +11,7 @@
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use chrono::{DateTime, Duration, Local, NaiveDate, NaiveTime, TimeZone, Timelike, Utc};
+use chrono::{DateTime, Duration, NaiveDate, NaiveTime, TimeZone, Timelike, Utc};
 use futures::{StreamExt, stream};
 use tokio::sync::mpsc;
 
@@ -120,7 +120,10 @@ impl DataRepairer {
         let open_hour = self.schedule.get_open_hour(date);
         let close_hour = self.schedule.get_close_hour(date);
 
-        let records = self.db.get_records_for_date(date).await?;
+        let records = self
+            .db
+            .get_records_for_date(date, self.schedule.timezone())
+            .await?;
         let (deleted, zeroed) = self
             .clean_outside_hours(&records, date, open_hour, close_hour)
             .await?;
@@ -142,12 +145,18 @@ impl DataRepairer {
             result.boundary_entries_added += 1;
         }
 
-        let records = self.db.get_records_for_date(date).await?;
+        let records = self
+            .db
+            .get_records_for_date(date, self.schedule.timezone())
+            .await?;
         result.gaps_filled = self
             .fill_gaps(&records, date, open_hour, close_hour)
             .await?;
 
-        let records = self.db.get_records_for_date(date).await?;
+        let records = self
+            .db
+            .get_records_for_date(date, self.schedule.timezone())
+            .await?;
         result.records_smoothed += self.smooth_and_filter(&records).await?;
 
         Ok(result)
@@ -160,7 +169,7 @@ impl DataRepairer {
         open_hour: u32,
         close_hour: u32,
     ) -> Result<(u32, u32)> {
-        let local_tz = Local;
+        let local_tz = self.schedule.timezone();
 
         let open_time = NaiveTime::from_hms_opt(open_hour, 0, 0)
             .ok_or_else(|| anyhow::anyhow!("invalid open hour: {open_hour}"))?;
@@ -262,7 +271,7 @@ impl DataRepairer {
         close_hour: u32,
     ) -> Result<u32> {
         let mut filled_count = 0;
-        let local_tz = Local;
+        let local_tz = self.schedule.timezone();
 
         let mut data_points: Vec<(i64, f64)> = Vec::new();
 
@@ -332,7 +341,7 @@ impl DataRepairer {
         date: NaiveDate,
         open_hour: u32,
     ) -> Result<bool> {
-        let local_tz = Local;
+        let local_tz = self.schedule.timezone();
 
         let start_time = NaiveTime::from_hms_opt(open_hour, 0, 0)
             .ok_or_else(|| anyhow::anyhow!("invalid open hour: {open_hour}"))?;
@@ -361,7 +370,7 @@ impl DataRepairer {
         date: NaiveDate,
         close_hour: u32,
     ) -> Result<bool> {
-        let local_tz = Local;
+        let local_tz = self.schedule.timezone();
 
         let end_time = NaiveTime::from_hms_opt(close_hour, 0, 0)
             .ok_or_else(|| anyhow::anyhow!("invalid close hour: {close_hour}"))?;

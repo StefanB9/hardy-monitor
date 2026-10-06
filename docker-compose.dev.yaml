@@ -1,6 +1,6 @@
 services:
   postgres:
-    image: postgres:17-alpine
+    image: postgres:18.3
     container_name: hardy-postgres-dev
     environment:
       POSTGRES_USER: hardy
@@ -9,7 +9,7 @@ services:
     ports:
       - "5432:5432"
     volumes:
-      - hardy_postgres_data:/var/lib/postgresql/data
+      - hardy_postgres_data:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U hardy -d hardy_monitor"]
       interval: 5s

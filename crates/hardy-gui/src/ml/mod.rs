@@ -13,7 +13,7 @@ use chrono::{DateTime, Datelike, Timelike, Utc};
 pub use confidence::{PredictionMethod, PredictionWithConfidence};
 pub use config::MlConfig;
 pub use features::{FeatureExtractor, PredictionFeatures};
-use hardy_core::{db::HourlyAverage, schedule::GymSchedule, traits::Clock};
+use hardy_core::{Tz, db::HourlyAverage, schedule::GymSchedule, traits::Clock};
 pub use model::TrainedModel;
 pub use persistence::PersistedModel;
 pub use residuals::ResidualQuantiles;
@@ -178,8 +178,7 @@ impl OccupancyPredictor {
         for hours_ahead in 1..=self.config.prediction_horizon_hours {
             let target_time = now + chrono::Duration::hours(hours_ahead);
 
-            let local_target = target_time.with_timezone(&chrono::Local);
-            if !schedule.is_open(&local_target) {
+            if !schedule.is_open(&target_time) {
                 continue;
             }
 
@@ -219,7 +218,7 @@ impl OccupancyPredictor {
             return pred;
         }
 
-        self.fallback_predict(target_time, baseline)
+        self.fallback_predict(target_time, baseline, schedule.timezone())
     }
 
     fn ml_predict(
@@ -266,13 +265,17 @@ impl OccupancyPredictor {
         ))
     }
 
+    /// Baseline-slot prediction; `baseline` slots are gym-local, so the target
+    /// is converted to `tz` before lookup.
     fn fallback_predict(
         &self,
         target_time: DateTime<Utc>,
         baseline: &[HourlyAverage],
+        tz: Tz,
     ) -> PredictionWithConfidence {
-        let target_weekday = target_time.weekday().num_days_from_monday().cast_signed();
-        let target_hour = target_time.hour().cast_signed();
+        let local_target = target_time.with_timezone(&tz);
+        let target_weekday = local_target.weekday().num_days_from_monday().cast_signed();
+        let target_hour = local_target.hour().cast_signed();
 
         let (predicted_value, confidence_low, confidence_high) = baseline
             .iter()
@@ -386,6 +389,7 @@ mod tests {
                 open_hour: 8,
                 close_hour: 22,
             },
+            ..ScheduleConfig::default()
         })
     }
 
@@ -501,8 +505,9 @@ mod tests {
             sample_count: 100,
         }];
 
-        let target = Utc.with_ymd_and_hms(2024, 6, 17, 10, 0, 0).unwrap();
-        let pred = predictor.fallback_predict(target, &baseline);
+        // Monday 08:00 UTC is 10:00 CEST — the gym-local slot (Mon, 10).
+        let target = Utc.with_ymd_and_hms(2024, 6, 17, 8, 0, 0).unwrap();
+        let pred = predictor.fallback_predict(target, &baseline, GymSchedule::default().timezone());
 
         assert_abs_diff_eq!(pred.predicted_value, 45.0, epsilon = 1e-5);
         assert!(matches!(pred.method, PredictionMethod::HistoricalAverage));

@@ -1,9 +1,9 @@
 use std::collections::{BTreeSet, HashMap};
 
 use chrono::{
-    DateTime, Datelike, Duration as ChronoDuration, Local, NaiveDate, NaiveTime, Offset, TimeZone,
-    Timelike, Utc,
+    DateTime, Datelike, Duration as ChronoDuration, NaiveDate, NaiveTime, TimeZone, Timelike, Utc,
 };
+use chrono_tz::Tz;
 
 use crate::{db::HourlyAverage, schedule::GymSchedule, traits::Clock};
 
@@ -147,9 +147,12 @@ pub fn midnight_utc(date: NaiveDate) -> DateTime<Utc> {
     date.and_time(NaiveTime::MIN).and_utc()
 }
 
-pub fn midnight_local_as_utc(date: NaiveDate) -> DateTime<Utc> {
-    Local
-        .from_local_datetime(&date.and_time(NaiveTime::MIN))
+/// The first instant of `date` in `tz`, as UTC.
+///
+/// Falls back to UTC midnight only if `tz` has no midnight that day (a DST
+/// jump at 00:00, which IANA zones like `Europe/Berlin` never do).
+pub fn midnight_local_as_utc(date: NaiveDate, tz: Tz) -> DateTime<Utc> {
+    tz.from_local_datetime(&date.and_time(NaiveTime::MIN))
         .earliest()
         .map_or_else(
             || date.and_time(NaiveTime::MIN).and_utc(),
@@ -168,6 +171,10 @@ pub fn calculate_predictions_with_schedule(
     calculate_predictions_with_clock(baseline, schedule, &crate::traits::SystemClock)
 }
 
+/// Baseline-average predictions for the next two full hours.
+///
+/// `baseline` slots are gym-local (see `Database::get_averages_range`), so each
+/// target instant is converted to the schedule's timezone before lookup.
 #[tracing::instrument(skip_all, fields(baseline.len = baseline.len()))]
 pub fn calculate_predictions_with_clock<C: Clock>(
     baseline: &[HourlyAverage],
@@ -180,26 +187,27 @@ pub fn calculate_predictions_with_clock<C: Clock>(
     }
 
     let now = clock.now_utc();
+    let tz = schedule.timezone();
 
     for i in 1..=2 {
         let target_time = now + ChronoDuration::hours(i);
-        let target_hour = target_time.hour().cast_signed();
-        let target_weekday = target_time.weekday().num_days_from_monday().cast_signed();
-
-        let local_target = target_time.with_timezone(&Local);
-        if !schedule.is_open(&local_target) {
+        if !schedule.is_open(&target_time) {
             continue;
         }
+
+        let local_target = target_time.with_timezone(&tz);
+        let target_hour = local_target.hour().cast_signed();
+        let target_weekday = local_target.weekday().num_days_from_monday().cast_signed();
 
         if let Some(avg) = baseline
             .iter()
             .find(|x| x.weekday == target_weekday && x.hour == target_hour)
         {
-            let plot_time = target_time
+            let plot_time = local_target
                 .with_minute(0)
                 .and_then(|t| t.with_second(0))
                 .and_then(|t| t.with_nanosecond(0))
-                .unwrap_or(target_time);
+                .map_or(target_time, |t| t.with_timezone(&Utc));
 
             predictions.push((plot_time, avg.avg_percentage));
         }
@@ -207,36 +215,32 @@ pub fn calculate_predictions_with_clock<C: Clock>(
     predictions
 }
 
-pub fn find_best_time_today(data: &[HourlyAverage]) -> Option<(i32, f64)> {
-    find_best_time_today_with_clock(data, &crate::traits::SystemClock)
+/// Quietest gym-local hour of today, as `(hour, avg_percentage)`.
+pub fn find_best_time_today(data: &[HourlyAverage], tz: Tz) -> Option<(i32, f64)> {
+    find_best_time_today_with_clock(data, tz, &crate::traits::SystemClock)
 }
 
-pub fn find_best_time_today_with_clock<C: Clock>(
+/// Like [`find_best_time_today`], with "today" taken from `clock` in `tz`.
+pub fn find_best_time_today_with_clock<C: Clock + ?Sized>(
     data: &[HourlyAverage],
+    tz: Tz,
     clock: &C,
 ) -> Option<(i32, f64)> {
-    let now = clock.now_local();
-    let today_idx = now.weekday().num_days_from_monday().cast_signed();
-
-    let offset_seconds = now.offset().fix().local_minus_utc();
-    let seconds_per_week = 7 * 24 * 3600;
+    let today_idx = clock
+        .now_utc()
+        .with_timezone(&tz)
+        .weekday()
+        .num_days_from_monday()
+        .cast_signed();
 
     data.iter()
-        .map(|d| {
-            let utc_seconds = (i64::from(d.weekday) * 24 + i64::from(d.hour)) * 3600;
-            let local_seconds = utc_seconds + i64::from(offset_seconds);
-
-            let wrapped_local =
-                ((local_seconds % seconds_per_week) + seconds_per_week) % seconds_per_week;
-
-            let local_w = i32::try_from((wrapped_local / 3600) / 24).unwrap_or_default();
-            let local_h = i32::try_from((wrapped_local / 3600) % 24).unwrap_or_default();
-
-            (local_w, local_h, d.avg_percentage)
+        .filter(|d| d.weekday == today_idx)
+        .min_by(|a, b| {
+            a.avg_percentage
+                .partial_cmp(&b.avg_percentage)
+                .unwrap_or(std::cmp::Ordering::Equal)
         })
-        .filter(|(w, _, _)| *w == today_idx)
-        .min_by(|a, b| a.2.partial_cmp(&b.2).unwrap_or(std::cmp::Ordering::Equal))
-        .map(|(_, h, avg)| (h, avg))
+        .map(|d| (d.hour, d.avg_percentage))
 }
 
 #[tracing::instrument(skip_all, fields(baseline.len = baseline.len(), current.len = current.len()))]
@@ -791,11 +795,13 @@ pub fn weekday_short(weekday: i32) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use anyhow::Result;
+    use anyhow::{Context, Result};
     use approx::assert_relative_eq;
     use chrono::{Datelike, NaiveDate, Timelike};
+    use chrono_tz::Europe::Berlin;
 
     use super::*;
+    use crate::traits::MockClock;
 
     #[test]
     fn test_midnight_utc_basic() -> Result<()> {
@@ -839,7 +845,7 @@ mod tests {
     fn test_calculate_predictions_empty_baseline() {
         let baseline: Vec<HourlyAverage> = vec![];
         let result = calculate_predictions(&baseline);
-        assert!(result.is_empty());
+        assert_eq!(result, Vec::new());
     }
 
     #[test]
@@ -847,7 +853,7 @@ mod tests {
         let baseline: Vec<HourlyAverage> = vec![];
         let schedule = GymSchedule::default();
         let result = calculate_predictions_with_schedule(&baseline, &schedule);
-        assert!(result.is_empty());
+        assert_eq!(result, Vec::new());
     }
 
     #[test]
@@ -880,19 +886,99 @@ mod tests {
         }];
 
         let result = calculate_predictions_with_schedule(&baseline, &schedule);
-        assert!(result.is_empty());
+        assert_eq!(result, Vec::new());
+    }
+
+    /// Monday 2024-06-17 12:00 CEST — fixed so tests never depend on the
+    /// host clock or timezone.
+    fn test_clock() -> MockClock {
+        MockClock::new(
+            Utc.with_ymd_and_hms(2024, 6, 17, 10, 0, 0)
+                .single()
+                .unwrap_or_else(|| unreachable!()),
+        )
+    }
+
+    fn test_today_idx() -> i32 {
+        0
+    }
+
+    #[test]
+    fn test_find_best_time_uses_gym_local_weekday() -> Result<()> {
+        // Sunday 22:30 UTC is already Monday 00:30 in the gym.
+        let clock = MockClock::new(
+            Utc.with_ymd_and_hms(2024, 6, 16, 22, 30, 0)
+                .single()
+                .context("valid time")?,
+        );
+        let data = vec![
+            HourlyAverage {
+                weekday: 0,
+                hour: 10,
+                avg_percentage: 20.0,
+                sample_count: 5,
+            },
+            HourlyAverage {
+                weekday: 6,
+                hour: 10,
+                avg_percentage: 5.0,
+                sample_count: 5,
+            },
+        ];
+
+        let (hour, avg) =
+            find_best_time_today_with_clock(&data, Berlin, &clock).context("expected a slot")?;
+        assert_eq!(hour, 10);
+        assert_relative_eq!(avg, 20.0);
+        Ok(())
+    }
+
+    #[test]
+    fn test_calculate_predictions_uses_gym_local_slot() -> Result<()> {
+        // Monday 08:10 UTC is 10:10 CEST. One hour ahead is local slot
+        // (Mon, 11); the UTC hour 9 slot must not be used.
+        let clock = MockClock::new(
+            Utc.with_ymd_and_hms(2024, 6, 17, 8, 10, 0)
+                .single()
+                .context("valid time")?,
+        );
+        let schedule = GymSchedule::new_for_test(0, 24, 0, 24);
+        let baseline = vec![
+            HourlyAverage {
+                weekday: 0,
+                hour: 11,
+                avg_percentage: 33.0,
+                sample_count: 5,
+            },
+            HourlyAverage {
+                weekday: 0,
+                hour: 9,
+                avg_percentage: 99.0,
+                sample_count: 5,
+            },
+        ];
+
+        let result = calculate_predictions_with_clock(&baseline, &schedule, &clock);
+        let expected_time = Utc
+            .with_ymd_and_hms(2024, 6, 17, 9, 0, 0)
+            .single()
+            .context("valid time")?;
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].0, expected_time);
+        assert_relative_eq!(result[0].1, 33.0);
+        Ok(())
     }
 
     #[test]
     fn test_find_best_time_empty_data() {
         let data: Vec<HourlyAverage> = vec![];
-        let result = find_best_time_today(&data);
+        let result = find_best_time_today_with_clock(&data, Berlin, &test_clock());
         assert!(result.is_none());
     }
 
     #[test]
     fn test_find_best_time_returns_lowest_percentage() -> Result<()> {
-        let today_idx = i32::try_from(Local::now().weekday().num_days_from_monday()).unwrap_or(0);
+        let today_idx = test_today_idx();
 
         let data = vec![
             HourlyAverage {
@@ -915,7 +1001,7 @@ mod tests {
             },
         ];
 
-        let result = find_best_time_today(&data);
+        let result = find_best_time_today_with_clock(&data, Berlin, &test_clock());
         assert!(result.is_some());
         let (_hour, avg) = result.ok_or_else(|| anyhow::anyhow!("Expected to find a best time"))?;
         assert_relative_eq!(avg, 20.0);
@@ -924,7 +1010,7 @@ mod tests {
 
     #[test]
     fn test_find_best_time_filters_by_today() {
-        let today_idx = i32::try_from(Local::now().weekday().num_days_from_monday()).unwrap_or(0);
+        let today_idx = test_today_idx();
         let other_day = (today_idx + 1) % 7;
 
         let data = vec![
@@ -942,7 +1028,7 @@ mod tests {
             },
         ];
 
-        let result = find_best_time_today(&data);
+        let result = find_best_time_today_with_clock(&data, Berlin, &test_clock());
         assert!(result.is_some());
     }
 
@@ -975,7 +1061,8 @@ mod tests {
 
         #[test]
         fn test_predictions_with_mock_clock() {
-            let fixed_time = Utc.with_ymd_and_hms(2024, 6, 17, 10, 0, 0).unwrap();
+            // Monday 10:00 CEST.
+            let fixed_time = Utc.with_ymd_and_hms(2024, 6, 17, 8, 0, 0).unwrap();
             let clock = MockClock::new(fixed_time);
             let schedule = GymSchedule::new_for_test(0, 24, 0, 24);
 
@@ -1003,7 +1090,8 @@ mod tests {
 
         #[test]
         fn test_predictions_clock_advances_correctly() {
-            let clock = MockClock::new(Utc.with_ymd_and_hms(2024, 6, 17, 10, 0, 0).unwrap());
+            // Monday 10:00 CEST.
+            let clock = MockClock::new(Utc.with_ymd_and_hms(2024, 6, 17, 8, 0, 0).unwrap());
             let schedule = GymSchedule::new_for_test(0, 24, 0, 24);
 
             let baseline = vec![
@@ -1066,7 +1154,7 @@ mod tests {
                 },
             ];
 
-            let result = find_best_time_today_with_clock(&data, &clock);
+            let result = find_best_time_today_with_clock(&data, Berlin, &clock);
             assert!(result.is_some());
             let (_, avg) = result.ok_or_else(|| anyhow::anyhow!("Expected to find a best time"))?;
             assert_relative_eq!(avg, 15.0);
@@ -1083,7 +1171,8 @@ mod tests {
 
         #[test]
         fn test_predictions_crossing_sunday_to_monday() {
-            let fixed_time = Utc.with_ymd_and_hms(2024, 6, 16, 23, 0, 0).unwrap();
+            // Sunday 23:00 CEST.
+            let fixed_time = Utc.with_ymd_and_hms(2024, 6, 16, 21, 0, 0).unwrap();
             let clock = MockClock::new(fixed_time);
             let schedule = GymSchedule::new_for_test(0, 24, 0, 24);
 
@@ -1111,7 +1200,8 @@ mod tests {
 
         #[test]
         fn test_predictions_crossing_saturday_to_sunday() {
-            let fixed_time = Utc.with_ymd_and_hms(2024, 6, 15, 22, 0, 0).unwrap();
+            // Saturday 22:00 CEST.
+            let fixed_time = Utc.with_ymd_and_hms(2024, 6, 15, 20, 0, 0).unwrap();
             let clock = MockClock::new(fixed_time);
             let schedule = GymSchedule::new_for_test(0, 24, 0, 24);
 
@@ -1139,7 +1229,8 @@ mod tests {
 
         #[test]
         fn test_predictions_at_year_boundary() {
-            let fixed_time = Utc.with_ymd_and_hms(2024, 12, 31, 23, 0, 0).unwrap();
+            // Tuesday 2024-12-31 23:00 CET.
+            let fixed_time = Utc.with_ymd_and_hms(2024, 12, 31, 22, 0, 0).unwrap();
             let clock = MockClock::new(fixed_time);
             let schedule = GymSchedule::new_for_test(0, 24, 0, 24);
 
@@ -1167,7 +1258,8 @@ mod tests {
 
         #[test]
         fn test_find_best_time_near_midnight_start_of_week() -> Result<()> {
-            let fixed_time = Utc.with_ymd_and_hms(2024, 6, 17, 0, 30, 0).unwrap();
+            // Monday 00:30 CEST.
+            let fixed_time = Utc.with_ymd_and_hms(2024, 6, 16, 22, 30, 0).unwrap();
             let clock = MockClock::new(fixed_time);
 
             let data = vec![
@@ -1185,7 +1277,7 @@ mod tests {
                 },
             ];
 
-            let result = find_best_time_today_with_clock(&data, &clock);
+            let result = find_best_time_today_with_clock(&data, Berlin, &clock);
             assert!(result.is_some());
             let (_, avg) = result.ok_or_else(|| anyhow::anyhow!("Expected to find a best time"))?;
             assert_relative_eq!(avg, 5.0);
@@ -1194,7 +1286,8 @@ mod tests {
 
         #[test]
         fn test_find_best_time_near_midnight_end_of_week() -> Result<()> {
-            let fixed_time = Utc.with_ymd_and_hms(2024, 6, 16, 23, 30, 0).unwrap();
+            // Sunday 23:30 CEST.
+            let fixed_time = Utc.with_ymd_and_hms(2024, 6, 16, 21, 30, 0).unwrap();
             let clock = MockClock::new(fixed_time);
 
             let data = vec![
@@ -1212,7 +1305,7 @@ mod tests {
                 },
             ];
 
-            let result = find_best_time_today_with_clock(&data, &clock);
+            let result = find_best_time_today_with_clock(&data, Berlin, &clock);
             assert!(result.is_some());
             let (_, avg) =
                 result.ok_or_else(|| anyhow::anyhow!("Expected to find a best time today"))?;
@@ -1222,7 +1315,8 @@ mod tests {
 
         #[test]
         fn test_predictions_week_wrapping_with_missing_data() {
-            let fixed_time = Utc.with_ymd_and_hms(2024, 6, 16, 22, 0, 0).unwrap();
+            // Sunday 22:00 CEST.
+            let fixed_time = Utc.with_ymd_and_hms(2024, 6, 16, 20, 0, 0).unwrap();
             let clock = MockClock::new(fixed_time);
             let schedule = GymSchedule::new_for_test(0, 24, 0, 24);
 
@@ -1259,13 +1353,14 @@ mod tests {
                 },
             ];
 
-            let result = find_best_time_today_with_clock(&data, &clock);
+            let result = find_best_time_today_with_clock(&data, Berlin, &clock);
             assert!(result.is_none());
         }
 
         #[test]
         fn test_predictions_all_week_data_available() {
-            let fixed_time = Utc.with_ymd_and_hms(2024, 6, 21, 11, 0, 0).unwrap();
+            // Friday 11:00 CEST.
+            let fixed_time = Utc.with_ymd_and_hms(2024, 6, 21, 9, 0, 0).unwrap();
             let clock = MockClock::new(fixed_time);
             let schedule = GymSchedule::new_for_test(0, 24, 0, 24);
 
@@ -1302,16 +1397,15 @@ mod tests {
                 .collect();
 
             for day in 0..7 {
-                let fixed_time = Utc.with_ymd_and_hms(2024, 6, 17 + day, 9, 0, 0).unwrap();
+                // 09:00 CEST, so the first target is the local 10:00 slot.
+                let fixed_time = Utc.with_ymd_and_hms(2024, 6, 17 + day, 7, 0, 0).unwrap();
                 let clock = MockClock::new(fixed_time);
 
                 let predictions = calculate_predictions_with_clock(&baseline, &schedule, &clock);
 
-                if !predictions.is_empty() {
-                    let expected_weekday = day % 7;
-                    let expected_pct = f64::from(expected_weekday) * 10.0 + 5.0;
-                    assert_relative_eq!(predictions[0].1, expected_pct);
-                }
+                assert!(!predictions.is_empty(), "day {day} should predict 10:00");
+                let expected_pct = f64::from(day) * 10.0 + 5.0;
+                assert_relative_eq!(predictions[0].1, expected_pct);
             }
         }
     }
@@ -1373,7 +1467,7 @@ mod tests {
             fn find_best_time_returns_lowest_if_found(
                 percentages in prop::collection::vec(0.0f64..=100.0, 1..50)
             ) {
-                let today_idx = i32::try_from(Local::now().weekday().num_days_from_monday()).unwrap_or(0);
+                let today_idx = test_today_idx();
 
                 let data: Vec<HourlyAverage> = percentages
                     .iter()
@@ -1386,7 +1480,7 @@ mod tests {
                     })
                     .collect();
 
-                if let Some((_, avg)) = find_best_time_today(&data) {
+                if let Some((_, avg)) = find_best_time_today_with_clock(&data, Berlin, &test_clock()) {
                     prop_assert!(percentages.iter().any(|&p| (p - avg).abs() < 0.001),
                         "Returned avg {} not found in input", avg);
                 }

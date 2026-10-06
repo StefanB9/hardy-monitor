@@ -73,6 +73,7 @@ fn main() -> Result<()> {
 
         let schedule = GymSchedule::new(&config.schedule);
         tracing::info!(
+            timezone = %schedule.timezone(),
             weekday_open = config.schedule.weekday.open_hour,
             weekday_close = config.schedule.weekday.close_hour,
             weekend_open = config.schedule.weekend.open_hour,
@@ -122,10 +123,10 @@ fn main() -> Result<()> {
                 }
             }
 
-            let now_local = chrono::Local::now();
-            if !schedule.is_open(&now_local) {
+            let now = chrono::Utc::now();
+            if !schedule.is_open(&now) {
                 tracing::debug!(
-                    time = %now_local.format("%H:%M"),
+                    gym_time = %now.with_timezone(&schedule.timezone()).format("%H:%M"),
                     "gym is closed, skipping fetch"
                 );
                 continue;

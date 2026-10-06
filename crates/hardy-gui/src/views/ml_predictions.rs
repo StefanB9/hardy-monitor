@@ -1,4 +1,4 @@
-use chrono::{DateTime, Duration as ChronoDuration, Local, Utc};
+use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use hardy_core::db::OccupancyLog;
 use iced::{
     Alignment, Element, Length,
@@ -15,6 +15,8 @@ use crate::{
 
 #[derive(Clone, Copy)]
 pub struct MLPredictionsProps<'a> {
+    /// Gym timezone used for every displayed wall-clock time.
+    pub timezone: hardy_core::Tz,
     pub ml_predictions: &'a [PredictionWithConfidence],
     pub ml_predictions_simple: &'a [(DateTime<Utc>, f64)],
     pub ml_has_model: bool,
@@ -176,7 +178,7 @@ fn build_cancel_button() -> Element<'static, Message> {
 fn build_status_card<'a>(props: &MLPredictionsProps<'a>) -> Element<'a, Message> {
     let trained_str = props.ml_last_trained.map_or_else(
         || "N/A".to_string(),
-        |t| t.with_timezone(&Local).format("%H:%M").to_string(),
+        |t| t.with_timezone(&props.timezone).format("%H:%M").to_string(),
     );
 
     let mut col = column![
@@ -375,6 +377,7 @@ fn build_chart_card<'a>(props: &MLPredictionsProps<'a>) -> Element<'a, Message> 
                 confidence_band: props.ml_predictions,
                 range_start,
                 range_end,
+                timezone: props.timezone,
                 cache: props.chart_cache,
             })
             .width(Length::Fill)
@@ -402,7 +405,7 @@ fn build_highlights_card<'a>(props: &MLPredictionsProps<'a>) -> Element<'a, Mess
             .color(style::TEXT_MUTED)
             .size(13)
             .into(),
-        Some(h) => build_highlights_grid(h),
+        Some(h) => build_highlights_grid(h, props.timezone),
     };
 
     card_container(column![
@@ -416,10 +419,10 @@ fn build_highlights_card<'a>(props: &MLPredictionsProps<'a>) -> Element<'a, Mess
     .into()
 }
 
-fn build_highlights_grid(h: PredictionHighlights) -> Element<'static, Message> {
+fn build_highlights_grid(h: PredictionHighlights, tz: hardy_core::Tz) -> Element<'static, Message> {
     // Top row: Next Hour + Peak
     let next_hour_col = build_highlight_item("Next Hour", h.next_hour, HighlightFormat::WithRange);
-    let peak_col = build_highlight_item("Peak Predicted", h.peak, HighlightFormat::WithTime);
+    let peak_col = build_highlight_item("Peak Predicted", h.peak, HighlightFormat::WithTime(tz));
 
     let top_row = row![
         next_hour_col.width(Length::FillPortion(1)),
@@ -428,8 +431,11 @@ fn build_highlights_grid(h: PredictionHighlights) -> Element<'static, Message> {
     ];
 
     // Bottom row: Quietest + Avg Confidence
-    let quietest_col =
-        build_highlight_item("Quietest Predicted", h.quietest, HighlightFormat::WithTime);
+    let quietest_col = build_highlight_item(
+        "Quietest Predicted",
+        h.quietest,
+        HighlightFormat::WithTime(tz),
+    );
 
     let conf_color = confidence_color(h.avg_confidence);
     let avg_conf_col = column![
@@ -456,7 +462,8 @@ fn build_highlights_grid(h: PredictionHighlights) -> Element<'static, Message> {
 #[derive(Clone, Copy)]
 enum HighlightFormat {
     WithRange,
-    WithTime,
+    /// Show the entry's time in the given (gym) timezone.
+    WithTime(hardy_core::Tz),
 }
 
 fn build_highlight_item(
@@ -498,8 +505,8 @@ fn build_highlight_item(
                     .align_y(Alignment::Center),
                 );
             }
-            HighlightFormat::WithTime => {
-                let time_str = e.time.with_timezone(&Local).format("%H:%M").to_string();
+            HighlightFormat::WithTime(tz) => {
+                let time_str = e.time.with_timezone(&tz).format("%H:%M").to_string();
                 col = col.push(
                     text(format!("at {time_str}"))
                         .size(11)

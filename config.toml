@@ -40,6 +40,12 @@ high_occupancy_percent = 60.0
 [analytics]
 prediction_window_days = 28
 
+[schedule]
+# IANA timezone of the gym. Opening hours, holidays and all local-time
+# statistics use this zone, so results are identical on every host
+# (desktop, Docker/UTC server, ...).
+timezone = "Europe/Berlin"
+
 [schedule.weekday]
 open_hour = 6
 close_hour = 23

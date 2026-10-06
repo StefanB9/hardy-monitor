@@ -1,5 +1,5 @@
-use chrono::{DateTime, Duration as ChronoDuration, Local, Utc};
-use hardy_core::{analytics::midnight_local_as_utc, db::OccupancyLog, schedule::GymSchedule};
+use chrono::{DateTime, Duration as ChronoDuration, Utc};
+use hardy_core::{Tz, analytics::midnight_local_as_utc, db::OccupancyLog, schedule::GymSchedule};
 use iced::{
     Alignment, Border, Color, Element, Length, Theme,
     widget::{
@@ -42,9 +42,11 @@ pub struct DashboardProps<'a> {
 
 #[allow(clippy::too_many_lines)]
 pub fn view(props: DashboardProps<'_>) -> Element<'_, Message> {
+    let now = Utc::now();
+    let tz = props.schedule.timezone();
     let gauge = Canvas::new(GaugeWidget {
         percentage: props.occupancy.unwrap_or(0.0),
-        is_open: props.schedule.is_open(&Local::now()),
+        is_open: props.schedule.is_open(&now),
         low_threshold: props.low_threshold,
         high_threshold: props.high_threshold,
         cache: props.gauge_cache,
@@ -145,9 +147,12 @@ pub fn view(props: DashboardProps<'_>) -> Element<'_, Message> {
 
     let rec_content = if let Some((hour, avg)) = props.best_time_today {
         column![
-            text(format!("Best time on {}s", Local::now().format("%A")))
-                .size(16)
-                .color(style::TEXT_MUTED),
+            text(format!(
+                "Best time on {}s",
+                now.with_timezone(&tz).format("%A")
+            ))
+            .size(16)
+            .color(style::TEXT_MUTED),
             Space::new().height(20),
             text(format!("{hour:02}:00"))
                 .size(36)
@@ -204,14 +209,14 @@ pub fn view(props: DashboardProps<'_>) -> Element<'_, Message> {
     .align_y(Alignment::Center);
 
     let (chart_start, chart_end) = if let Some(days) = props.history_days_preset {
-        let local_today = Local::now().date_naive();
-        let end_aligned = midnight_local_as_utc(local_today + ChronoDuration::days(1));
-        let start_aligned = midnight_local_as_utc(local_today + ChronoDuration::days(1 - days));
+        let local_today = now.with_timezone(&tz).date_naive();
+        let end_aligned = midnight_local_as_utc(local_today + ChronoDuration::days(1), tz);
+        let start_aligned = midnight_local_as_utc(local_today + ChronoDuration::days(1 - days), tz);
         (start_aligned, end_aligned)
     } else {
         match (
-            parse_date(props.history_start_date),
-            parse_date(props.history_end_date),
+            parse_date(props.history_start_date, tz),
+            parse_date(props.history_end_date, tz),
         ) {
             (Some(s), Some(e)) => {
                 if s == e {
@@ -240,6 +245,7 @@ pub fn view(props: DashboardProps<'_>) -> Element<'_, Message> {
         confidence_band,
         range_start: chart_start,
         range_end: chart_end,
+        timezone: tz,
         cache: props.chart_cache,
     })
     .width(Length::Fill)
@@ -304,8 +310,8 @@ pub fn view(props: DashboardProps<'_>) -> Element<'_, Message> {
     .into()
 }
 
-fn parse_date(s: &str) -> Option<DateTime<Utc>> {
+fn parse_date(s: &str, tz: Tz) -> Option<DateTime<Utc>> {
     chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d")
         .ok()
-        .map(midnight_local_as_utc)
+        .map(|d| midnight_local_as_utc(d, tz))
 }

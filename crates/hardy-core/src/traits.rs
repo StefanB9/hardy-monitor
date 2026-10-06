@@ -7,13 +7,16 @@
 use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
-use chrono::{DateTime, Local, Utc};
+use chrono::{DateTime, Utc};
 use futures::future::BoxFuture;
 
+/// Source of the current instant.
+///
+/// Deliberately UTC-only: local wall-clock time must come from the gym's
+/// timezone (`GymSchedule::timezone`), never from the host, so results are
+/// identical wherever the binary runs.
 pub trait Clock: Send + Sync {
     fn now_utc(&self) -> DateTime<Utc>;
-
-    fn now_local(&self) -> DateTime<Local>;
 }
 
 #[derive(Debug, Clone, Default)]
@@ -22,10 +25,6 @@ pub struct SystemClock;
 impl Clock for SystemClock {
     fn now_utc(&self) -> DateTime<Utc> {
         Utc::now()
-    }
-
-    fn now_local(&self) -> DateTime<Local> {
-        Local::now()
     }
 }
 
@@ -63,10 +62,6 @@ impl Clock for MockClock {
             .utc_time
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-    }
-
-    fn now_local(&self) -> DateTime<Local> {
-        self.now_utc().with_timezone(&Local)
     }
 }
 

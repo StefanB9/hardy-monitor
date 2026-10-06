@@ -3,12 +3,15 @@ use std::{
     sync::{LazyLock, Mutex},
 };
 
-use chrono::{DateTime, Datelike, Local, NaiveDate, Timelike};
+use chrono::{DateTime, Datelike, NaiveDate, Timelike, Utc};
+use chrono_tz::Tz;
 
 use crate::config::ScheduleConfig;
 
+/// Opening hours of the gym, evaluated in the gym's own timezone.
 #[derive(Debug, Clone)]
 pub struct GymSchedule {
+    timezone: Tz,
     weekday_open: u32,
     weekday_close: u32,
     weekend_open: u32,
@@ -18,6 +21,7 @@ pub struct GymSchedule {
 impl GymSchedule {
     pub fn new(config: &ScheduleConfig) -> Self {
         Self {
+            timezone: config.timezone,
             weekday_open: config.weekday.open_hour,
             weekday_close: config.weekday.close_hour,
             weekend_open: config.weekend.open_hour,
@@ -25,7 +29,16 @@ impl GymSchedule {
         }
     }
 
-    pub fn is_open(&self, time: &DateTime<Local>) -> bool {
+    /// Timezone in which opening hours, holidays and local aggregates are
+    /// defined.
+    pub fn timezone(&self) -> Tz {
+        self.timezone
+    }
+
+    /// Whether the gym is open at the given instant, judged by the wall clock
+    /// in the gym's timezone.
+    pub fn is_open(&self, time: &DateTime<Utc>) -> bool {
+        let time = time.with_timezone(&self.timezone);
         let date = time.date_naive();
         let hour = time.hour();
         let minute = time.minute();
@@ -42,12 +55,7 @@ impl GymSchedule {
 
 impl Default for GymSchedule {
     fn default() -> Self {
-        Self {
-            weekday_open: 6,
-            weekday_close: 23,
-            weekend_open: 9,
-            weekend_close: 21,
-        }
+        Self::new(&ScheduleConfig::default())
     }
 }
 
@@ -60,6 +68,7 @@ impl GymSchedule {
         weekend_close: u32,
     ) -> Self {
         Self {
+            timezone: chrono_tz::Europe::Berlin,
             weekday_open,
             weekday_close,
             weekend_open,
@@ -154,7 +163,8 @@ fn easter_date(year: i32) -> Option<NaiveDate> {
 #[cfg(test)]
 mod tests {
     use anyhow::Result;
-    use chrono::{NaiveDate, TimeZone};
+    use chrono::{NaiveDate, TimeZone, Utc};
+    use chrono_tz::{Europe::Berlin, Tz};
 
     use super::*;
 
@@ -264,16 +274,88 @@ mod tests {
         Ok(())
     }
 
-    fn make_local_datetime(
+    /// Builds a gym-local (`Europe/Berlin`) wall-clock time and returns the
+    /// UTC instant, which is what callers hand to `is_open`.
+    fn make_local_datetime(year: i32, month: u32, day: u32, hour: u32, min: u32) -> DateTime<Utc> {
+        make_datetime_in(Berlin, year, month, day, hour, min)
+    }
+
+    fn make_datetime_in(
+        tz: Tz,
         year: i32,
         month: u32,
         day: u32,
         hour: u32,
         min: u32,
-    ) -> DateTime<Local> {
-        Local
-            .with_ymd_and_hms(year, month, day, hour, min, 0)
-            .unwrap()
+    ) -> DateTime<Utc> {
+        tz.with_ymd_and_hms(year, month, day, hour, min, 0)
+            .single()
+            .map_or_else(
+                || unreachable!("test time must exist exactly once in {tz}"),
+                |dt| dt.with_timezone(&Utc),
+            )
+    }
+
+    fn make_utc(year: i32, month: u32, day: u32, hour: u32, min: u32) -> DateTime<Utc> {
+        make_datetime_in(Tz::UTC, year, month, day, hour, min)
+    }
+
+    #[test]
+    fn test_schedule_default_timezone_is_europe_berlin() {
+        assert_eq!(GymSchedule::default().timezone(), Berlin);
+    }
+
+    #[test]
+    fn test_schedule_new_uses_configured_timezone() {
+        let config = ScheduleConfig {
+            timezone: chrono_tz::America::New_York,
+            ..ScheduleConfig::default()
+        };
+        assert_eq!(
+            GymSchedule::new(&config).timezone(),
+            chrono_tz::America::New_York
+        );
+    }
+
+    #[test]
+    fn test_is_open_interprets_utc_in_gym_timezone_summer() {
+        let schedule = GymSchedule::default();
+        // CEST = UTC+2: 04:30 UTC is 06:30 in the gym, 03:30 UTC is 05:30.
+        assert!(schedule.is_open(&make_utc(2024, 7, 15, 4, 30)));
+        assert!(!schedule.is_open(&make_utc(2024, 7, 15, 3, 30)));
+        // 21:30 UTC is 23:30 in the gym — closed, although 21:30 itself is
+        // within opening hours.
+        assert!(!schedule.is_open(&make_utc(2024, 7, 15, 21, 30)));
+    }
+
+    #[test]
+    fn test_is_open_interprets_utc_in_gym_timezone_winter() {
+        let schedule = GymSchedule::default();
+        // CET = UTC+1: 05:30 UTC is 06:30 in the gym, 04:30 UTC is 05:30.
+        assert!(schedule.is_open(&make_utc(2024, 1, 15, 5, 30)));
+        assert!(!schedule.is_open(&make_utc(2024, 1, 15, 4, 30)));
+        assert!(!schedule.is_open(&make_utc(2024, 1, 15, 22, 30)));
+    }
+
+    #[test]
+    fn test_is_open_respects_configured_timezone() {
+        let config = ScheduleConfig {
+            timezone: chrono_tz::America::New_York,
+            ..ScheduleConfig::default()
+        };
+        let schedule = GymSchedule::new(&config);
+        // EDT = UTC-4: 10:30 UTC is 06:30 local, 09:30 UTC is 05:30 local.
+        assert!(schedule.is_open(&make_utc(2024, 7, 15, 10, 30)));
+        assert!(!schedule.is_open(&make_utc(2024, 7, 15, 9, 30)));
+    }
+
+    #[test]
+    fn test_is_open_holiday_decided_by_gym_local_date() {
+        let schedule = GymSchedule::default();
+        // 2024-12-24 23:30 UTC is already 2024-12-25 00:30 in the gym; by
+        // 07:30 UTC (08:30 local) the holiday's weekend hours still apply.
+        assert!(!schedule.is_open(&make_utc(2024, 12, 25, 7, 30)));
+        assert!(schedule.is_open(&make_utc(2024, 12, 25, 8, 30)));
     }
 
     #[test]

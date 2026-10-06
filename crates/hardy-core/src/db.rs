@@ -1,7 +1,8 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use chrono::{DateTime, NaiveDate, TimeZone, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
+use chrono_tz::Tz;
 use futures::TryStreamExt;
 use serde::Serialize;
 use sqlx::{FromRow, PgPool};
@@ -136,11 +137,19 @@ impl Database {
         Ok(logs)
     }
 
-    #[tracing::instrument(skip_all, fields(db.operation = "get_averages_range", %start, %end))]
+    /// Average occupancy per (weekday, hour) slot for records in `[start,
+    /// end)`.
+    ///
+    /// Slots are wall-clock time in `tz` (weekday 0 = Monday), computed by
+    /// Postgres with the IANA rules, so a slot means the same local hour on
+    /// both sides of a DST change and does not depend on the session or host
+    /// timezone.
+    #[tracing::instrument(skip_all, fields(db.operation = "get_averages_range", %start, %end, %tz))]
     pub async fn get_averages_range(
         &self,
         start: DateTime<Utc>,
         end: DateTime<Utc>,
+        tz: Tz,
     ) -> Result<Vec<HourlyAverage>> {
         let logs = sqlx::query_as!(
             HourlyAverage,
@@ -152,8 +161,8 @@ impl Database {
                 COUNT(*) as "sample_count!: i64"
             FROM (
                 SELECT
-                    (EXTRACT(ISODOW FROM timestamp)::INTEGER - 1) as weekday,
-                    EXTRACT(HOUR FROM timestamp)::INTEGER as hour,
+                    (EXTRACT(ISODOW FROM timestamp AT TIME ZONE $3)::INTEGER - 1) as weekday,
+                    EXTRACT(HOUR FROM timestamp AT TIME ZONE $3)::INTEGER as hour,
                     percentage
                 FROM occupancy_logs
                 WHERE timestamp >= $1 AND timestamp < $2
@@ -162,7 +171,8 @@ impl Database {
             ORDER BY weekday, hour
             "#,
             start,
-            end
+            end,
+            tz.name()
         )
         .fetch_all(&self.pool)
         .await
@@ -224,27 +234,18 @@ impl Database {
         Ok(output_path)
     }
 
-    #[tracing::instrument(skip_all, fields(db.operation = "get_records_for_date", %date))]
-    pub async fn get_records_for_date(&self, date: NaiveDate) -> Result<Vec<OccupancyLog>> {
-        let local_tz = chrono::Local;
-        let start_of_day = local_tz
-            .from_local_datetime(
-                &date
-                    .and_hms_opt(0, 0, 0)
-                    .context("failed to construct start-of-day time (possible DST gap)")?,
-            )
-            .single()
-            .context("Invalid local datetime for start of day")?
-            .with_timezone(&Utc);
-        let end_of_day = local_tz
-            .from_local_datetime(
-                &date
-                    .and_hms_opt(23, 59, 59)
-                    .context("failed to construct end-of-day time (possible DST gap)")?,
-            )
-            .single()
-            .context("Invalid local datetime for end of day")?
-            .with_timezone(&Utc);
+    /// All records whose timestamp falls on `date` as observed in `tz`.
+    #[tracing::instrument(skip_all, fields(db.operation = "get_records_for_date", %date, %tz))]
+    pub async fn get_records_for_date(&self, date: NaiveDate, tz: Tz) -> Result<Vec<OccupancyLog>> {
+        let start_of_day = crate::analytics::midnight_local_as_utc(date, tz);
+        let next_day = date
+            .succ_opt()
+            .with_context(|| format!("no day after {date}"))?;
+        // SAFETY: Postgres stores microseconds, so the last representable
+        // instant before the next local midnight closes the inclusive range
+        // without dropping sub-second records at 23:59:59.
+        let end_of_day = crate::analytics::midnight_local_as_utc(next_day, tz)
+            - chrono::Duration::microseconds(1);
 
         self.get_history_range(start_of_day, end_of_day).await
     }

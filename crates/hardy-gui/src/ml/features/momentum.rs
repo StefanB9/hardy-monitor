@@ -1,6 +1,7 @@
 use std::collections::VecDeque;
 
-use chrono::{DateTime, Local, Utc};
+use chrono::{DateTime, Utc};
+use hardy_core::Tz;
 
 /// All momentum-derived features extracted in a single pass over `recent_data`.
 pub(super) struct MomentumFeatures {
@@ -21,7 +22,7 @@ pub(super) struct MomentumFeatures {
 #[allow(clippy::cast_precision_loss, clippy::too_many_lines)]
 pub(super) fn extract_all_momentum(
     recent_data: &VecDeque<(DateTime<Utc>, f64)>,
-    local_time: &DateTime<Local>,
+    local_time: &DateTime<Tz>,
 ) -> MomentumFeatures {
     if recent_data.is_empty() {
         return MomentumFeatures {
@@ -50,7 +51,8 @@ pub(super) fn extract_all_momentum(
     let (mut sum_today, mut count_today) = (0.0, 0_usize);
     let (mut sum_yesterday, mut count_yesterday) = (0.0, 0_usize);
 
-    // Volatility: sum of squares for 1h window (two-pass avoided via E[X²]-E[X]²)
+    // Volatility: sum of squares for 1h window (two-pass avoided via
+    // E[X²]-E[X]²)
     let mut sum_sq_1h = 0.0;
 
     // Online linear regression for 3h trend (Welford-style accumulators)
@@ -85,7 +87,7 @@ pub(super) fn extract_all_momentum(
             count_1h += 1;
         }
 
-        let local_ts = timestamp.with_timezone(&Local);
+        let local_ts = timestamp.with_timezone(&local_time.timezone());
         let date = local_ts.date_naive();
         if date == today {
             sum_today += v;
@@ -413,7 +415,8 @@ mod tests {
     #[test]
     fn test_extract_volatility_varying() {
         let now = Utc::now();
-        // Values: 10, 20, 30, 40, 50 — mean=30, pop variance=200, pop std=~14.14
+        // Values: 10, 20, 30, 40, 50 — mean=30, pop variance=200, pop
+        // std=~14.14
         let recent: VecDeque<(DateTime<Utc>, f64)> = vec![
             (now - chrono::Duration::minutes(4), 10.0),
             (now - chrono::Duration::minutes(3), 20.0),

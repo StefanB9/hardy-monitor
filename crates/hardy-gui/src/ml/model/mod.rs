@@ -854,7 +854,7 @@ mod tests {
         );
 
         if let Some(SerializedModelWeights::RandomForest(bytes)) = weights {
-            assert!(!bytes.is_empty());
+            assert_ne!(bytes, Vec::<u8>::new());
         } else {
             anyhow::bail!("Expected RandomForest variant");
         }
