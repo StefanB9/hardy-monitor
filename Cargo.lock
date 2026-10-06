@@ -1660,19 +1660,35 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "approx 0.6.0-rc2",
- "bincode",
  "chrono",
  "dirs",
  "futures",
  "hardy-core",
+ "hardy-ml",
  "iced",
  "image",
- "linfa",
- "linfa-linear",
  "mimalloc",
  "muda",
- "ndarray",
  "notify-rust",
+ "tokio",
+ "tracing",
+ "tracing-appender",
+ "tracing-subscriber",
+ "tray-icon",
+]
+
+[[package]]
+name = "hardy-ml"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "approx 0.6.0-rc2",
+ "bincode",
+ "chrono",
+ "hardy-core",
+ "linfa",
+ "linfa-linear",
+ "ndarray",
  "proptest",
  "rayon",
  "serde",
@@ -1680,9 +1696,6 @@ dependencies = [
  "tempfile",
  "tokio",
  "tracing",
- "tracing-appender",
- "tracing-subscriber",
- "tray-icon",
  "zstd",
 ]
 

@@ -6,7 +6,7 @@ use smartcore::{
 };
 
 use super::TrainingError;
-use crate::ml::features::PredictionFeatures;
+use crate::features::PredictionFeatures;
 
 /// Random Forest regression model backend using smartcore.
 ///

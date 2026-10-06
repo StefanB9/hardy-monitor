@@ -1,11 +1,12 @@
 use chrono::{DateTime, Duration as ChronoDuration, Timelike, Utc};
 use hardy_core::{Tz, analytics::midnight_local_as_utc, db::OccupancyLog};
+use hardy_ml::PredictionWithConfidence;
 use iced::{
     Color, Point, Rectangle, Renderer, Size, Theme, mouse,
     widget::canvas::{self, Action, Frame, LineDash, Path, Stroke, Text},
 };
 
-use crate::{ml::PredictionWithConfidence, style};
+use crate::style;
 
 #[derive(Debug, Clone, Copy)]
 pub enum Interaction {

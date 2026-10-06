@@ -3,7 +3,7 @@ use linfa_linear::LinearRegression;
 use ndarray::{Array1, Array2, Axis};
 
 use super::TrainingError;
-use crate::ml::{evaluation, features::PredictionFeatures};
+use crate::{evaluation, features::PredictionFeatures};
 
 /// Linear regression model backend.
 ///

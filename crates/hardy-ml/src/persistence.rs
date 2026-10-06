@@ -875,7 +875,7 @@ mod tests {
 
     #[test]
     fn test_to_trained_model_lr() -> Result<()> {
-        use crate::ml::features::PredictionFeatures;
+        use crate::features::PredictionFeatures;
 
         let n_features = PredictionFeatures::NUM_FEATURES;
         let coefficients = vec![1.0; n_features];

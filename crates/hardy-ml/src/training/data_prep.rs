@@ -6,7 +6,7 @@ use hardy_core::{
     schedule::GymSchedule,
 };
 
-use crate::ml::{
+use crate::{
     MlConfig,
     features::{FeatureExtractor, PredictionFeatures},
     model::TrainingError,

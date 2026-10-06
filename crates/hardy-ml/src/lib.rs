@@ -1,3 +1,6 @@
+//! Occupancy forecasting: feature extraction, model training, evaluation and
+//! persistence. Shared by the daemon (nightly training) and the GUI.
+
 pub mod confidence;
 pub mod config;
 pub mod evaluation;

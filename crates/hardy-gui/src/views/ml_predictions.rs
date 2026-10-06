@@ -1,16 +1,13 @@
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use hardy_core::db::OccupancyLog;
+use hardy_ml::{PredictionWithConfidence, TrainingInfo};
 use iced::{
     Alignment, Element, Length,
     widget::{Canvas, Space, button, canvas, column, container, row, scrollable, text},
 };
 
 use crate::{
-    app::Message,
-    ml::{PredictionWithConfidence, TrainingInfo},
-    style,
-    views::components::card_container,
-    widgets::history_chart::HistoryChart,
+    app::Message, style, views::components::card_container, widgets::history_chart::HistoryChart,
 };
 
 #[derive(Clone, Copy)]
@@ -673,9 +670,9 @@ mod tests {
     use anyhow::Context;
     use approx::assert_relative_eq;
     use chrono::TimeZone;
+    use hardy_ml::{PredictionMethod, PredictionWithConfidence};
 
     use super::*;
-    use crate::ml::{PredictionMethod, PredictionWithConfidence};
 
     fn make_prediction(ts: DateTime<Utc>, value: f64, confidence: f64) -> PredictionWithConfidence {
         PredictionWithConfidence {

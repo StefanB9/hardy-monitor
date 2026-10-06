@@ -1,7 +1,7 @@
 cargo-features = ["panic-immediate-abort"]
 
 [workspace]
-members = ["crates/hardy-core", "crates/hardy-daemon", "crates/hardy-gui"]
+members = ["crates/hardy-core", "crates/hardy-daemon", "crates/hardy-gui", "crates/hardy-ml"]
 resolver = "3"
 
 [workspace.lints.rust]

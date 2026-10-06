@@ -1,7 +1,7 @@
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 
 use super::cross_validation::{CrossValidationScores, Fold, FoldScores};
-use crate::ml::{
+use crate::{
     evaluation,
     features::PredictionFeatures,
     model::{ModelBuilder, TrainingError},
@@ -228,7 +228,7 @@ mod tests {
     use proptest::prelude::*;
 
     use super::*;
-    use crate::ml::training::cross_validation::TimeSeriesSplit;
+    use crate::training::cross_validation::TimeSeriesSplit;
 
     #[allow(clippy::cast_precision_loss)]
     fn create_test_features(n: usize) -> Vec<PredictionFeatures> {

@@ -334,7 +334,7 @@ mod tests {
     use chrono::{TimeZone, Utc};
 
     use super::*;
-    use crate::ml::config::MlAlgorithm;
+    use crate::config::MlAlgorithm;
 
     #[test]
     fn test_measured_only_drops_repaired_rows() -> Result<()> {

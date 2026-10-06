@@ -20,6 +20,10 @@ use hardy_core::{
     schedule::GymSchedule,
     traits::{Clock, Notifier},
 };
+use hardy_ml::{
+    CvScoresSummary, HyperparametersSummary, MlConfig, OccupancyPredictor, PersistedModel,
+    PredictionWithConfidence, TrainingInfo, TrainingResult,
+};
 use iced::{
     Alignment, Border, Color, Element, Length, Shadow, Subscription, Task, Theme, Vector,
     task::Handle,
@@ -31,10 +35,6 @@ use tray_icon::{TrayIcon, TrayIconEvent};
 
 use crate::{
     alerts::AlertControls,
-    ml::{
-        CvScoresSummary, HyperparametersSummary, MlConfig, OccupancyPredictor, PersistedModel,
-        PredictionWithConfidence, TrainingInfo, TrainingResult,
-    },
     style,
     views::{
         self, DashboardProps, DataRepairProps, InsightsProps, MLPredictionsProps,
@@ -1372,7 +1372,7 @@ impl HardyMonitorApp {
             async move {
                 let join_result = tokio::task::spawn_blocking(move || {
                     tokio::runtime::Handle::current().block_on(async {
-                        crate::ml::training::train_model(
+                        hardy_ml::training::train_model(
                             db.as_ref(),
                             clock.as_ref(),
                             &schedule,
