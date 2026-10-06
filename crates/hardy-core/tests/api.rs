@@ -259,7 +259,7 @@ async fn test_api_client_clone_and_concurrent_use() {
 }
 
 #[tokio::test]
-async fn test_fetch_occupancy_very_large_percentage() {
+async fn test_fetch_occupancy_very_large_percentage_rejected() {
     let mock_server = MockServer::start().await;
 
     let body = r#"{
@@ -283,11 +283,14 @@ async fn test_fetch_occupancy_very_large_percentage() {
     let client = GymApiClient::new(mock_server.uri(), &config).unwrap();
     let response = client.fetch_occupancy().await.unwrap();
 
-    assert_eq!(response.occupancy_percentage().unwrap(), 9999.99);
+    assert!(
+        response.occupancy_percentage().is_err(),
+        "percentages above 100 must be rejected"
+    );
 }
 
 #[tokio::test]
-async fn test_fetch_occupancy_negative_percentage() {
+async fn test_fetch_occupancy_negative_percentage_rejected() {
     let mock_server = MockServer::start().await;
 
     let body = r#"{
@@ -311,7 +314,10 @@ async fn test_fetch_occupancy_negative_percentage() {
     let client = GymApiClient::new(mock_server.uri(), &config).unwrap();
     let response = client.fetch_occupancy().await.unwrap();
 
-    assert_eq!(response.occupancy_percentage().unwrap(), -10.5);
+    assert!(
+        response.occupancy_percentage().is_err(),
+        "negative percentages must be rejected"
+    );
 }
 
 #[tokio::test]

@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "INSERT INTO occupancy_logs (timestamp, percentage) VALUES ($1, $2) RETURNING id",
+  "query": "\n            INSERT INTO occupancy_logs (timestamp, percentage, source)\n            VALUES ($1, $2, $3)\n            ON CONFLICT (timestamp) DO NOTHING\n            RETURNING id\n            ",
   "describe": {
     "columns": [
       {
@@ -18,12 +18,13 @@
     "parameters": {
       "Left": [
         "Timestamptz",
-        "Float8"
+        "Float8",
+        "Text"
       ]
     },
     "nullable": [
       false
     ]
   },
-  "hash": "8b4bc16fdd1dfa3466c67842cad9246ca73803f98583ef4041bf905d0c8d8d93"
+  "hash": "827a8f314b817561262438d0db229b7d07ce51c7331bf19368229362955ba97c"
 }

@@ -5,6 +5,11 @@
 # NOTE: DATABASE_URL is configured via .env file or environment variable, not here.
 # This keeps database credentials out of version control.
 
+[database]
+# Connection pool limits (DATABASE_URL itself comes from .env / environment).
+max_connections = 5
+acquire_timeout_secs = 10
+
 [gym]
 api_url = "https://portal.aidoo-online.de/workload?mandant=202300180_fuerstenfeldbruck&stud_nr=3&jsonResponse=1"
 

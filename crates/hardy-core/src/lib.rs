@@ -4,6 +4,7 @@ pub mod config;
 pub mod db;
 pub mod error;
 pub mod repair;
+pub mod retry;
 pub mod schedule;
 pub mod traits;
 
@@ -18,8 +19,9 @@ pub use analytics::{
 pub use api::{GymApiClient, GymResponse};
 pub use chrono_tz::Tz;
 pub use config::{AppConfig, MlAlgorithm, MlConfig};
-pub use db::{Database, HourlyAverage, OccupancyLog};
+pub use db::{DataSource, Database, HourlyAverage, OccupancyLog};
 pub use error::{AppError, DatabaseError, NetworkErrorKind};
 pub use repair::{DataRepairer, RepairProgress, RepairSummary};
+pub use retry::{RetryPolicy, retry};
 pub use schedule::{GymSchedule, is_bavarian_holiday};
 pub use traits::{Clock, MockClock, MockNotifier, Notifier, SystemClock};

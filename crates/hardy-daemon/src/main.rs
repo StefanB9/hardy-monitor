@@ -4,7 +4,14 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use hardy_core::{api, config::AppConfig, db, schedule::GymSchedule};
+use hardy_core::{
+    AppError, RetryPolicy,
+    api::GymApiClient,
+    config::AppConfig,
+    db::{Database, minute_slot},
+    retry,
+    schedule::GymSchedule,
+};
 use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 
 #[cfg(debug_assertions)]
@@ -54,6 +61,23 @@ fn setup_logging() -> Option<tracing_appender::non_blocking::WorkerGuard> {
 const DRIFT_THRESHOLD_SECS: i64 = 5;
 const ALIGNMENT_CHECK_ITERATIONS: u64 = 60;
 
+/// Per-tick retries: three attempts, waiting 2 s then 4 s.
+const FETCH_ATTEMPTS: u32 = 3;
+const FETCH_RETRY_INITIAL: Duration = Duration::from_secs(2);
+const FETCH_RETRY_MAX: Duration = Duration::from_secs(4);
+
+/// Startup connection retries continue until shutdown, backing off to 60 s.
+const CONNECT_RETRY_INITIAL: Duration = Duration::from_secs(1);
+const CONNECT_RETRY_MAX: Duration = Duration::from_secs(60);
+
+/// Head-room left in each fetch interval so a slow cycle never overlaps the
+/// next tick.
+const CYCLE_HEADROOM: Duration = Duration::from_secs(5);
+
+/// How long an in-flight fetch may continue after a shutdown request; stays
+/// below Docker's default 10 s stop timeout.
+const SHUTDOWN_GRACE: Duration = Duration::from_secs(5);
+
 fn main() -> Result<()> {
     let _log_guard = setup_logging();
 
@@ -61,87 +85,226 @@ fn main() -> Result<()> {
 
     let rt = tokio::runtime::Runtime::new().context("Failed to create tokio runtime")?;
 
-    rt.block_on(async {
-        tracing::info!("Starting Hardy Monitor in daemon mode");
+    rt.block_on(run(&config))
+}
 
-        tracing::info!("Connecting to database...");
-        let database = db::Database::new(&config.database.url).await?;
-        tracing::info!("Database connected successfully");
+async fn run(config: &AppConfig) -> Result<()> {
+    tracing::info!("Starting Hardy Monitor in daemon mode");
 
-        let api_client = api::GymApiClient::new(config.gym.api_url.clone(), &config.network)?;
-        tracing::info!("API client initialized");
+    let shutdown = shutdown_signal();
+    tokio::pin!(shutdown);
 
-        let schedule = GymSchedule::new(&config.schedule);
-        tracing::info!(
-            timezone = %schedule.timezone(),
-            weekday_open = config.schedule.weekday.open_hour,
-            weekday_close = config.schedule.weekday.close_hour,
-            weekend_open = config.schedule.weekend.open_hour,
-            weekend_close = config.schedule.weekend.close_hour,
-            "schedule configured"
-        );
+    let connect_policy = RetryPolicy::new(u32::MAX, CONNECT_RETRY_INITIAL, CONNECT_RETRY_MAX)?;
+    tracing::info!("Connecting to database...");
+    let database = tokio::select! {
+        result = retry(&connect_policy, "connect_database", || async {
+            Database::connect(&config.database)
+                .await
+                .map_err(|e| AppError::from_anyhow_sqlx(&e, "connect_database"))
+        }) => result.context("Failed to connect to database")?,
+        () = &mut shutdown => {
+            tracing::info!("shutdown requested before the database connected");
+            return Ok(());
+        }
+    };
+    tracing::info!("Database connected successfully");
 
-        wait_for_minute_alignment().await;
+    let api_client = GymApiClient::new(config.gym.api_url.clone(), &config.network)?;
+    let schedule = GymSchedule::new(&config.schedule);
+    tracing::info!(
+        timezone = %schedule.timezone(),
+        weekday_open = config.schedule.weekday.open_hour,
+        weekday_close = config.schedule.weekday.close_hour,
+        weekend_open = config.schedule.weekend.open_hour,
+        weekend_close = config.schedule.weekend.close_hour,
+        "schedule configured"
+    );
 
-        let interval_secs = config.refresh.data_fetch_interval_secs;
-        tracing::info!(interval_secs, "starting fetch loop");
+    let fetch_policy = RetryPolicy::new(FETCH_ATTEMPTS, FETCH_RETRY_INITIAL, FETCH_RETRY_MAX)?;
+    let worker = Worker {
+        api_client: &api_client,
+        database: &database,
+        schedule: &schedule,
+        fetch_policy,
+        cycle_budget: Duration::from_secs(config.refresh.data_fetch_interval_secs)
+            .saturating_sub(CYCLE_HEADROOM)
+            .max(Duration::from_secs(1)),
+    };
 
-        let mut interval = tokio::time::interval(Duration::from_secs(interval_secs));
-        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    fetch_loop(
+        &worker,
+        config.refresh.data_fetch_interval_secs,
+        shutdown.as_mut(),
+    )
+    .await;
 
-        let mut iteration_count: u64 = 0;
+    tracing::info!("closing database pool");
+    database.close().await;
+    tracing::info!("daemon stopped");
+    Ok(())
+}
 
-        loop {
-            interval.tick().await;
-            iteration_count += 1;
+/// Everything a fetch cycle needs, borrowed for the daemon's lifetime.
+struct Worker<'a> {
+    api_client: &'a GymApiClient,
+    database: &'a Database,
+    schedule: &'a GymSchedule,
+    fetch_policy: RetryPolicy,
+    cycle_budget: Duration,
+}
 
-            if iteration_count.is_multiple_of(ALIGNMENT_CHECK_ITERATIONS) {
-                let now = chrono::Utc::now();
-                let seconds_into_minute = now.timestamp() % 60;
-                let drift = if seconds_into_minute <= 30 {
-                    seconds_into_minute
-                } else {
-                    60 - seconds_into_minute
-                };
+/// Runs fetch cycles aligned to full minutes until `shutdown` completes.
+async fn fetch_loop(
+    worker: &Worker<'_>,
+    interval_secs: u64,
+    mut shutdown: std::pin::Pin<&mut impl std::future::Future<Output = ()>>,
+) {
+    tokio::select! {
+        () = wait_for_minute_alignment() => {}
+        () = &mut shutdown => {
+            tracing::info!("shutdown requested during startup alignment");
+            return;
+        }
+    }
+    tracing::info!(interval_secs, "starting fetch loop");
 
-                if drift > DRIFT_THRESHOLD_SECS {
-                    tracing::warn!(
-                        drift_secs = drift,
-                        threshold_secs = DRIFT_THRESHOLD_SECS,
-                        "timer drift detected, re-syncing"
-                    );
-                    wait_for_minute_alignment().await;
-                    interval = tokio::time::interval(Duration::from_secs(interval_secs));
-                    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-                    interval.tick().await;
-                } else {
-                    tracing::debug!(
-                        drift_secs = drift,
-                        threshold_secs = DRIFT_THRESHOLD_SECS,
-                        "alignment check passed"
-                    );
-                }
-            }
+    let mut interval = new_interval(interval_secs);
+    let mut iteration_count: u64 = 0;
 
-            let now = chrono::Utc::now();
-            if !schedule.is_open(&now) {
-                tracing::debug!(
-                    gym_time = %now.with_timezone(&schedule.timezone()).format("%H:%M"),
-                    "gym is closed, skipping fetch"
-                );
-                continue;
-            }
-
-            match fetch_and_store(&api_client, &database).await {
-                Ok(percentage) => {
-                    tracing::info!(occupancy_pct = percentage, "recorded occupancy");
-                }
-                Err(e) => {
-                    tracing::error!(error = %e, "failed to fetch/store data");
-                }
+    loop {
+        tokio::select! {
+            _ = interval.tick() => {}
+            () = &mut shutdown => {
+                tracing::info!("shutdown requested");
+                return;
             }
         }
-    })
+        iteration_count += 1;
+
+        if iteration_count.is_multiple_of(ALIGNMENT_CHECK_ITERATIONS) && realign_if_drifted().await
+        {
+            interval = new_interval(interval_secs);
+            interval.tick().await;
+        }
+
+        // The slot is fixed when the tick fires, so retries store the reading
+        // in the minute it belongs to.
+        let slot = minute_slot(chrono::Utc::now());
+        if !worker.schedule.is_open(&slot) {
+            tracing::debug!(
+                gym_time = %slot.with_timezone(&worker.schedule.timezone()).format("%H:%M"),
+                "gym is closed, skipping fetch"
+            );
+            continue;
+        }
+
+        let cycle = fetch_and_store(worker, slot);
+        tokio::pin!(cycle);
+        let first = tokio::select! {
+            result = tokio::time::timeout(worker.cycle_budget, &mut cycle) => Some(result),
+            () = &mut shutdown => None,
+        };
+        let (outcome, stop) = if let Some(result) = first {
+            (result, false)
+        } else {
+            tracing::info!("shutdown requested, finishing in-flight fetch");
+            // SAFETY: if the grace period also expires, the cycle is dropped.
+            // A single INSERT commits atomically or not at all and the minute
+            // slot is unique, so no partial or duplicate row can result.
+            (tokio::time::timeout(SHUTDOWN_GRACE, &mut cycle).await, true)
+        };
+        log_outcome(slot, outcome);
+        if stop {
+            return;
+        }
+    }
+}
+
+fn new_interval(interval_secs: u64) -> tokio::time::Interval {
+    let mut interval = tokio::time::interval(Duration::from_secs(interval_secs));
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    interval
+}
+
+/// Re-aligns to the next full minute if the timer drifted; returns whether it
+/// did.
+async fn realign_if_drifted() -> bool {
+    let seconds_into_minute = chrono::Utc::now().timestamp() % 60;
+    let drift = if seconds_into_minute <= 30 {
+        seconds_into_minute
+    } else {
+        60 - seconds_into_minute
+    };
+
+    if drift > DRIFT_THRESHOLD_SECS {
+        tracing::warn!(
+            drift_secs = drift,
+            threshold_secs = DRIFT_THRESHOLD_SECS,
+            "timer drift detected, re-syncing"
+        );
+        wait_for_minute_alignment().await;
+        true
+    } else {
+        tracing::debug!(
+            drift_secs = drift,
+            threshold_secs = DRIFT_THRESHOLD_SECS,
+            "alignment check passed"
+        );
+        false
+    }
+}
+
+fn log_outcome(
+    slot: chrono::DateTime<chrono::Utc>,
+    outcome: Result<Result<Stored, AppError>, tokio::time::error::Elapsed>,
+) {
+    match outcome {
+        Ok(Ok(Stored::Inserted(percentage))) => {
+            tracing::info!(%slot, occupancy_pct = percentage, "recorded occupancy");
+        }
+        Ok(Ok(Stored::SlotTaken(percentage))) => {
+            tracing::debug!(%slot, occupancy_pct = percentage, "minute slot already filled");
+        }
+        Ok(Err(AppError::Validation(reason))) => {
+            tracing::warn!(%slot, %reason, "rejected invalid reading");
+        }
+        Ok(Err(e)) => {
+            tracing::error!(%slot, error = %e, "failed to fetch/store data");
+        }
+        Err(_) => {
+            tracing::error!(%slot, "fetch cycle timed out");
+        }
+    }
+}
+
+/// Completes on Ctrl-C or, on Unix, SIGTERM (sent by `docker stop`).
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        if let Err(e) = tokio::signal::ctrl_c().await {
+            tracing::error!(error = %e, "failed to listen for Ctrl-C");
+            std::future::pending::<()>().await;
+        }
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(mut signal) => {
+                signal.recv().await;
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "failed to listen for SIGTERM");
+                std::future::pending::<()>().await;
+            }
+        }
+    };
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        () = ctrl_c => tracing::info!("received Ctrl-C"),
+        () = terminate => tracing::info!("received SIGTERM"),
+    }
 }
 
 async fn wait_for_minute_alignment() {
@@ -157,11 +320,35 @@ async fn wait_for_minute_alignment() {
     }
 }
 
-#[tracing::instrument(skip_all)]
-async fn fetch_and_store(api_client: &api::GymApiClient, database: &db::Database) -> Result<f64> {
-    let response = api_client.fetch_occupancy().await?;
+/// What happened to a fetched reading.
+enum Stored {
+    Inserted(f64),
+    SlotTaken(f64),
+}
+
+#[tracing::instrument(skip_all, fields(%slot))]
+async fn fetch_and_store(
+    worker: &Worker<'_>,
+    slot: chrono::DateTime<chrono::Utc>,
+) -> Result<Stored, AppError> {
+    let response = retry(&worker.fetch_policy, "fetch_occupancy", || {
+        worker.api_client.fetch_occupancy()
+    })
+    .await?;
     let percentage = response.occupancy_percentage()?;
-    let timestamp = chrono::Utc::now();
-    database.insert_record(timestamp, percentage).await?;
-    Ok(percentage)
+
+    let inserted = retry(&worker.fetch_policy, "insert_record", || async {
+        worker
+            .database
+            .insert_record(slot, percentage)
+            .await
+            .map_err(|e| AppError::from_anyhow_sqlx(&e, "insert_record"))
+    })
+    .await?;
+
+    Ok(if inserted.is_some() {
+        Stored::Inserted(percentage)
+    } else {
+        Stored::SlotTaken(percentage)
+    })
 }

@@ -97,6 +97,31 @@ pub struct AppConfig {
 #[derive(Debug, Deserialize, Clone)]
 pub struct DatabaseConfig {
     pub url: String,
+    /// Upper bound on pooled connections; keep small for hosted free tiers.
+    #[serde(default = "default_max_connections")]
+    pub max_connections: u32,
+    /// How long to wait for a free pooled connection before failing.
+    #[serde(default = "default_acquire_timeout_secs")]
+    pub acquire_timeout_secs: u64,
+}
+
+impl DatabaseConfig {
+    /// Config for `url` with default pool settings.
+    pub fn with_url(url: impl Into<String>) -> Self {
+        Self {
+            url: url.into(),
+            max_connections: default_max_connections(),
+            acquire_timeout_secs: default_acquire_timeout_secs(),
+        }
+    }
+}
+
+fn default_max_connections() -> u32 {
+    5
+}
+
+fn default_acquire_timeout_secs() -> u64 {
+    10
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -243,6 +268,17 @@ pub struct ScheduleHours {
 
 impl AppConfig {
     pub fn validate(&self) -> Result<(), AppError> {
+        if self.database.max_connections == 0 {
+            return Err(AppError::Config(
+                "database.max_connections must be > 0".to_string(),
+            ));
+        }
+        if self.database.acquire_timeout_secs == 0 {
+            return Err(AppError::Config(
+                "database.acquire_timeout_secs must be > 0".to_string(),
+            ));
+        }
+
         for (label, hours) in [
             ("schedule.weekday", self.schedule.weekday),
             ("schedule.weekend", self.schedule.weekend),
@@ -329,6 +365,8 @@ impl AppConfig {
 
         let builder = Config::builder()
             .set_default("database.url", database_url)?
+            .set_default("database.max_connections", default_max_connections())?
+            .set_default("database.acquire_timeout_secs", default_acquire_timeout_secs())?
             .set_default("gym.api_url", "https://portal.aidoo-online.de/workload?mandant=202300180_fuerstenfeldbruck&stud_nr=3&jsonResponse=1")?
             .set_default("network.request_timeout_secs", 30)?
             .set_default("network.connect_timeout_secs", 10)?
@@ -559,6 +597,8 @@ mod tests {
         AppConfig {
             database: DatabaseConfig {
                 url: "postgres://localhost/test".to_string(),
+                max_connections: 5,
+                acquire_timeout_secs: 10,
             },
             gym: GymConfig {
                 api_url: "https://example.com".to_string(),
@@ -799,6 +839,28 @@ mod tests {
             data_dir.is_some(),
             "dirs::data_dir() should be available on this platform"
         );
+    }
+
+    #[test]
+    fn test_database_config_pool_defaults() -> Result<()> {
+        let config: DatabaseConfig = toml::from_str(r#"url = "postgres://x/y""#)?;
+        assert_eq!(config.max_connections, 5);
+        assert_eq!(config.acquire_timeout_secs, 10);
+        Ok(())
+    }
+
+    #[test]
+    fn test_validate_rejects_zero_max_connections() {
+        let mut config = valid_app_config();
+        config.database.max_connections = 0;
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_rejects_zero_acquire_timeout() {
+        let mut config = valid_app_config();
+        config.database.acquire_timeout_secs = 0;
+        assert!(config.validate().is_err());
     }
 
     #[test]

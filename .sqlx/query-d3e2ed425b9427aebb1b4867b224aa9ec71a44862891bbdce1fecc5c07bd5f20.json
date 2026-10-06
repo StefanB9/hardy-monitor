@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            UPDATE occupancy_logs AS o\n            SET percentage = u.p,\n                source = CASE WHEN o.source = 'measured' THEN $3 ELSE o.source END\n            FROM UNNEST($1::int8[], $2::float8[]) AS u(id, p)\n            WHERE o.id = u.id\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8Array",
+        "Float8Array",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "d3e2ed425b9427aebb1b4867b224aa9ec71a44862891bbdce1fecc5c07bd5f20"
+}

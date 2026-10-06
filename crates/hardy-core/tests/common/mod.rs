@@ -33,40 +33,17 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use hardy_core::db::Database;
 use sqlx::{AssertSqlSafe, PgPool};
 
+#[allow(dead_code)]
 pub struct TestDatabase {
     db_name: String,
     admin_pool: PgPool,
     pub db: Database,
 }
 
+#[allow(dead_code)]
 impl TestDatabase {
     pub async fn new() -> Self {
-        dotenvy::dotenv().ok();
-
-        let database_url = std::env::var("DATABASE_URL").unwrap_or_else(|_| {
-            panic!("DATABASE_URL must be set to run database integration tests")
-        });
-
-        let admin_url = replace_db_name(&database_url, "postgres");
-        let db_name = unique_db_name();
-
-        let admin_pool = PgPool::connect(&admin_url).await.unwrap_or_else(|e| {
-            panic!(
-                "failed to connect to `PostgreSQL` admin database for test setup — ensure \
-                 DATABASE_URL is reachable and the user has CREATEDB privilege: {e}"
-            )
-        });
-
-        let mut conn = admin_pool
-            .acquire()
-            .await
-            .unwrap_or_else(|e| panic!("failed to acquire admin connection for test setup: {e}"));
-        sqlx::raw_sql(AssertSqlSafe(format!(r#"CREATE DATABASE "{db_name}""#)))
-            .execute(&mut *conn)
-            .await
-            .unwrap_or_else(|e| panic!("failed to create test database '{db_name}': {e}"));
-
-        let test_url = replace_db_name(&database_url, &db_name);
+        let (db_name, admin_pool, test_url) = create_empty_database().await;
 
         let db = Database::new(&test_url).await.unwrap_or_else(|e| {
             panic!("failed to connect to test database '{db_name}' or run migrations: {e}")
@@ -81,24 +58,83 @@ impl TestDatabase {
 
     pub async fn cleanup(self) {
         self.db.close().await;
+        drop_database(&self.admin_pool, &self.db_name).await;
+    }
+}
 
-        let drop_result = match self.admin_pool.acquire().await {
-            Ok(mut conn) => sqlx::raw_sql(AssertSqlSafe(format!(
-                r#"DROP DATABASE IF EXISTS "{}" WITH (FORCE)"#,
-                self.db_name
-            )))
-            .execute(&mut *conn)
+/// An isolated database with **no** migrations applied, for testing the
+/// migrations themselves.
+#[allow(dead_code)]
+pub struct RawTestDatabase {
+    db_name: String,
+    admin_pool: PgPool,
+    pub pool: PgPool,
+}
+
+#[allow(dead_code)]
+impl RawTestDatabase {
+    pub async fn new() -> Self {
+        let (db_name, admin_pool, test_url) = create_empty_database().await;
+        let pool = PgPool::connect(&test_url)
             .await
-            .err(),
-            Err(e) => Some(e),
-        };
-        if let Some(e) = drop_result {
-            tracing::warn!(
-                error = %e,
-                db_name = %self.db_name,
-                "failed to drop test database"
-            );
+            .unwrap_or_else(|e| panic!("failed to connect to test database '{db_name}': {e}"));
+        Self {
+            db_name,
+            admin_pool,
+            pool,
         }
+    }
+
+    pub async fn cleanup(self) {
+        self.pool.close().await;
+        drop_database(&self.admin_pool, &self.db_name).await;
+    }
+}
+
+/// Creates a uniquely named empty database; returns its name, an admin pool
+/// and its connection URL.
+async fn create_empty_database() -> (String, PgPool, String) {
+    dotenvy::dotenv().ok();
+
+    let database_url = std::env::var("DATABASE_URL")
+        .unwrap_or_else(|_| panic!("DATABASE_URL must be set to run database integration tests"));
+
+    let admin_url = replace_db_name(&database_url, "postgres");
+    let db_name = unique_db_name();
+
+    let admin_pool = PgPool::connect(&admin_url).await.unwrap_or_else(|e| {
+        panic!(
+            "failed to connect to `PostgreSQL` admin database for test setup — ensure \
+             DATABASE_URL is reachable and the user has CREATEDB privilege: {e}"
+        )
+    });
+
+    let mut conn = admin_pool
+        .acquire()
+        .await
+        .unwrap_or_else(|e| panic!("failed to acquire admin connection for test setup: {e}"));
+    sqlx::raw_sql(AssertSqlSafe(format!(r#"CREATE DATABASE "{db_name}""#)))
+        .execute(&mut *conn)
+        .await
+        .unwrap_or_else(|e| panic!("failed to create test database '{db_name}': {e}"));
+    drop(conn);
+
+    let test_url = replace_db_name(&database_url, &db_name);
+    (db_name, admin_pool, test_url)
+}
+
+async fn drop_database(admin_pool: &PgPool, db_name: &str) {
+    let drop_result = match admin_pool.acquire().await {
+        Ok(mut conn) => sqlx::raw_sql(AssertSqlSafe(format!(
+            r#"DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)"#
+        )))
+        .execute(&mut *conn)
+        .await
+        .err(),
+        Err(e) => Some(e),
+    };
+    if let Some(e) = drop_result {
+        tracing::warn!(error = %e, %db_name, "failed to drop test database");
     }
 }
 
