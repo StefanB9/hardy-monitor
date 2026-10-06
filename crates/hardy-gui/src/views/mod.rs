@@ -1,12 +1,13 @@
-pub mod components;
-pub mod dashboard;
-pub mod data_repair;
-pub mod insights;
-pub mod ml_predictions;
-pub mod weekly_pattern;
+//! The four views and the components they share.
 
-pub use dashboard::DashboardProps;
-pub use data_repair::DataRepairProps;
+pub mod components;
+pub mod insights;
+pub mod model_data;
+pub mod now;
+pub mod opening;
+pub mod week;
+
 pub use insights::InsightsProps;
-pub use ml_predictions::MLPredictionsProps;
-pub use weekly_pattern::WeeklyPatternProps;
+pub use model_data::ModelDataProps;
+pub use now::NowProps;
+pub use week::WeekProps;

@@ -765,3 +765,30 @@ async fn test_ml_state_request_during_training_survives() {
 
     tdb.cleanup().await;
 }
+
+#[tokio::test]
+async fn test_get_averages_range_ignores_repair_boundary_rows() {
+    let tdb = common::TestDatabase::new().await;
+
+    // Saturday 21:00 CEST closing: a measured 40% at 20:30, plus repair's
+    // artificial 0% boundary entry at 21:00 and an interpolated value.
+    tdb.db
+        .insert_record(utc(2024, 6, 15, 18, 30), 40.0)
+        .await
+        .unwrap();
+    tdb.db
+        .insert_with_source(utc(2024, 6, 15, 19, 0), 0.0, DataSource::Boundary)
+        .await
+        .unwrap();
+    tdb.db
+        .insert_with_source(utc(2024, 6, 15, 18, 31), 20.0, DataSource::Interpolated)
+        .await
+        .unwrap();
+
+    let buckets =
+        bucket_averages(&tdb, utc(2024, 6, 15, 0, 0), utc(2024, 6, 16, 0, 0), Berlin).await;
+    // Only the 20:00 slot remains (measured + interpolated); no 21:00 slot.
+    assert_eq!(buckets, vec![(5, 20, 30.0)]);
+
+    tdb.cleanup().await;
+}

@@ -1,5 +1,9 @@
-pub mod date_picker;
-pub mod helpers;
+//! Shared building blocks for all views, styled from [`crate::style`].
 
-pub use date_picker::styled_input;
-pub use helpers::{card_container, preset_btn, primary_btn_style, secondary_btn_style};
+mod controls;
+mod surfaces;
+
+pub use controls::{
+    date_input, ghost_button, primary_button, secondary_button, segmented, small_button, switch,
+};
+pub use surfaces::{badge, card, card_with_actions, empty_state, legend_item, scroll, stat};

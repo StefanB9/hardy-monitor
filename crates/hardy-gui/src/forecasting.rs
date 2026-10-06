@@ -8,7 +8,9 @@ use hardy_core::{
     GymSchedule,
     db::{MlState, ModelInfo, OccupancyLog},
 };
-use hardy_ml::{History, ModelArtifact, PredictionWithConfidence, baseline_forecast};
+use hardy_ml::{History, ModelArtifact, PredictionWithConfidence, SlotProfile, baseline_forecast};
+
+use crate::quiet_window::{QuietWindow, next_quiet_window};
 
 /// History kept for features ("same time last week") and the baseline.
 pub(crate) const HISTORY_DAYS: i64 = 8;
@@ -52,17 +54,22 @@ pub(crate) struct Forecasting {
     model: Option<LoadedModel>,
     state: MlState,
     max_hours_ahead: u32,
+    /// No quiet window is suggested this soon after opening.
+    opening_grace: TimeDelta,
     forecasts: Vec<PredictionWithConfidence>,
+    quiet_window: Option<QuietWindow>,
 }
 
 impl Forecasting {
-    pub(crate) fn new(max_hours_ahead: u32) -> Self {
+    pub(crate) fn new(max_hours_ahead: u32, opening_grace: TimeDelta) -> Self {
         Self {
             history: History::default(),
             model: None,
             state: MlState::default(),
             max_hours_ahead,
+            opening_grace,
             forecasts: Vec::new(),
+            quiet_window: None,
         }
     }
 
@@ -112,17 +119,29 @@ impl Forecasting {
         self.state = state;
     }
 
-    /// Recomputes forecasts: from the model if one is loaded, else from
-    /// slot averages.
+    /// Recomputes forecasts (from the model if one is loaded, else from
+    /// slot averages) and the next quiet window.
     pub(crate) fn refresh(&mut self, schedule: &GymSchedule, now: DateTime<Utc>) {
         self.forecasts = match &self.model {
             Some(model) => model.artifact.forecast(&self.history, schedule, now),
             None => baseline_forecast(&self.history, schedule, now, self.max_hours_ahead),
         };
+        let profile = SlotProfile::from_history(self.history.view(), schedule.timezone());
+        self.quiet_window =
+            next_quiet_window(now, schedule, &self.forecasts, &profile, self.opening_grace);
     }
 
     pub(crate) fn forecasts(&self) -> &[PredictionWithConfidence] {
         &self.forecasts
+    }
+
+    pub(crate) fn quiet_window(&self) -> Option<&QuietWindow> {
+        self.quiet_window.as_ref()
+    }
+
+    /// The measured reading closest to `t`, within five minutes.
+    pub(crate) fn reading_near(&self, t: DateTime<Utc>) -> Option<f64> {
+        self.history.view().value_near(t, TimeDelta::minutes(5))
     }
 
     pub(crate) fn has_model(&self) -> bool {
@@ -184,7 +203,7 @@ mod tests {
 
     #[test]
     fn test_history_fetch_is_incremental() {
-        let mut f = Forecasting::new(6);
+        let mut f = Forecasting::new(6, TimeDelta::hours(1));
         let now = at(100);
         assert_eq!(
             f.history_fetch_start(now),
@@ -204,14 +223,14 @@ mod tests {
 
     #[test]
     fn test_is_new_model() {
-        let f = Forecasting::new(6);
+        let f = Forecasting::new(6, TimeDelta::hours(1));
         assert!(!f.is_new_model(None));
         assert!(f.is_new_model(Some(&info(1))));
     }
 
     #[test]
     fn test_retrain_pending_until_attempted() {
-        let mut f = Forecasting::new(6);
+        let mut f = Forecasting::new(6, TimeDelta::hours(1));
         assert!(!f.retrain_pending());
         f.set_state(MlState {
             retrain_requested_at: Some(at(10)),
@@ -244,7 +263,7 @@ mod tests {
 
     #[test]
     fn test_refresh_without_model_uses_baseline() {
-        let mut f = Forecasting::new(6);
+        let mut f = Forecasting::new(6, TimeDelta::hours(1));
         f.add_history(&[log(1, 0, DataSource::Measured)]);
         f.refresh(&GymSchedule::default(), at(0));
         assert!(
@@ -253,5 +272,17 @@ mod tests {
                 .all(|p| p.method == hardy_ml::PredictionMethod::HistoricalAverage)
         );
         assert!(!f.has_model());
+        assert!(f.quiet_window().is_some());
+    }
+
+    #[test]
+    fn test_reading_near_finds_close_measurement_only() {
+        let mut f = Forecasting::new(6, TimeDelta::hours(1));
+        f.add_history(&[
+            log(1, 0, DataSource::Measured),
+            log(2, 30, DataSource::Measured),
+        ]);
+        assert_eq!(f.reading_near(at(2)), Some(30.0));
+        assert_eq!(f.reading_near(at(15)), None);
     }
 }

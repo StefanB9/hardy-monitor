@@ -1,36 +1,45 @@
+//! Live occupancy as a 270° arc on the occupancy colour scale.
+
 use iced::{
-    Color, Rectangle, Renderer, Theme, Vector, mouse,
-    widget::canvas::{self, Path, Stroke, Text},
+    Point, Radians, Rectangle, Renderer, Theme, Vector,
+    alignment::{Horizontal, Vertical},
+    mouse,
+    widget::canvas::{self, LineCap, Path, Stroke, Text, path::Arc},
 };
 
-use crate::style;
+use crate::style::{self, OccupancyLevel};
 
+/// Where the arc starts (bottom left), clockwise from +x in degrees.
+const START_DEG: f32 = 135.0;
+const SWEEP_DEG: f32 = 270.0;
+const ARC_WIDTH: f32 = 14.0;
+
+/// Gauge for the current reading; `percentage` is `None` while closed or
+/// before the first reading.
 pub struct GaugeWidget<'a> {
-    pub percentage: f64,
+    pub percentage: Option<f64>,
     pub is_open: bool,
     pub low_threshold: f64,
     pub high_threshold: f64,
     pub cache: &'a canvas::Cache,
 }
 
-pub fn get_status_text(percentage: f64, low_threshold: f64, high_threshold: f64) -> &'static str {
-    if percentage < low_threshold {
-        "Not Busy"
-    } else if percentage < high_threshold {
-        "Moderate"
-    } else {
-        "Crowded"
-    }
+/// Angle on the arc for `percentage`, in radians.
+fn angle_for(percentage: f64) -> Radians {
+    #[allow(clippy::cast_possible_truncation)]
+    let fraction = (percentage.clamp(0.0, 100.0) / 100.0) as f32;
+    Radians((START_DEG + SWEEP_DEG * fraction).to_radians())
 }
 
-pub fn get_status_color(percentage: f64, low_threshold: f64, high_threshold: f64) -> Color {
-    if percentage < low_threshold {
-        style::ACCENT_GREEN
-    } else if percentage < high_threshold {
-        style::ACCENT_ORANGE
-    } else {
-        style::ACCENT_RED
-    }
+fn arc(center: Point, radius: f32, from: f64, to: f64) -> Path {
+    Path::new(|b| {
+        b.arc(Arc {
+            center,
+            radius,
+            start_angle: angle_for(from),
+            end_angle: angle_for(to),
+        });
+    })
 }
 
 impl<Message> canvas::Program<Message> for GaugeWidget<'_> {
@@ -45,80 +54,65 @@ impl<Message> canvas::Program<Message> for GaugeWidget<'_> {
         _: mouse::Cursor,
     ) -> Vec<canvas::Geometry> {
         let geo = self.cache.draw(renderer, bounds.size(), |frame| {
-            let center = frame.center();
-            let radius = bounds.width.min(bounds.height) / 2.0 - 10.0;
-            let width = 15.0;
-
-            let bg_arc = Path::new(|b| {
-                b.arc(canvas::path::Arc {
-                    center,
-                    radius,
-                    start_angle: 0.0.into(),
-                    end_angle: 360.0f32.to_radians().into(),
-                });
-            });
-            frame.stroke(
-                &bg_arc,
+            let center = frame.center() + Vector::new(0.0, 8.0);
+            let radius = bounds.width.min(bounds.height) / 2.0 - ARC_WIDTH;
+            let stroke = |color| {
                 Stroke::default()
-                    .with_color(style::STROKE_DIM)
-                    .with_width(width),
-            );
+                    .with_color(color)
+                    .with_width(ARC_WIDTH)
+                    .with_line_cap(LineCap::Round)
+            };
+            frame.stroke(&arc(center, radius, 0.0, 100.0), stroke(style::BG_ELEVATED));
 
-            if self.is_open {
-                let color =
-                    get_status_color(self.percentage, self.low_threshold, self.high_threshold);
-
-                #[allow(clippy::cast_possible_truncation)]
-                let angle = (self.percentage / 100.0 * 360.0).max(1.0) as f32;
-                let fg_arc = Path::new(|b| {
-                    b.arc(canvas::path::Arc {
-                        center,
-                        radius,
-                        start_angle: (-90.0f32).to_radians().into(),
-                        end_angle: (angle - 90.0).to_radians().into(),
-                    });
-                });
+            // Category boundaries as small notches outside the track.
+            for threshold in [self.low_threshold, self.high_threshold] {
+                let Radians(a) = angle_for(threshold);
+                let dir = Vector::new(a.cos(), a.sin());
+                let inner = center + dir * (radius + ARC_WIDTH / 2.0 + 3.0);
+                let outer = center + dir * (radius + ARC_WIDTH / 2.0 + 9.0);
                 frame.stroke(
-                    &fg_arc,
+                    &Path::line(inner, outer),
                     Stroke::default()
-                        .with_color(color)
-                        .with_width(width)
-                        .with_line_cap(canvas::LineCap::Round),
+                        .with_color(style::TEXT_TERTIARY)
+                        .with_width(2.0),
                 );
-
-                frame.fill_text(Text {
-                    content: format!("{:.0}%", self.percentage),
-                    position: center + Vector::new(0.0, -5.0),
-                    color: style::TEXT_BRIGHT,
-                    size: 48.0.into(),
-                    align_x: iced::alignment::Horizontal::Center.into(),
-                    align_y: iced::alignment::Vertical::Center,
-                    ..Default::default()
-                });
-
-                let status_text =
-                    get_status_text(self.percentage, self.low_threshold, self.high_threshold);
-
-                frame.fill_text(Text {
-                    content: status_text.into(),
-                    position: center + Vector::new(0.0, 30.0),
-                    color,
-                    size: 14.0.into(),
-                    align_x: iced::alignment::Horizontal::Center.into(),
-                    align_y: iced::alignment::Vertical::Center,
-                    ..Default::default()
-                });
-            } else {
-                frame.fill_text(Text {
-                    content: "CLOSED".to_string(),
-                    position: center,
-                    color: style::TEXT_MUTED,
-                    size: 32.0.into(),
-                    align_x: iced::alignment::Horizontal::Center.into(),
-                    align_y: iced::alignment::Vertical::Center,
-                    ..Default::default()
-                });
             }
+
+            let (value, caption, caption_color) = match (self.is_open, self.percentage) {
+                (true, Some(p)) => {
+                    let color = style::occupancy_color(p, self.low_threshold, self.high_threshold);
+                    frame.stroke(&arc(center, radius, 0.0, p.max(0.5)), stroke(color));
+                    let level =
+                        OccupancyLevel::from_percentage(p, self.low_threshold, self.high_threshold);
+                    (format!("{p:.0}%"), level.label(), level.color())
+                }
+                (true, None) => ("–".to_string(), "Waiting for data", style::TEXT_TERTIARY),
+                (false, _) => ("Closed".to_string(), "", style::TEXT_SECONDARY),
+            };
+
+            let value_size = if self.is_open {
+                style::TEXT_DISPLAY
+            } else {
+                style::TEXT_TITLE
+            };
+            frame.fill_text(Text {
+                content: value,
+                position: center - Vector::new(0.0, 6.0),
+                color: style::TEXT_PRIMARY,
+                size: value_size.into(),
+                align_x: Horizontal::Center.into(),
+                align_y: Vertical::Center,
+                ..Default::default()
+            });
+            frame.fill_text(Text {
+                content: caption.to_string(),
+                position: center + Vector::new(0.0, value_size / 2.0 + 6.0),
+                color: caption_color,
+                size: style::TEXT_BODY.into(),
+                align_x: Horizontal::Center.into(),
+                align_y: Vertical::Center,
+                ..Default::default()
+            });
         });
         vec![geo]
     }
@@ -126,101 +120,23 @@ impl<Message> canvas::Program<Message> for GaugeWidget<'_> {
 
 #[cfg(test)]
 mod tests {
-    use anyhow::Result;
+    use approx::assert_relative_eq;
 
     use super::*;
 
-    const LOW: f64 = 40.0;
-    const HIGH: f64 = 75.0;
-
     #[test]
-    fn test_status_text_below_low_threshold() {
-        assert_eq!(get_status_text(0.0, LOW, HIGH), "Not Busy");
-        assert_eq!(get_status_text(20.0, LOW, HIGH), "Not Busy");
-        assert_eq!(get_status_text(39.9, LOW, HIGH), "Not Busy");
+    fn test_angle_for_spans_the_arc() {
+        assert_relative_eq!(angle_for(0.0).0, START_DEG.to_radians());
+        assert_relative_eq!(
+            angle_for(50.0).0,
+            (START_DEG + SWEEP_DEG / 2.0).to_radians()
+        );
+        assert_relative_eq!(angle_for(100.0).0, (START_DEG + SWEEP_DEG).to_radians());
     }
 
     #[test]
-    fn test_status_text_at_low_threshold() {
-        assert_eq!(get_status_text(40.0, LOW, HIGH), "Moderate");
-    }
-
-    #[test]
-    fn test_status_text_between_thresholds() {
-        assert_eq!(get_status_text(40.1, LOW, HIGH), "Moderate");
-        assert_eq!(get_status_text(50.0, LOW, HIGH), "Moderate");
-        assert_eq!(get_status_text(74.9, LOW, HIGH), "Moderate");
-    }
-
-    #[test]
-    fn test_status_text_at_high_threshold() {
-        assert_eq!(get_status_text(75.0, LOW, HIGH), "Crowded");
-    }
-
-    #[test]
-    fn test_status_text_above_high_threshold() {
-        assert_eq!(get_status_text(75.1, LOW, HIGH), "Crowded");
-        assert_eq!(get_status_text(90.0, LOW, HIGH), "Crowded");
-        assert_eq!(get_status_text(100.0, LOW, HIGH), "Crowded");
-    }
-
-    #[test]
-    fn test_status_text_with_custom_thresholds() {
-        assert_eq!(get_status_text(25.0, 30.0, 60.0), "Not Busy");
-        assert_eq!(get_status_text(45.0, 30.0, 60.0), "Moderate");
-        assert_eq!(get_status_text(80.0, 30.0, 60.0), "Crowded");
-    }
-
-    #[test]
-    fn test_color_below_low_threshold() {
-        let color = get_status_color(20.0, LOW, HIGH);
-        assert_eq!(color, style::ACCENT_GREEN);
-    }
-
-    #[test]
-    fn test_color_at_low_threshold() {
-        let color = get_status_color(40.0, LOW, HIGH);
-        assert_eq!(color, style::ACCENT_ORANGE);
-    }
-
-    #[test]
-    fn test_color_between_thresholds() {
-        let color = get_status_color(50.0, LOW, HIGH);
-        assert_eq!(color, style::ACCENT_ORANGE);
-    }
-
-    #[test]
-    fn test_color_at_high_threshold() {
-        let color = get_status_color(75.0, LOW, HIGH);
-        assert_eq!(color, style::ACCENT_RED);
-    }
-
-    #[test]
-    fn test_color_above_high_threshold() {
-        let color = get_status_color(100.0, LOW, HIGH);
-        assert_eq!(color, style::ACCENT_RED);
-    }
-
-    #[test]
-    fn test_color_consistency_with_status_text() -> Result<()> {
-        let test_values = [0.0, 20.0, 39.9, 40.0, 50.0, 74.9, 75.0, 100.0];
-
-        for &val in &test_values {
-            let text = get_status_text(val, LOW, HIGH);
-            let color = get_status_color(val, LOW, HIGH);
-
-            match text {
-                "Not Busy" => assert_eq!(color, style::ACCENT_GREEN),
-                "Moderate" => assert_eq!(color, style::ACCENT_ORANGE),
-                "Crowded" => assert_eq!(color, style::ACCENT_RED),
-                _ => {
-                    return Err(anyhow::anyhow!(
-                        "Unexpected status text: '{text}' for value {val}"
-                    ));
-                }
-            }
-        }
-
-        Ok(())
+    fn test_angle_for_clamps_out_of_range_values() {
+        assert_relative_eq!(angle_for(-5.0).0, angle_for(0.0).0);
+        assert_relative_eq!(angle_for(140.0).0, angle_for(100.0).0);
     }
 }

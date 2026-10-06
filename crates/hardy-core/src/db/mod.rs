@@ -225,7 +225,9 @@ impl Database {
     /// Average occupancy per (weekday, hour) slot for records in `[start,
     /// end)`.
     ///
-    /// Slots are wall-clock time in `tz` (weekday 0 = Monday), computed by
+    /// Data Repair's artificial opening/closing (`boundary`) rows are
+    /// excluded. Slots are wall-clock time in `tz` (weekday 0 = Monday),
+    /// computed by
     /// Postgres with the IANA rules, so a slot means the same local hour on
     /// both sides of a DST change and does not depend on the session or host
     /// timezone.
@@ -251,6 +253,8 @@ impl Database {
                     percentage
                 FROM occupancy_logs
                 WHERE timestamp >= $1 AND timestamp < $2
+                  -- Repair's 0% opening/closing entries are not observations.
+                  AND source <> 'boundary'
             ) AS subquery
             GROUP BY weekday, hour
             ORDER BY weekday, hour

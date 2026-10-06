@@ -41,11 +41,15 @@ hardy-monitor/                         (workspace root)
 │       └── src/
 │           ├── main.rs                Entry point, tray icon, iced runner
 │           ├── lib.rs                 Module declarations
-│           ├── app.rs                 HardyMonitorApp, Message, update/view/subscription
-│           ├── style.rs               Iced theme customization
+│           ├── app/                   HardyMonitorApp, Message (mod), update, view (shell), tasks (DB loads)
+│           ├── style.rs               Design tokens: colours, occupancy scale, type/spacing scales
+│           ├── forecasting.rs         Forecast state: history, loaded model, forecasts, quiet window
+│           ├── quiet_window.rs        Next quiet hour (forecast, else slot averages)
+│           ├── time_range.rs          ChartRange / AnalyticsRange and the instants they cover
+│           ├── alerts.rs              Alert controls (shared settings, desktop popups)
 │           ├── notifier.rs            SystemNotifier, CombinedNotifier
-│           ├── widgets/               Custom widgets (gauge, heatmap, charts)
-│           └── views/                 Dashboard, weekly, insights, ML predictions, repair
+│           ├── widgets/               Canvas widgets: gauge, heatmap (WeekGrid), history_chart
+│           └── views/                 now/, week, insights, model_data; components/ (cards, buttons, …)
 ```
 
 **Dependency boundary:** core ← ml ← daemon / gui. Core has zero GUI or ML dependencies; `hardy-ml` depends only on core plus ML crates; both binaries depend on core and ml. GUI-only crates stay in `hardy-gui`. Never reverse.
