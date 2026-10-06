@@ -16,7 +16,7 @@ use futures::{StreamExt, stream};
 use tokio::sync::mpsc;
 
 use crate::{
-    db::{Database, OccupancyLog},
+    db::{DataSource, Database, OccupancyLog},
     schedule::GymSchedule,
 };
 
@@ -202,7 +202,9 @@ impl DataRepairer {
         }
         if !ids_to_zero.is_empty() {
             let updates: Vec<(i64, f64)> = ids_to_zero.iter().map(|&id| (id, 0.0)).collect();
-            self.db.batch_update_percentage(&updates).await?;
+            self.db
+                .batch_update_percentage(&updates, DataSource::Boundary)
+                .await?;
         }
 
         let deleted_count =
@@ -216,8 +218,6 @@ impl DataRepairer {
         if records.len() < 3 {
             return Ok(0);
         }
-
-        let mut modified_count = 0;
 
         let mut values: Vec<f64> = records.iter().map(|r| r.percentage).collect();
         let mut changed = vec![false; values.len()];
@@ -253,14 +253,20 @@ impl DataRepairer {
             prev_original = curr_original;
         }
 
-        for i in 0..records.len() {
-            if changed[i] {
-                self.db.update_percentage(records[i].id, values[i]).await?;
-                modified_count += 1;
-            }
+        let updates: Vec<(i64, f64)> = records
+            .iter()
+            .zip(&values)
+            .zip(&changed)
+            .filter(|(_, is_changed)| **is_changed)
+            .map(|((record, &value), _)| (record.id, value))
+            .collect();
+        if !updates.is_empty() {
+            self.db
+                .batch_update_percentage(&updates, DataSource::Smoothed)
+                .await?;
         }
 
-        Ok(modified_count)
+        u32::try_from(updates.len()).context("too many records smoothed")
     }
 
     async fn fill_gaps(
@@ -329,7 +335,9 @@ impl DataRepairer {
         }
 
         if !inserts.is_empty() {
-            self.db.batch_insert(inserts).await?;
+            self.db
+                .batch_insert(&inserts, DataSource::Interpolated)
+                .await?;
         }
 
         Ok(filled_count)
@@ -359,7 +367,9 @@ impl DataRepairer {
         if exists {
             Ok(false)
         } else {
-            self.db.insert_at_timestamp(utc_dt, 0.0).await?;
+            self.db
+                .insert_with_source(utc_dt, 0.0, DataSource::Boundary)
+                .await?;
             Ok(true)
         }
     }
@@ -388,7 +398,9 @@ impl DataRepairer {
         if exists {
             Ok(false)
         } else {
-            self.db.insert_at_timestamp(utc_dt, 0.0).await?;
+            self.db
+                .insert_with_source(utc_dt, 0.0, DataSource::Boundary)
+                .await?;
             Ok(true)
         }
     }

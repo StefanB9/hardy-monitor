@@ -4,7 +4,7 @@ pub(crate) mod hyperparameter;
 
 use chrono::Duration;
 use hardy_core::{
-    db::{Database, HourlyAverage, OccupancyLog},
+    db::{DataSource, Database, HourlyAverage, OccupancyLog},
     schedule::GymSchedule,
     traits::Clock,
 };
@@ -261,10 +261,11 @@ pub async fn train_model(
     let end = clock.now_utc();
     let start = end - Duration::days(config.training_window_days);
 
-    let logs = db
-        .get_history_range(start, end)
-        .await
-        .map_err(|e| TrainingError::FitError(format!("Database error: {e}")))?;
+    let logs = measured_only(
+        db.get_history_range(start, end)
+            .await
+            .map_err(|e| TrainingError::FitError(format!("Database error: {e}")))?,
+    );
 
     if logs.len() < config.min_samples_for_training {
         return Err(TrainingError::InsufficientData(logs.len()));
@@ -281,6 +282,13 @@ pub async fn train_model(
     tokio::task::spawn_blocking(move || train_model_sync(&logs, &baseline, &schedule, &config))
         .await
         .map_err(|e| TrainingError::FitError(format!("Task join error: {e}")))?
+}
+
+/// Keeps only rows the gym actually reported. Values written or altered by
+/// Data Repair are estimates and would teach the model its own heuristics.
+fn measured_only(mut logs: Vec<OccupancyLog>) -> Vec<OccupancyLog> {
+    logs.retain(|log| log.source == DataSource::Measured);
+    logs
 }
 
 pub fn train_model_sync(
@@ -328,6 +336,34 @@ mod tests {
     use super::*;
     use crate::ml::config::MlAlgorithm;
 
+    #[test]
+    fn test_measured_only_drops_repaired_rows() -> Result<()> {
+        let ts = Utc
+            .with_ymd_and_hms(2024, 6, 17, 10, 0, 0)
+            .single()
+            .ok_or_else(|| anyhow::anyhow!("valid time"))?;
+        let logs: Vec<OccupancyLog> = [
+            DataSource::Measured,
+            DataSource::Interpolated,
+            DataSource::Boundary,
+            DataSource::Smoothed,
+            DataSource::Measured,
+        ]
+        .into_iter()
+        .zip(1..)
+        .map(|(source, id)| OccupancyLog {
+            id,
+            timestamp: ts + Duration::minutes(id),
+            percentage: 50.0,
+            source,
+        })
+        .collect();
+
+        let ids: Vec<i64> = measured_only(logs).iter().map(|l| l.id).collect();
+        assert_eq!(ids, vec![1, 5]);
+        Ok(())
+    }
+
     fn create_test_logs(n: i32) -> Vec<OccupancyLog> {
         let base_time = Utc.with_ymd_and_hms(2024, 6, 1, 6, 0, 0).unwrap();
 
@@ -342,6 +378,7 @@ mod tests {
                     id: i64::from(i),
                     timestamp,
                     percentage: percentage.min(95.0),
+                    source: DataSource::Measured,
                 }
             })
             .collect()

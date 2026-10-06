@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n            SELECT\n                id as \"id!\",\n                timestamp as \"timestamp!\",\n                percentage as \"percentage!\"\n            FROM occupancy_logs\n            WHERE timestamp >= $1 AND timestamp <= $2\n            ORDER BY timestamp ASC\n            ",
+  "query": "\n            SELECT\n                id as \"id!\",\n                timestamp as \"timestamp!\",\n                percentage as \"percentage!\",\n                source as \"source!: DataSource\"\n            FROM occupancy_logs\n            WHERE timestamp >= $1 AND timestamp <= $2\n            ORDER BY timestamp ASC\n            ",
   "describe": {
     "columns": [
       {
@@ -35,6 +35,17 @@
             "name": "percentage"
           }
         }
+      },
+      {
+        "ordinal": 3,
+        "name": "source!: DataSource",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "occupancy_logs",
+            "name": "source"
+          }
+        }
       }
     ],
     "parameters": {
@@ -46,8 +57,9 @@
     "nullable": [
       false,
       false,
+      false,
       false
     ]
   },
-  "hash": "a2a548038d183912ba47d955c7e536204e104835f7fcfef50d809f1cdf85e979"
+  "hash": "b046873e2a062f8d658ca7e838cfc0e3331daff368432b9ce74fef5a5404d348"
 }

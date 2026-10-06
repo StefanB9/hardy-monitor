@@ -12,7 +12,7 @@ mod common;
 
 use chrono::{DateTime, Duration, NaiveDate, TimeZone, Utc};
 use chrono_tz::{America::New_York, Europe::Berlin};
-use hardy_core::MockClock;
+use hardy_core::{MockClock, db::DataSource};
 
 #[tokio::test]
 async fn test_database_creation() {
@@ -28,7 +28,8 @@ async fn test_insert_record() {
         .db
         .insert_record(Utc::now(), 50.0)
         .await
-        .expect("insert should succeed");
+        .expect("insert should succeed")
+        .expect("empty slot should be filled");
 
     assert!(id > 0, "INSERT should return a positive ID");
 
@@ -66,7 +67,8 @@ async fn test_insert_and_get_history() {
 async fn test_get_history_range() {
     let tdb = common::TestDatabase::new().await;
 
-    let now = Utc::now();
+    // Minute-aligned so stored slots equal the inserted instants.
+    let now = utc(2024, 6, 15, 12, 0);
     for i in 0..6i64 {
         tdb.db
             .insert_record(now - Duration::hours(i), 50.0)
@@ -269,7 +271,7 @@ async fn test_concurrent_inserts() {
     let mut handles = Vec::new();
     for i in 0..10i64 {
         let db_clone = tdb.db.clone();
-        let ts = now - Duration::seconds(i);
+        let ts = now - Duration::minutes(i);
         handles.push(tokio::spawn(async move {
             db_clone.insert_record(ts, i as f64).await
         }));
@@ -292,6 +294,206 @@ async fn test_concurrent_inserts() {
         history.len(),
         10,
         "all 10 concurrent inserts should be present in a clean DB"
+    );
+
+    tdb.cleanup().await;
+}
+
+#[tokio::test]
+async fn test_insert_record_stores_minute_slot_as_measured() {
+    let tdb = common::TestDatabase::new().await;
+
+    tdb.db
+        .insert_record(
+            utc(2024, 6, 15, 10, 30) + Duration::milliseconds(42_700),
+            50.0,
+        )
+        .await
+        .expect("insert should succeed");
+
+    let rows = tdb
+        .db
+        .get_history_range(utc(2024, 6, 15, 10, 0), utc(2024, 6, 15, 11, 0))
+        .await
+        .expect("query should succeed");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].timestamp, utc(2024, 6, 15, 10, 30));
+    assert_eq!(rows[0].source, DataSource::Measured);
+
+    tdb.cleanup().await;
+}
+
+#[tokio::test]
+async fn test_insert_record_same_minute_keeps_first() {
+    let tdb = common::TestDatabase::new().await;
+
+    let first = tdb
+        .db
+        .insert_record(utc(2024, 6, 15, 10, 30), 40.0)
+        .await
+        .expect("insert should succeed");
+    let second = tdb
+        .db
+        .insert_record(utc(2024, 6, 15, 10, 30) + Duration::seconds(20), 60.0)
+        .await
+        .expect("duplicate slot is not an error");
+
+    assert!(first.is_some());
+    assert_eq!(second, None, "occupied slot should be skipped");
+    let rows = tdb
+        .db
+        .get_history_range(utc(2024, 6, 15, 10, 0), utc(2024, 6, 15, 11, 0))
+        .await
+        .expect("query should succeed");
+    let values: Vec<f64> = rows.iter().map(|r| r.percentage).collect();
+    assert_eq!(values, vec![40.0]);
+
+    tdb.cleanup().await;
+}
+
+#[tokio::test]
+async fn test_concurrent_inserts_same_minute_store_one_row() {
+    let tdb = common::TestDatabase::new().await;
+
+    let slot = utc(2024, 6, 15, 10, 30);
+    let mut handles = Vec::new();
+    for i in 0..10i64 {
+        let db_clone = tdb.db.clone();
+        handles.push(tokio::spawn(async move {
+            db_clone
+                .insert_record(slot + Duration::seconds(i), i as f64)
+                .await
+        }));
+    }
+    let mut stored = 0;
+    for handle in handles {
+        if handle
+            .await
+            .expect("task should not panic")
+            .expect("insert should not error")
+            .is_some()
+        {
+            stored += 1;
+        }
+    }
+
+    assert_eq!(stored, 1, "exactly one concurrent insert wins the slot");
+
+    tdb.cleanup().await;
+}
+
+#[tokio::test]
+async fn test_insert_record_rejects_out_of_range_percentage() {
+    let tdb = common::TestDatabase::new().await;
+
+    for pct in [-0.1, 100.1, f64::NAN] {
+        let result = tdb.db.insert_record(utc(2024, 6, 15, 10, 30), pct).await;
+        assert!(result.is_err(), "{pct} should be rejected");
+    }
+
+    tdb.cleanup().await;
+}
+
+#[tokio::test]
+async fn test_batch_insert_skips_occupied_slots_and_sets_source() {
+    let tdb = common::TestDatabase::new().await;
+
+    tdb.db
+        .insert_record(utc(2024, 6, 15, 10, 1), 30.0)
+        .await
+        .expect("insert should succeed");
+
+    let inserted = tdb
+        .db
+        .batch_insert(
+            &[
+                (utc(2024, 6, 15, 10, 0), 10.0),
+                (utc(2024, 6, 15, 10, 1), 99.0),
+                (utc(2024, 6, 15, 10, 2), 20.0),
+            ],
+            DataSource::Interpolated,
+        )
+        .await
+        .expect("batch insert should succeed");
+    assert_eq!(inserted, 2);
+
+    let rows = tdb
+        .db
+        .get_history_range(utc(2024, 6, 15, 10, 0), utc(2024, 6, 15, 11, 0))
+        .await
+        .expect("query should succeed");
+    let summary: Vec<(f64, DataSource)> = rows.iter().map(|r| (r.percentage, r.source)).collect();
+    assert_eq!(
+        summary,
+        vec![
+            (10.0, DataSource::Interpolated),
+            (30.0, DataSource::Measured),
+            (20.0, DataSource::Interpolated),
+        ]
+    );
+
+    tdb.cleanup().await;
+}
+
+#[tokio::test]
+async fn test_insert_with_source_records_provenance() {
+    let tdb = common::TestDatabase::new().await;
+
+    tdb.db
+        .insert_with_source(utc(2024, 6, 15, 6, 0), 0.0, DataSource::Boundary)
+        .await
+        .expect("insert should succeed")
+        .expect("slot should be free");
+
+    let rows = tdb
+        .db
+        .get_history_range(utc(2024, 6, 15, 0, 0), utc(2024, 6, 16, 0, 0))
+        .await
+        .expect("query should succeed");
+    assert_eq!(rows[0].source, DataSource::Boundary);
+
+    tdb.cleanup().await;
+}
+
+#[tokio::test]
+async fn test_batch_update_percentage_relabels_only_measured_rows() {
+    let tdb = common::TestDatabase::new().await;
+
+    let measured = tdb
+        .db
+        .insert_record(utc(2024, 6, 15, 10, 0), 30.0)
+        .await
+        .expect("insert should succeed")
+        .expect("slot should be free");
+    let interpolated = tdb
+        .db
+        .insert_with_source(utc(2024, 6, 15, 10, 1), 35.0, DataSource::Interpolated)
+        .await
+        .expect("insert should succeed")
+        .expect("slot should be free");
+
+    let updated = tdb
+        .db
+        .batch_update_percentage(
+            &[(measured, 31.0), (interpolated, 36.0)],
+            DataSource::Smoothed,
+        )
+        .await
+        .expect("update should succeed");
+    assert_eq!(updated, 2);
+
+    let rows = tdb
+        .db
+        .get_history_range(utc(2024, 6, 15, 10, 0), utc(2024, 6, 15, 11, 0))
+        .await
+        .expect("query should succeed");
+    let summary: Vec<(f64, DataSource)> = rows.iter().map(|r| (r.percentage, r.source)).collect();
+    assert_eq!(
+        summary,
+        vec![
+            (31.0, DataSource::Smoothed),
+            (36.0, DataSource::Interpolated)
+        ]
     );
 
     tdb.cleanup().await;
@@ -381,6 +583,10 @@ async fn test_csv_export_with_mock_clock() {
     assert!(
         lines[0].contains("percentage"),
         "header should contain 'percentage'"
+    );
+    assert!(
+        lines[0].contains("source"),
+        "header should contain 'source'"
     );
 
     tdb.cleanup().await;

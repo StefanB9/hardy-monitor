@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO occupancy_logs (timestamp, percentage, source)\n            SELECT t, p, $3\n            FROM UNNEST($1::timestamptz[], $2::float8[]) AS u(t, p)\n            ON CONFLICT (timestamp) DO NOTHING\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "TimestamptzArray",
+        "Float8Array",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "f35b707544005eaf2afc600328cc613681a34ca65d85d8a58843c01e6edf4029"
+}

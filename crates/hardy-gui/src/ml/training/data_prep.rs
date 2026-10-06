@@ -130,6 +130,7 @@ mod tests {
     use anyhow::Result;
     use approx::assert_relative_eq;
     use chrono::{Duration, TimeZone};
+    use hardy_core::db::DataSource;
 
     use super::*;
 
@@ -147,6 +148,7 @@ mod tests {
                     id: i64::from(i),
                     timestamp,
                     percentage: percentage.min(95.0),
+                    source: DataSource::Measured,
                 }
             })
             .collect()
@@ -219,6 +221,7 @@ mod tests {
                 id: i64::from(i),
                 timestamp: base_time + Duration::minutes(i64::from(i)),
                 percentage: 50.0,
+                source: DataSource::Measured,
             })
             .collect();
 
@@ -248,6 +251,7 @@ mod tests {
             id: 1,
             timestamp: base_time,
             percentage: 50.0,
+            source: DataSource::Measured,
         }];
         assert_eq!(estimate_samples_per_hour(&logs), 1);
     }
@@ -266,6 +270,7 @@ mod tests {
                     id: i64::from(i),
                     timestamp,
                     percentage: 30.0 + f64::from(i % 24),
+                    source: DataSource::Measured,
                 }
             })
             .collect();
@@ -290,6 +295,7 @@ mod tests {
                 id: i64::from(i),
                 timestamp: base_time + Duration::hours(i64::from(i)),
                 percentage: 50.0,
+                source: DataSource::Measured,
             })
             .collect();
 

@@ -104,6 +104,24 @@ impl AppError {
         AppError::Database(db_error)
     }
 
+    /// Classifies a context-wrapped database error. Searches the error chain
+    /// for the underlying `sqlx::Error` so transient failures (I/O, pool
+    /// timeouts) stay retryable; anything else becomes a non-retryable
+    /// `QueryFailed`.
+    pub fn from_anyhow_sqlx(err: &anyhow::Error, context: &str) -> Self {
+        err.chain()
+            .find_map(|cause| cause.downcast_ref::<sqlx::Error>())
+            .map_or_else(
+                || {
+                    AppError::Database(DatabaseError::QueryFailed {
+                        query_context: context.to_string(),
+                        message: format!("{err:#}"),
+                    })
+                },
+                |sqlx_err| Self::from_sqlx(sqlx_err, context),
+            )
+    }
+
     #[allow(clippy::needless_pass_by_value)]
     pub fn from_anyhow_db(err: anyhow::Error, context: &str) -> Self {
         AppError::Database(DatabaseError::QueryFailed {
@@ -182,6 +200,35 @@ mod tests {
     fn test_not_retryable_validation() {
         let err = AppError::Validation("invalid date".to_string());
         assert!(!err.is_retryable());
+    }
+
+    #[test]
+    fn test_from_anyhow_sqlx_keeps_pool_timeout_retryable() {
+        let err = anyhow::Error::new(sqlx::Error::PoolTimedOut).context("Failed to insert");
+        let app = AppError::from_anyhow_sqlx(&err, "insert");
+        assert!(matches!(
+            app,
+            AppError::Database(DatabaseError::PoolExhausted)
+        ));
+        assert!(app.is_retryable());
+    }
+
+    #[test]
+    fn test_from_anyhow_sqlx_io_error_is_retryable() {
+        let io = std::io::Error::new(std::io::ErrorKind::ConnectionRefused, "refused");
+        let err = anyhow::Error::new(sqlx::Error::Io(io)).context("Failed to connect");
+        assert!(AppError::from_anyhow_sqlx(&err, "connect").is_retryable());
+    }
+
+    #[test]
+    fn test_from_anyhow_sqlx_non_sqlx_error_is_not_retryable() {
+        let err = anyhow::anyhow!("something else");
+        let app = AppError::from_anyhow_sqlx(&err, "insert");
+        assert!(matches!(
+            app,
+            AppError::Database(DatabaseError::QueryFailed { .. })
+        ));
+        assert!(!app.is_retryable());
     }
 
     #[test]

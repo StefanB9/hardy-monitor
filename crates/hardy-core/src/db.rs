@@ -1,19 +1,59 @@
-use std::path::{Path, PathBuf};
+use std::{
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
 use anyhow::{Context, Result};
-use chrono::{DateTime, NaiveDate, Utc};
+use chrono::{DateTime, DurationRound, NaiveDate, TimeDelta, Utc};
 use chrono_tz::Tz;
 use futures::TryStreamExt;
 use serde::Serialize;
-use sqlx::{FromRow, PgPool};
+use sqlx::{FromRow, PgPool, postgres::PgPoolOptions};
 
-use crate::traits::Clock;
+use crate::{config::DatabaseConfig, traits::Clock};
 
+/// Where a stored value came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, sqlx::Type)]
+#[sqlx(type_name = "text", rename_all = "lowercase")]
+#[serde(rename_all = "lowercase")]
+pub enum DataSource {
+    /// Reported by the gym API and stored by the daemon.
+    Measured,
+    /// Filled into a gap by Data Repair.
+    Interpolated,
+    /// Zero entry at opening or closing time added or set by Data Repair.
+    Boundary,
+    /// A measured value that Data Repair changed (outlier or smoothing).
+    Smoothed,
+}
+
+impl DataSource {
+    /// The value stored in the `source` column.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            DataSource::Measured => "measured",
+            DataSource::Interpolated => "interpolated",
+            DataSource::Boundary => "boundary",
+            DataSource::Smoothed => "smoothed",
+        }
+    }
+}
+
+/// One occupancy value per UTC minute.
 #[derive(Debug, Clone, FromRow, Serialize)]
 pub struct OccupancyLog {
     pub id: i64,
     pub timestamp: DateTime<Utc>,
     pub percentage: f64,
+    pub source: DataSource,
+}
+
+/// The UTC minute a timestamp belongs to; the database stores exactly one
+/// row per minute slot.
+pub fn minute_slot(timestamp: DateTime<Utc>) -> DateTime<Utc> {
+    timestamp
+        .duration_trunc(TimeDelta::minutes(1))
+        .unwrap_or(timestamp)
 }
 
 const _: () = assert!(
@@ -35,8 +75,21 @@ pub struct Database {
 }
 
 impl Database {
+    /// Connects with default pool settings and runs pending migrations.
     pub async fn new(database_url: &str) -> Result<Self> {
-        let pool = PgPool::connect(database_url)
+        Self::connect(&DatabaseConfig::with_url(database_url)).await
+    }
+
+    /// Connects with the configured pool limits and runs pending migrations.
+    #[tracing::instrument(skip_all, fields(
+        max_connections = config.max_connections,
+        acquire_timeout_secs = config.acquire_timeout_secs,
+    ))]
+    pub async fn connect(config: &DatabaseConfig) -> Result<Self> {
+        let pool = PgPoolOptions::new()
+            .max_connections(config.max_connections)
+            .acquire_timeout(Duration::from_secs(config.acquire_timeout_secs))
+            .connect(&config.url)
             .await
             .context("Failed to connect to PostgreSQL database")?;
 
@@ -48,18 +101,42 @@ impl Database {
         Ok(Self { pool })
     }
 
-    #[tracing::instrument(skip_all, fields(db.operation = "insert", %timestamp))]
-    pub async fn insert_record(&self, timestamp: DateTime<Utc>, percentage: f64) -> Result<i64> {
-        let result = sqlx::query_scalar!(
-            "INSERT INTO occupancy_logs (timestamp, percentage) VALUES ($1, $2) RETURNING id",
-            timestamp,
-            percentage
+    /// Stores a measured reading in its minute slot. Returns `None` when the
+    /// slot is already filled; the existing row is kept.
+    pub async fn insert_record(
+        &self,
+        timestamp: DateTime<Utc>,
+        percentage: f64,
+    ) -> Result<Option<i64>> {
+        self.insert_with_source(timestamp, percentage, DataSource::Measured)
+            .await
+    }
+
+    /// Stores a value with the given provenance in its minute slot. Returns
+    /// `None` when the slot is already filled; the existing row is kept.
+    #[tracing::instrument(skip_all, fields(db.operation = "insert", %timestamp, source = source.as_str()))]
+    pub async fn insert_with_source(
+        &self,
+        timestamp: DateTime<Utc>,
+        percentage: f64,
+        source: DataSource,
+    ) -> Result<Option<i64>> {
+        let id = sqlx::query_scalar!(
+            r#"
+            INSERT INTO occupancy_logs (timestamp, percentage, source)
+            VALUES ($1, $2, $3)
+            ON CONFLICT (timestamp) DO NOTHING
+            RETURNING id
+            "#,
+            minute_slot(timestamp),
+            percentage,
+            source.as_str()
         )
-        .fetch_one(&self.pool)
+        .fetch_optional(&self.pool)
         .await
         .context("Failed to insert occupancy record")?;
 
-        Ok(result)
+        Ok(id)
     }
 
     #[tracing::instrument(skip_all, fields(db.operation = "get_history", days))]
@@ -76,7 +153,8 @@ impl Database {
             SELECT
                 id as "id!",
                 timestamp as "timestamp!",
-                percentage as "percentage!"
+                percentage as "percentage!",
+                source as "source!: DataSource"
             FROM occupancy_logs
             ORDER BY timestamp DESC
             LIMIT 1
@@ -101,7 +179,8 @@ impl Database {
             SELECT
                 id as "id!",
                 timestamp as "timestamp!",
-                percentage as "percentage!"
+                percentage as "percentage!",
+                source as "source!: DataSource"
             FROM occupancy_logs
             WHERE timestamp >= $1 AND timestamp <= $2
             ORDER BY timestamp ASC
@@ -123,7 +202,8 @@ impl Database {
             SELECT
                 id as "id!",
                 timestamp as "timestamp!",
-                percentage as "percentage!"
+                percentage as "percentage!",
+                source as "source!: DataSource"
             FROM occupancy_logs
             WHERE timestamp >= $1
             ORDER BY timestamp ASC
@@ -208,7 +288,8 @@ impl Database {
             SELECT
                 id as "id!",
                 timestamp as "timestamp!",
-                percentage as "percentage!"
+                percentage as "percentage!",
+                source as "source!: DataSource"
             FROM occupancy_logs
             ORDER BY timestamp ASC
             "#
@@ -250,48 +331,38 @@ impl Database {
         self.get_history_range(start_of_day, end_of_day).await
     }
 
-    #[tracing::instrument(skip_all, fields(db.operation = "update_percentage", id))]
-    pub async fn update_percentage(&self, id: i64, percentage: f64) -> Result<()> {
-        sqlx::query!(
-            "UPDATE occupancy_logs SET percentage = $1 WHERE id = $2",
-            percentage,
-            id
+    /// Stores many values with one provenance in a single statement, skipping
+    /// minute slots that are already filled. Returns the number of rows
+    /// inserted.
+    #[tracing::instrument(skip_all, fields(db.operation = "batch_insert", count = records.len(), source = source.as_str()))]
+    pub async fn batch_insert(
+        &self,
+        records: &[(DateTime<Utc>, f64)],
+        source: DataSource,
+    ) -> Result<u64> {
+        let mut timestamps = Vec::with_capacity(records.len());
+        let mut percentages = Vec::with_capacity(records.len());
+        for &(timestamp, percentage) in records {
+            timestamps.push(minute_slot(timestamp));
+            percentages.push(percentage);
+        }
+
+        let result = sqlx::query!(
+            r#"
+            INSERT INTO occupancy_logs (timestamp, percentage, source)
+            SELECT t, p, $3
+            FROM UNNEST($1::timestamptz[], $2::float8[]) AS u(t, p)
+            ON CONFLICT (timestamp) DO NOTHING
+            "#,
+            &timestamps,
+            &percentages,
+            source.as_str()
         )
         .execute(&self.pool)
         .await
-        .context("Failed to update percentage")?;
-        Ok(())
-    }
+        .context("failed to batch insert records")?;
 
-    #[tracing::instrument(skip_all, fields(db.operation = "insert_at_timestamp", %timestamp))]
-    pub async fn insert_at_timestamp(
-        &self,
-        timestamp: DateTime<Utc>,
-        percentage: f64,
-    ) -> Result<i64> {
-        self.insert_record(timestamp, percentage).await
-    }
-
-    #[tracing::instrument(skip_all, fields(db.operation = "batch_insert", count = records.len()))]
-    pub async fn batch_insert(&self, records: Vec<(DateTime<Utc>, f64)>) -> Result<()> {
-        let mut tx = self
-            .pool
-            .begin()
-            .await
-            .context("failed to begin transaction")?;
-
-        for (timestamp, percentage) in records {
-            sqlx::query!(
-                "INSERT INTO occupancy_logs (timestamp, percentage) VALUES ($1, $2)",
-                timestamp,
-                percentage
-            )
-            .execute(&mut *tx)
-            .await
-            .context("failed to insert record in batch")?;
-        }
-
-        tx.commit().await.context("failed to commit batch insert")
+        Ok(result.rows_affected())
     }
 
     #[tracing::instrument(skip_all, fields(db.operation = "delete_record", id))]
@@ -313,30 +384,39 @@ impl Database {
         Ok(result.rows_affected())
     }
 
-    /// Update percentage for multiple records in a single transaction.
+    /// Sets new percentages in a single statement. Rows that were
+    /// `measured` are re-labelled `source_if_measured`; repaired rows keep
+    /// their provenance. Returns the number of rows updated.
     #[tracing::instrument(skip_all, fields(db.operation = "batch_update_percentage", count = updates.len()))]
-    pub async fn batch_update_percentage(&self, updates: &[(i64, f64)]) -> Result<u64> {
-        let mut tx = self
-            .pool
-            .begin()
-            .await
-            .context("failed to begin batch update transaction")?;
-
-        let mut total = 0u64;
+    pub async fn batch_update_percentage(
+        &self,
+        updates: &[(i64, f64)],
+        source_if_measured: DataSource,
+    ) -> Result<u64> {
+        let mut ids = Vec::with_capacity(updates.len());
+        let mut percentages = Vec::with_capacity(updates.len());
         for &(id, percentage) in updates {
-            let result = sqlx::query!(
-                "UPDATE occupancy_logs SET percentage = $1 WHERE id = $2",
-                percentage,
-                id
-            )
-            .execute(&mut *tx)
-            .await
-            .context("Failed to update percentage in batch")?;
-            total += result.rows_affected();
+            ids.push(id);
+            percentages.push(percentage);
         }
 
-        tx.commit().await.context("failed to commit batch update")?;
-        Ok(total)
+        let result = sqlx::query!(
+            r#"
+            UPDATE occupancy_logs AS o
+            SET percentage = u.p,
+                source = CASE WHEN o.source = 'measured' THEN $3 ELSE o.source END
+            FROM UNNEST($1::int8[], $2::float8[]) AS u(id, p)
+            WHERE o.id = u.id
+            "#,
+            &ids,
+            &percentages,
+            source_if_measured.as_str()
+        )
+        .execute(&self.pool)
+        .await
+        .context("Failed to batch update percentages")?;
+
+        Ok(result.rows_affected())
     }
 
     pub async fn close(self) {
@@ -356,7 +436,40 @@ mod tests {
             id: 1,
             timestamp,
             percentage: 50.0,
+            source: DataSource::Measured,
         }
+    }
+
+    #[test]
+    fn test_minute_slot_truncates_seconds_and_subseconds() -> Result<()> {
+        let ts = Utc
+            .with_ymd_and_hms(2024, 6, 15, 14, 30, 59)
+            .single()
+            .context("valid time")?
+            + chrono::Duration::milliseconds(999);
+        let expected = Utc
+            .with_ymd_and_hms(2024, 6, 15, 14, 30, 0)
+            .single()
+            .context("valid time")?;
+        assert_eq!(minute_slot(ts), expected);
+        assert_eq!(minute_slot(expected), expected);
+        Ok(())
+    }
+
+    #[test]
+    fn test_data_source_as_str_matches_serde() -> Result<()> {
+        for source in [
+            DataSource::Measured,
+            DataSource::Interpolated,
+            DataSource::Boundary,
+            DataSource::Smoothed,
+        ] {
+            let mut wtr = csv::Writer::from_writer(Vec::new());
+            wtr.serialize([source])?;
+            let bytes = wtr.into_inner().context("flush csv")?;
+            assert_eq!(String::from_utf8(bytes)?.trim(), source.as_str());
+        }
+        Ok(())
     }
 
     #[test]
