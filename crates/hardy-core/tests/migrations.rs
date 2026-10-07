@@ -241,3 +241,35 @@ async fn test_ml_models_migration_seeds_state_and_reverts() {
 
     raw.cleanup().await;
 }
+
+const REPAIR_STATE_VERSION: i64 = 20_261_007_064_211;
+
+#[tokio::test]
+async fn test_repair_state_migration_seeds_single_row_and_reverts() {
+    let raw = common::RawTestDatabase::new().await;
+    let migrator = sqlx::migrate!("../../migrations");
+    migrator.run(&raw.pool).await.unwrap();
+
+    let through: Option<chrono::NaiveDate> =
+        sqlx::query_scalar("SELECT repaired_through FROM repair_state")
+            .fetch_one(&raw.pool)
+            .await
+            .unwrap();
+    assert_eq!(through, None);
+    let second = sqlx::query("INSERT INTO repair_state (id) VALUES (2)")
+        .execute(&raw.pool)
+        .await;
+    assert!(second.is_err(), "only one state row may exist");
+
+    migrator
+        .undo(&raw.pool, REPAIR_STATE_VERSION - 1)
+        .await
+        .expect("down migration applies");
+    let exists: bool = sqlx::query_scalar("SELECT to_regclass('repair_state') IS NOT NULL")
+        .fetch_one(&raw.pool)
+        .await
+        .unwrap();
+    assert!(!exists);
+
+    raw.cleanup().await;
+}
