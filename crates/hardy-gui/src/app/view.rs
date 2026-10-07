@@ -43,6 +43,7 @@ impl HardyMonitorApp {
             ViewMode::ModelData => views::model_data::view(ModelDataProps {
                 timezone: self.schedule.timezone(),
                 model: self.data.forecasting.summary(),
+                accuracy: self.data.accuracy.as_ref(),
                 retrain_pending: self.data.forecasting.retrain_pending(),
                 last_training_error: self.data.forecasting.last_error(),
                 repair_start: &self.repair.start_date,

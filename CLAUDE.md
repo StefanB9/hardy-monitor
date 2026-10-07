@@ -16,6 +16,7 @@ hardy-monitor/                         (workspace root)
 │   ├── hardy-core/                    (library — shared by daemon and GUI)
 │   │   ├── src/
 │   │   │   ├── lib.rs                 Module declarations + re-exports
+│   │   │   ├── accuracy.rs            Summaries of logged forecast accuracy
 │   │   │   ├── analytics.rs           OccupancyStats, insights, trend analysis, predictions
 │   │   │   ├── api.rs                 GymApiClient (reqwest HTTP)
 │   │   │   ├── config.rs              AppConfig, MlConfig, MlAlgorithm (TOML + env var)
@@ -35,7 +36,12 @@ hardy-monitor/                         (workspace root)
 │   │   └── src/                       features, training, models (linfa/smartcore), persistence
 │   │
 │   ├── hardy-daemon/                  (binary — headless fetch loop)
-│   │   └── src/main.rs               Daemon loop, logging, fetch_and_store
+│   │   └── src/
+│   │       ├── main.rs                Startup, fetch loop, fetch_and_store
+│   │       ├── connect.rs             Database connect with retry, health and schema checks
+│   │       ├── upkeep.rs              Nightly repair + training, schema check, forecast logging
+│   │       ├── forecasts.rs           Hourly forecast log (accuracy tracking)
+│   │       └── logging.rs             tracing setup (console / rotated file)
 │   │
 │   └── hardy-gui/                     (binary + library — iced desktop GUI)
 │       ├── assets/icon.png

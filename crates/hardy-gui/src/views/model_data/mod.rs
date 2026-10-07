@@ -1,6 +1,10 @@
-//! "Model & Data": the forecast model, data repair and CSV export.
+//! "Model & Data": the forecast model, its live accuracy, data repair and
+//! CSV export.
 
-use hardy_core::{Tz, error::AppError, repair::RepairSummary};
+mod accuracy;
+
+pub(crate) use accuracy::DAYS as ACCURACY_DAYS;
+use hardy_core::{Tz, accuracy::AccuracySummary, error::AppError, repair::RepairSummary};
 use iced::{
     Alignment, Border, Element, Length,
     widget::{Space, column, container, row, text},
@@ -21,6 +25,8 @@ use crate::{
 pub struct ModelDataProps<'a> {
     pub timezone: Tz,
     pub model: Option<&'a ModelSummary>,
+    /// Logged forecasts scored against readings; `None` before any.
+    pub accuracy: Option<&'a AccuracySummary>,
     /// A retrain was requested and the daemon has not started it yet.
     pub retrain_pending: bool,
     /// Why the daemon's last training produced no model.
@@ -298,7 +304,9 @@ fn export_card<'a>(props: &ModelDataProps<'a>) -> Element<'a, Message> {
 
 pub fn view(props: ModelDataProps<'_>) -> Element<'_, Message> {
     let content = row![
-        container(model_card(&props)).width(Length::FillPortion(3)),
+        column![model_card(&props), accuracy::card(props.accuracy)]
+            .spacing(style::SPACE_L)
+            .width(Length::FillPortion(3)),
         column![repair_card(&props), export_card(&props)]
             .spacing(style::SPACE_L)
             .width(Length::FillPortion(2)),

@@ -1,5 +1,6 @@
 //! Application state, messages and the iced entry points.
 
+mod maintenance;
 mod tasks;
 mod update;
 mod view;
@@ -11,10 +12,13 @@ use std::{
 
 use chrono::{DateTime, TimeDelta, Utc};
 use hardy_core::{
+    accuracy::AccuracySummary,
     alert::{AlertDuration, AlertRules, AlertSettings},
     analytics::{DayAnalysis, Insight, OccupancyStats, TrendDirection},
     config::AppConfig,
-    db::{Database, HourlyAverage, MlState, ModelInfo, OccupancyLog, SchemaStatus},
+    db::{
+        Database, HorizonAccuracy, HourlyAverage, MlState, ModelInfo, OccupancyLog, SchemaStatus,
+    },
     error::AppError,
     repair::RepairSummary,
     schedule::GymSchedule,
@@ -103,6 +107,8 @@ struct MonitorState {
     quiet_hours: Vec<(i32, i32, f64)>,
     trend: Option<TrendDirection>,
     forecasting: Forecasting,
+    /// Live accuracy of the daemon's logged forecasts.
+    accuracy: Option<AccuracySummary>,
 }
 
 const LOADING_DEBOUNCE_MS: u64 = 200;
@@ -191,6 +197,7 @@ pub enum Message {
     ModelStatusLoaded(Result<(Option<ModelInfo>, MlState), AppError>),
     ModelLoaded(Result<(ModelInfo, Arc<ModelArtifact>), AppError>),
     TrainModelRequested,
+    AccuracyLoaded(Result<Vec<HorizonAccuracy>, AppError>),
 
     /// Result of comparing the database schema with this build.
     SchemaChecked(Result<SchemaStatus, AppError>),
@@ -237,6 +244,7 @@ impl HardyMonitorApp {
                 quiet_hours: Vec::new(),
                 trend: None,
                 forecasting: Forecasting::new(horizon_hours, grace),
+                accuracy: None,
             },
             ui: UiState {
                 is_loading: false,
@@ -313,6 +321,7 @@ impl HardyMonitorApp {
             self.load_chart_history(),
             self.load_analytics(),
             self.load_insights_data(),
+            self.load_accuracy(),
             self.fetch_latest(),
         ])
     }
