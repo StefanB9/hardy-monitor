@@ -10,12 +10,14 @@ use futures::TryStreamExt;
 use serde::Serialize;
 use sqlx::{FromRow, PgPool, postgres::PgPoolOptions};
 
-use crate::{config::DatabaseConfig, traits::Clock};
+use crate::{config::DatabaseConfig, error::AppError, traits::Clock};
 
 mod alert_settings;
 mod ml;
+mod schema;
 
 pub use ml::{MlState, ModelInfo, NewModel};
+pub use schema::{Migrations, SchemaStatus, app_schema_version};
 
 /// Where a stored value came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, sqlx::Type)]
@@ -82,15 +84,17 @@ pub struct Database {
 impl Database {
     /// Connects with default pool settings and runs pending migrations.
     pub async fn new(database_url: &str) -> Result<Self> {
-        Self::connect(&DatabaseConfig::with_url(database_url)).await
+        Self::connect(&DatabaseConfig::with_url(database_url), Migrations::Apply).await
     }
 
-    /// Connects with the configured pool limits and runs pending migrations.
+    /// Connects with the configured pool limits; applies pending migrations
+    /// only with [`Migrations::Apply`].
     #[tracing::instrument(skip_all, fields(
         max_connections = config.max_connections,
         acquire_timeout_secs = config.acquire_timeout_secs,
+        ?migrations,
     ))]
-    pub async fn connect(config: &DatabaseConfig) -> Result<Self> {
+    pub async fn connect(config: &DatabaseConfig, migrations: Migrations) -> Result<Self> {
         let pool = PgPoolOptions::new()
             .max_connections(config.max_connections)
             .acquire_timeout(Duration::from_secs(config.acquire_timeout_secs))
@@ -98,10 +102,21 @@ impl Database {
             .await
             .context("Failed to connect to PostgreSQL database")?;
 
-        sqlx::migrate!("../../migrations")
-            .run(&pool)
-            .await
-            .context("Failed to run database migrations")?;
+        if migrations == Migrations::Apply {
+            // sqlx would also refuse, but with an obscure "missing migration"
+            // message that hides what to do.
+            let app = schema::app_schema_version();
+            if let Some(db) = schema::applied_version(&pool).await?
+                && db > app
+            {
+                pool.close().await;
+                return Err(AppError::SchemaTooNew { db, app }.into());
+            }
+            schema::MIGRATOR
+                .run(&pool)
+                .await
+                .context("Failed to run database migrations")?;
+        }
 
         Ok(Self { pool })
     }

@@ -9,7 +9,7 @@ use hardy_core::{
     alert::AlertService,
     api::GymApiClient,
     config::AppConfig,
-    db::{Database, minute_slot},
+    db::{Database, Migrations, minute_slot},
     retry,
     schedule::GymSchedule,
 };
@@ -100,7 +100,7 @@ async fn run(config: &AppConfig) -> Result<()> {
     tracing::info!("Connecting to database...");
     let database = tokio::select! {
         result = retry(&connect_policy, "connect_database", || async {
-            Database::connect(&config.database)
+            Database::connect(&config.database, Migrations::Apply)
                 .await
                 .map_err(|e| AppError::from_anyhow_sqlx(&e, "connect_database"))
         }) => result.context("Failed to connect to database")?,

@@ -94,7 +94,7 @@ fn main() -> Result<()> {
 
     let (database, icon, tray_icon_data) = rt.block_on(async {
         tracing::info!("Connecting to database...");
-        let database = db::Database::connect(&config.database).await?;
+        let database = db::Database::connect(&config.database, db::Migrations::Apply).await?;
         tracing::info!("Database connected successfully");
 
         let (icon, tray_icon_data) = tokio::join!(load_icon_async(), load_tray_icon_async());
