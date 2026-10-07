@@ -7,6 +7,7 @@ pub mod error;
 pub mod evaluation;
 pub mod features;
 pub mod forecast;
+pub mod forecast_log;
 pub mod history;
 pub mod maintenance;
 pub mod model;
