@@ -9,33 +9,40 @@ Cargo workspace with 4 members:
 ```
 hardy-monitor/                         (workspace root)
 ├── Cargo.toml                         [workspace] manifest — all dependency versions here
-├── migrations/                        sqlx migrations (single table: occupancy_logs)
+├── config.toml                        Documented example configuration
+├── migrations/                        sqlx migrations: occupancy_logs (+ quarantine), alert_settings,
+│                                      ml_models / ml_state, repair_state, forecast_log
 ├── .sqlx/                             sqlx offline query cache
+├── docs/plan/                         Approved plans
 │
 ├── crates/
-│   ├── hardy-core/                    (library — shared by daemon and GUI)
+│   ├── hardy-core/                    (library — shared by daemon, ML and GUI)
 │   │   ├── src/
 │   │   │   ├── lib.rs                 Module declarations + re-exports
 │   │   │   ├── accuracy.rs            Summaries of logged forecast accuracy
-│   │   │   ├── analytics.rs           OccupancyStats, insights, trend analysis, predictions
+│   │   │   ├── alert/                 Low-occupancy alerts: settings, engine, windows, phone commands, service
+│   │   │   ├── analytics.rs           OccupancyStats, insights, trend analysis
 │   │   │   ├── api.rs                 GymApiClient (reqwest HTTP)
-│   │   │   ├── config.rs              AppConfig, MlConfig, MlAlgorithm (TOML + env var)
-│   │   │   ├── db.rs                  Database (sqlx PgPool). OccupancyLog, HourlyAverage
+│   │   │   ├── config.rs              AppConfig and sections (TOML + env var)
+│   │   │   ├── db/                    Database (sqlx PgPool): readings, averages, alert settings, models,
+│   │   │   │                          repair state, forecast log; schema.rs: migrations + version check
 │   │   │   ├── error.rs               AppError, NetworkErrorKind, DatabaseError (thiserror)
 │   │   │   ├── health.rs              HealthMonitor: outage / resumed messages for the daemon
+│   │   │   ├── ntfy.rs                ntfy client (publish, poll)
 │   │   │   ├── repair/                DataRepairer (gap filling, outliers, smoothing); nightly.rs: automatic nightly repair
+│   │   │   ├── retry.rs               RetryPolicy + retry() for transient errors
 │   │   │   ├── schedule.rs            GymSchedule, Bavarian holiday detection
 │   │   │   └── traits.rs              Clock, Notifier, SystemClock, MockClock, MockNotifier
-│   │   └── tests/                     Integration tests
-│   │       ├── api.rs                 wiremock-based API client tests
-│   │       ├── database.rs            PostgreSQL tests (TestDatabase isolation)
-│   │       ├── app_logic.rs           MockClock/MockNotifier behavior tests
-│   │       └── common/mod.rs          TestDatabase helper
+│   │   └── tests/                     Integration tests (TestDatabase / wiremock): api, database, schema,
+│   │                                  migrations, repair, forecast_log, alert_service, ntfy, app_logic;
+│   │                                  common/mod.rs: TestDatabase and RawTestDatabase helpers
 │   │
 │   ├── hardy-ml/                      (library — forecasting, shared by daemon and GUI)
-│   │   └── src/                       features, training, models (linfa/smartcore), persistence
+│   │   ├── src/                       history, profile, features, samples, model, training (+ quality gate),
+│   │   │                              forecast, forecast_log, retrain, maintenance, persistence
+│   │   └── tests/maintenance.rs       Training against a real database
 │   │
-│   ├── hardy-daemon/                  (binary — headless fetch loop)
+│   ├── hardy-daemon/                  (binary — headless fetch loop; the only process that migrates)
 │   │   └── src/
 │   │       ├── main.rs                Startup, fetch loop, fetch_and_store
 │   │       ├── connect.rs             Database connect with retry, health and schema checks
@@ -48,16 +55,19 @@ hardy-monitor/                         (workspace root)
 │       └── src/
 │           ├── main.rs                Entry point, tray icon, iced runner
 │           ├── lib.rs                 Module declarations
-│           ├── app/                   HardyMonitorApp, Message (mod), update, view (shell), tasks (DB loads)
+│           ├── app/                   HardyMonitorApp, Message (mod), update, maintenance (export/repair),
+│           │                          view (shell), tasks (DB loads)
 │           ├── style.rs               Design tokens: colours, occupancy scale, type/spacing scales
 │           ├── forecasting.rs         Forecast state: history, loaded model, forecasts, quiet window
 │           ├── quiet_window.rs        Next quiet hour (forecast, else slot averages)
 │           ├── time_range.rs          ChartRange / AnalyticsRange and the instants they cover
 │           ├── freshness.rs           Whether the newest reading is live or stale
+│           ├── tray.rs                Tray tooltip and status dot
 │           ├── alerts.rs              Alert controls (shared settings, desktop popups)
 │           ├── notifier.rs            SystemNotifier, CombinedNotifier
 │           ├── widgets/               Canvas widgets: gauge, heatmap (WeekGrid), history_chart
-│           └── views/                 now/, week, insights, model_data; components/ (cards, buttons, …)
+│           └── views/                 now/, week, insights, model_data/, schema_notice, opening;
+│                                      components/ (cards, buttons, …)
 ```
 
 **Dependency boundary:** core ← ml ← daemon / gui. Core has zero GUI or ML dependencies; `hardy-ml` depends only on core plus ML crates; both binaries depend on core and ml. GUI-only crates stay in `hardy-gui`. Never reverse.
@@ -86,6 +96,8 @@ cargo build -p hardy-gui                      # Build GUI only
 ```
 
 **Always use `cargo nextest run` instead of `cargo test`.** Nextest is the project's test runner.
+
+**Headless GUI checks (Linux/CI-like environments):** the committed iced features target the desktop platform and do not build on a bare Linux box. For local verification only, temporarily add iced's `x11` + `tiny-skia` features, run the GUI under `xvfb-run` with `ICED_BACKEND=tiny-skia`, skip the tray (no tray host under Xvfb) and screenshot with ImageMagick `import`. Never commit those changes.
 
 **`--all-targets` is mandatory** for `clippy` and `check`. Lints must pass in tests and examples — not just lib/bin targets. Test code follows the same quality standards as production code.
 
