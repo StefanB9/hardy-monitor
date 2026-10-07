@@ -1,74 +1,90 @@
+//! Application error types.
+
 use thiserror::Error;
 
+/// Recoverable, matchable application errors.
 #[derive(Error, Debug, Clone)]
 pub enum AppError {
+    /// The gym API could not be reached.
     #[error("Network error: {message}")]
     Network {
         message: String,
         kind: NetworkErrorKind,
     },
 
+    /// A database operation failed.
     #[error("Database error: {0}")]
     Database(#[from] DatabaseError),
 
+    /// Input or data failed validation.
     #[error("Validation error: {0}")]
     Validation(String),
 
-    #[error("IO error: {0}")]
-    Io(String),
-
+    /// The configuration is invalid.
     #[error("Configuration error: {0}")]
     Config(String),
 
+    /// The gym API answered with an error status.
     #[error("API error: {status_code} - {message}")]
     Api { status_code: u16, message: String },
 
+    /// Anything not covered by the other variants.
     #[error("Unexpected error: {0}")]
     Unknown(String),
 
+    /// Model training failed.
     #[error("ML training error: {0}")]
     MlTraining(String),
 
+    /// The database was migrated by a newer build than this one.
     #[error("Database schema {db} is newer than this build ({app}): update this program")]
     SchemaTooNew { db: i64, app: i64 },
 }
 
+/// Why a network request failed.
 #[derive(Error, Debug, Clone, PartialEq, Eq)]
 pub enum NetworkErrorKind {
+    /// The request timed out.
     #[error("Connection timeout")]
     Timeout,
+    /// The connection could not be established.
     #[error("Connection refused")]
     ConnectionRefused,
-    #[error("DNS resolution failed")]
-    DnsFailure,
-    #[error("TLS/SSL error")]
-    TlsError,
+    /// Any other request failure.
     #[error("Unknown network error")]
     Unknown,
 }
 
+/// Why a database operation failed.
 #[derive(Error, Debug, Clone)]
 pub enum DatabaseError {
+    /// A query failed for a non-transient reason.
     #[error("Query failed ({query_context}): {message}")]
     QueryFailed {
         query_context: String,
         message: String,
     },
 
+    /// No pooled connection became free in time.
     #[error("Connection pool exhausted")]
     PoolExhausted,
 
+    /// A query expected a row and found none.
     #[error("Record not found")]
     NotFound,
 
+    /// A row violated the named constraint.
     #[error("Constraint violation: {0}")]
     ConstraintViolation(String),
 
+    /// The connection to the database failed.
     #[error("Connection failed: {0}")]
     ConnectionFailed(String),
 }
 
 impl AppError {
+    /// Whether retrying the operation may succeed (timeouts, refused
+    /// connections, pool exhaustion).
     pub fn is_retryable(&self) -> bool {
         match self {
             AppError::Network { kind, .. } => matches!(
@@ -82,6 +98,7 @@ impl AppError {
         }
     }
 
+    /// Classifies an `sqlx` error from the operation named by `context`.
     pub fn from_sqlx(err: &sqlx::Error, context: &str) -> Self {
         let db_error = match err {
             sqlx::Error::PoolTimedOut => DatabaseError::PoolExhausted,
@@ -131,6 +148,7 @@ impl AppError {
             )
     }
 
+    /// Wraps any database-layer failure as a non-retryable `QueryFailed`.
     #[allow(clippy::needless_pass_by_value)]
     pub fn from_anyhow_db(err: anyhow::Error, context: &str) -> Self {
         AppError::Database(DatabaseError::QueryFailed {
@@ -139,6 +157,7 @@ impl AppError {
         })
     }
 
+    /// Classifies a `reqwest` error by timeout or connect failure.
     #[allow(clippy::needless_pass_by_value)]
     pub fn from_reqwest(err: reqwest::Error) -> Self {
         let kind = if err.is_timeout() {
@@ -155,6 +174,7 @@ impl AppError {
         }
     }
 
+    /// An [`AppError::Api`] for the given HTTP status.
     pub fn api_error(status_code: u16, message: impl Into<String>) -> Self {
         AppError::Api {
             status_code,
@@ -162,26 +182,9 @@ impl AppError {
         }
     }
 
+    /// An [`AppError::Validation`] with the given message.
     pub fn validation(message: impl Into<String>) -> Self {
         AppError::Validation(message.into())
-    }
-
-    pub fn io(message: impl Into<String>) -> Self {
-        AppError::Io(message.into())
-    }
-
-    pub fn category(&self) -> &'static str {
-        match self {
-            AppError::Network { .. } => "network",
-            AppError::Database(_) => "database",
-            AppError::Validation(_) => "validation",
-            AppError::Io(_) => "io",
-            AppError::Config(_) => "config",
-            AppError::Api { .. } => "api",
-            AppError::Unknown(_) => "unknown",
-            AppError::MlTraining(_) => "ml_training",
-            AppError::SchemaTooNew { .. } => "schema",
-        }
     }
 }
 
@@ -192,13 +195,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_schema_too_new_display_category_and_not_retryable() {
+    fn test_schema_too_new_display_and_not_retryable() {
         let err = AppError::SchemaTooNew { db: 7, app: 5 };
         assert_eq!(
             err.to_string(),
             "Database schema 7 is newer than this build (5): update this program"
         );
-        assert_eq!(err.category(), "schema");
         assert!(!err.is_retryable());
     }
 
@@ -259,18 +261,6 @@ mod tests {
             AppError::Database(DatabaseError::QueryFailed { .. })
         ));
         assert!(!app.is_retryable());
-    }
-
-    #[test]
-    fn test_error_category() {
-        let err = AppError::Network {
-            message: "test".to_string(),
-            kind: NetworkErrorKind::Timeout,
-        };
-        assert_eq!(err.category(), "network");
-
-        let err = AppError::Database(DatabaseError::NotFound);
-        assert_eq!(err.category(), "database");
     }
 
     #[test]
