@@ -1,3 +1,4 @@
+pub mod accuracy;
 pub mod alert;
 pub mod analytics;
 pub mod api;

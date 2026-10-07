@@ -1,0 +1,21 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO forecast_log\n                (made_at, target, horizon_hours, model_id, predicted, low, high, baseline)\n            SELECT * FROM UNNEST(\n                $1::timestamptz[], $2::timestamptz[], $3::int2[], $4::int8[],\n                $5::float8[], $6::float8[], $7::float8[], $8::float8[]\n            )\n            ON CONFLICT (made_at, horizon_hours) DO NOTHING\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "TimestamptzArray",
+        "TimestamptzArray",
+        "Int2Array",
+        "Int8Array",
+        "Float8Array",
+        "Float8Array",
+        "Float8Array",
+        "Float8Array"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "d640e9ee3a0f8e4cbcef5f559d5a88a967a6d8f1647375f30bc2a967600ee891"
+}

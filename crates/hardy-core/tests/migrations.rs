@@ -273,3 +273,22 @@ async fn test_repair_state_migration_seeds_single_row_and_reverts() {
 
     raw.cleanup().await;
 }
+
+const FORECAST_LOG_VERSION: i64 = 20_261_007_072_032;
+
+#[tokio::test]
+async fn test_forecast_log_migration_reverts() {
+    let raw = common::RawTestDatabase::new().await;
+    let migrator = sqlx::migrate!("../../migrations");
+    migrator.run(&raw.pool).await.unwrap();
+    migrator
+        .undo(&raw.pool, FORECAST_LOG_VERSION - 1)
+        .await
+        .expect("down migration applies");
+    let exists: bool = sqlx::query_scalar("SELECT to_regclass('forecast_log') IS NOT NULL")
+        .fetch_one(&raw.pool)
+        .await
+        .unwrap();
+    assert!(!exists);
+    raw.cleanup().await;
+}
