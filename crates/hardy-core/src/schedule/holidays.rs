@@ -8,7 +8,7 @@ use std::{
 use chrono::{Datelike, NaiveDate};
 
 /// Whether `date` is a public holiday in Bavaria (fixed dates and
-/// the\nEaster-dependent ones).
+/// the Easter-dependent ones).
 pub fn is_bavarian_holiday(date: NaiveDate) -> bool {
     let (d, m) = (date.day(), date.month());
     let year = date.year();

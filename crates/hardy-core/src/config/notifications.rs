@@ -1,27 +1,10 @@
-//! Alert delivery settings (ntfy) and secrets.
+//! Alert delivery settings (ntfy).
 
 use anyhow::Result;
 use serde::Deserialize;
 
+use super::SecretString;
 use crate::{alert::AlertWindow, error::AppError};
-
-/// A secret read from configuration; never shown by `Debug`.
-#[derive(Clone, Deserialize, PartialEq, Eq)]
-#[serde(transparent)]
-pub struct SecretString(String);
-
-impl SecretString {
-    /// The secret value, for the one place that needs it.
-    pub fn expose(&self) -> &str {
-        &self.0
-    }
-}
-
-impl std::fmt::Debug for SecretString {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("<redacted>")
-    }
-}
 
 /// Alert delivery settings. Whether alerts are armed and their threshold
 /// live in the database (`alert_settings`), changed from the GUI or phone.

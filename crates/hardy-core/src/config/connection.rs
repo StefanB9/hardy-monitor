@@ -2,26 +2,34 @@
 
 use serde::Deserialize;
 
+use super::SecretString;
+
 /// PostgreSQL connection and pool limits (`DATABASE_URL` comes from the
 /// environment).
 #[derive(Debug, Deserialize, Clone)]
 pub struct DatabaseConfig {
-    pub url: String,
+    /// Connection URL, including credentials.
+    pub url: SecretString,
     /// Upper bound on pooled connections; keep small for hosted free tiers.
     #[serde(default = "default_max_connections")]
     pub max_connections: u32,
     /// How long to wait for a free pooled connection before failing.
     #[serde(default = "default_acquire_timeout_secs")]
     pub acquire_timeout_secs: u64,
+    /// Longest a single query may run before PostgreSQL cancels it, so a
+    /// hanging database cannot stall the daemon or the GUI.
+    #[serde(default = "default_statement_timeout_secs")]
+    pub statement_timeout_secs: u64,
 }
 
 impl DatabaseConfig {
     /// Config for `url` with default pool settings.
     pub fn with_url(url: impl Into<String>) -> Self {
         Self {
-            url: url.into(),
+            url: SecretString::new(url),
             max_connections: default_max_connections(),
             acquire_timeout_secs: default_acquire_timeout_secs(),
+            statement_timeout_secs: default_statement_timeout_secs(),
         }
     }
 }
@@ -32,6 +40,10 @@ pub(super) fn default_max_connections() -> u32 {
 
 pub(super) fn default_acquire_timeout_secs() -> u64 {
     10
+}
+
+pub(super) fn default_statement_timeout_secs() -> u64 {
+    60
 }
 
 /// Where the gym's occupancy API is.
@@ -74,6 +86,15 @@ mod tests {
         let config: DatabaseConfig = toml::from_str(r#"url = "postgres://x/y""#)?;
         assert_eq!(config.max_connections, 5);
         assert_eq!(config.acquire_timeout_secs, 10);
+        assert_eq!(config.statement_timeout_secs, 60);
         Ok(())
+    }
+
+    #[test]
+    fn test_database_config_debug_hides_url() {
+        let config = DatabaseConfig::with_url("postgres://hardy:s3cret@db.example/hardy");
+        let shown = format!("{config:?}");
+        assert!(!shown.contains("s3cret"), "{shown}");
+        assert!(!shown.contains("db.example"), "{shown}");
     }
 }

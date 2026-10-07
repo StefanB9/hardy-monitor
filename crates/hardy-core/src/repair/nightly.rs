@@ -1,8 +1,8 @@
 //! The daemon's nightly automatic repair: which days are due, and running it.
 
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 use chrono::{DateTime, Days, NaiveDate, TimeDelta, Utc};
 
 use super::{DataRepairer, RepairSummary};
@@ -48,13 +48,15 @@ pub fn repair_due(
     (first <= last).then_some((first, last))
 }
 
-/// Repairs the due days, if any, and records the progress. Returns the
-/// repaired range and what was changed.
+/// Repairs the due days, if any, oldest first, saving progress after each
+/// day. Running out of `budget` counts as a failed attempt, so the usual
+/// retry delay applies. Returns the repaired range and what was changed.
 #[tracing::instrument(skip(db, schedule))]
 pub async fn run_nightly_repair(
     db: &Database,
     schedule: &GymSchedule,
     now: DateTime<Utc>,
+    budget: Duration,
 ) -> Result<Option<((NaiveDate, NaiveDate), RepairSummary)>> {
     let state = db.get_repair_state().await?;
     let Some((first, last)) = repair_due(now, schedule, &state) else {
@@ -63,11 +65,21 @@ pub async fn run_nightly_repair(
     tracing::info!(%first, %last, "running nightly data repair");
 
     let repairer = DataRepairer::new(Arc::new(db.clone()), schedule.clone());
-    match repairer.repair_date_range(first, last, None).await {
-        Ok(summary) => {
-            db.record_repair_success(last, now).await?;
-            Ok(Some(((first, last), summary)))
-        }
+    // SAFETY: each repair step commits on its own and repairing a day again
+    // is harmless, so stopping mid-day at the deadline leaves at worst a
+    // partly repaired day, which the next run repairs again.
+    let run = repair_days(
+        first,
+        last,
+        |day| repairer.repair_date_range(day, day, None),
+        |day| db.record_repair_success(day, now),
+    );
+    let outcome = match tokio::time::timeout(budget, run).await {
+        Ok(result) => result,
+        Err(_) => Err(anyhow!("ran out of time after {budget:?}")),
+    };
+    match outcome {
+        Ok(summary) => Ok(Some(((first, last), summary))),
         Err(e) => {
             db.record_repair_failure(now, &format!("{e:#}")).await?;
             Err(e).with_context(|| format!("nightly repair of {first}..={last} failed"))
@@ -75,13 +87,107 @@ pub async fn run_nightly_repair(
     }
 }
 
+/// Repairs `first..=last` one day at a time and calls `record_done` after
+/// each, so a failing day keeps the progress made before it.
+async fn repair_days<R, RF, S, SF>(
+    first: NaiveDate,
+    last: NaiveDate,
+    mut repair_day: R,
+    mut record_done: S,
+) -> Result<RepairSummary>
+where
+    R: FnMut(NaiveDate) -> RF,
+    RF: Future<Output = Result<RepairSummary>>,
+    S: FnMut(NaiveDate) -> SF,
+    SF: Future<Output = Result<()>>,
+{
+    let mut total = RepairSummary::default();
+    let mut day = first;
+    while day <= last {
+        let done = repair_day(day)
+            .await
+            .with_context(|| format!("repairing {day}"))?;
+        record_done(day)
+            .await
+            .with_context(|| format!("recording {day} as repaired"))?;
+        total.days_processed += done.days_processed;
+        total.gaps_filled += done.gaps_filled;
+        total.records_deleted += done.records_deleted;
+        total.records_smoothed += done.records_smoothed;
+        total.boundary_entries_added += done.boundary_entries_added;
+        day = day.succ_opt().context("date out of range")?;
+    }
+    Ok(total)
+}
+
 #[cfg(test)]
 mod tests {
-    use anyhow::{Context, Result};
+    use std::cell::RefCell;
+
+    use anyhow::{Context, Result, bail};
     use chrono::TimeZone;
     use proptest::prelude::*;
 
     use super::*;
+
+    fn one_day(gaps_filled: u32) -> RepairSummary {
+        RepairSummary {
+            days_processed: 1,
+            gaps_filled,
+            ..RepairSummary::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn test_repair_days_records_each_day_in_order() -> Result<()> {
+        let recorded = RefCell::new(Vec::new());
+        let summary = repair_days(
+            day(17)?,
+            day(19)?,
+            |_| async { Ok(one_day(2)) },
+            |d| {
+                recorded.borrow_mut().push(d);
+                async { Ok(()) }
+            },
+        )
+        .await?;
+
+        assert_eq!(recorded.into_inner(), vec![day(17)?, day(18)?, day(19)?]);
+        assert_eq!(summary.days_processed, 3);
+        assert_eq!(summary.gaps_filled, 6);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_repair_days_keeps_progress_before_a_failing_day() -> Result<()> {
+        let failing = day(18)?;
+        let attempted = RefCell::new(Vec::new());
+        let recorded = RefCell::new(Vec::new());
+        let result = repair_days(
+            day(17)?,
+            day(19)?,
+            |d| {
+                attempted.borrow_mut().push(d);
+                async move {
+                    if d == failing {
+                        bail!("boom");
+                    }
+                    Ok(one_day(1))
+                }
+            },
+            |d| {
+                recorded.borrow_mut().push(d);
+                async { Ok(()) }
+            },
+        )
+        .await;
+
+        let error = result.err().context("the failing day must fail the run")?;
+        assert!(format!("{error:#}").contains("boom"), "{error:#}");
+        assert_eq!(attempted.into_inner(), vec![day(17)?, failing]);
+        assert_eq!(recorded.into_inner(), vec![day(17)?]);
+        Ok(())
+    }
 
     /// 2024-06-`d` `h:mi` gym-local (17th is a Monday).
     fn local(d: u32, h: u32, mi: u32) -> Result<DateTime<Utc>> {

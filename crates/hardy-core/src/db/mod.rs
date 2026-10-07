@@ -3,7 +3,10 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use chrono::{DateTime, DurationRound, TimeDelta, Utc};
 use serde::Serialize;
-use sqlx::{FromRow, PgPool, postgres::PgPoolOptions};
+use sqlx::{
+    FromRow, PgPool,
+    postgres::{PgConnectOptions, PgPoolOptions},
+};
 
 use crate::{config::DatabaseConfig, error::AppError};
 
@@ -102,7 +105,7 @@ impl Database {
         let pool = PgPoolOptions::new()
             .max_connections(config.max_connections)
             .acquire_timeout(Duration::from_secs(config.acquire_timeout_secs))
-            .connect(&config.url)
+            .connect_with(Self::connect_options(config)?)
             .await
             .context("Failed to connect to PostgreSQL database")?;
 
@@ -123,6 +126,20 @@ impl Database {
         }
 
         Ok(Self { pool })
+    }
+
+    /// Per-connection settings: the URL plus the statement timeout, which
+    /// PostgreSQL enforces on every query.
+    pub fn connect_options(config: &DatabaseConfig) -> Result<PgConnectOptions> {
+        let options: PgConnectOptions = config
+            .url
+            .expose()
+            .parse()
+            .context("DATABASE_URL is not a valid PostgreSQL URL")?;
+        Ok(options.options([(
+            "statement_timeout",
+            format!("{}s", config.statement_timeout_secs),
+        )]))
     }
 
     /// Closes the pool, waiting for open connections.

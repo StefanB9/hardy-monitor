@@ -1,10 +1,16 @@
 //! Work besides fetching: forecast logging, nightly repair and training, and
 //! the schema check.
 
+use std::time::Duration;
+
 use hardy_core::{Database, alert::AlertService, db::SchemaStatus, health::HealthEvent, repair};
 use hardy_ml::maintenance::ModelMaintenance;
 
 use crate::{Worker, forecasts};
+
+/// Longest the nightly repair may hold up the fetch loop; it continues on a
+/// later tick (after the retry delay) if this runs out.
+const REPAIR_BUDGET: Duration = Duration::from_secs(30);
 
 /// Failures are logged only: accuracy tracking must not disturb collection.
 pub(crate) async fn log_forecasts(
@@ -27,7 +33,14 @@ pub(crate) async fn log_forecasts(
 }
 
 async fn run_repair(worker: &Worker<'_>) {
-    match repair::run_nightly_repair(worker.database, worker.schedule, chrono::Utc::now()).await {
+    match repair::run_nightly_repair(
+        worker.database,
+        worker.schedule,
+        chrono::Utc::now(),
+        REPAIR_BUDGET,
+    )
+    .await
+    {
         Ok(Some(((first, last), summary))) => tracing::info!(
             %first,
             %last,
@@ -65,9 +78,8 @@ pub(crate) async fn check_schema(database: &Database, alerts: &AlertService, rep
 
 /// Repairs the day that just closed (and any missed days), then lets model
 /// maintenance start or collect training — in this order, so the nightly
-/// retrain trains on repaired data. The repair is not raced against
-/// shutdown: each day is repaired in small committed steps and a rerun is
-/// harmless, but progress is only recorded once the range is done.
+/// retrain trains on repaired data. The repair is time-limited and saves
+/// progress per day, so the caller may drop this on shutdown.
 pub(crate) async fn nightly_upkeep(worker: &Worker<'_>, models: &mut ModelMaintenance) {
     run_repair(worker).await;
     if let Err(e) = models.tick(worker.database, chrono::Utc::now()).await {

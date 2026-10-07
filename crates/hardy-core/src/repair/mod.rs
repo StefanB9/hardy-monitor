@@ -32,7 +32,7 @@ pub struct RepairProgress {
 }
 
 /// What a repair changed.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct RepairSummary {
     pub days_processed: u32,
     pub gaps_filled: u32,
@@ -62,7 +62,7 @@ impl DataRepairer {
     }
 
     /// Repairs every gym-local day from `start` to `end` (inclusive), a
-    /// few\ndays concurrently; progress goes to `progress_tx` when given.
+    /// few days concurrently; progress goes to `progress_tx` when given.
     pub async fn repair_date_range(
         &self,
         start: NaiveDate,

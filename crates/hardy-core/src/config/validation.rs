@@ -4,12 +4,17 @@ use super::AppConfig;
 use crate::error::AppError;
 
 impl AppConfig {
-    /// Rejects values that would make the app misbehave (e.g. inverted\nopening
+    /// Rejects values that would make the app misbehave (e.g. inverted opening
     /// hours or thresholds, zero intervals).
     pub fn validate(&self) -> Result<(), AppError> {
         if self.database.max_connections == 0 {
             return Err(AppError::Config(
                 "database.max_connections must be > 0".to_string(),
+            ));
+        }
+        if self.database.statement_timeout_secs == 0 {
+            return Err(AppError::Config(
+                "database.statement_timeout_secs must be > 0".to_string(),
             ));
         }
         if self.database.acquire_timeout_secs == 0 {
@@ -104,15 +109,16 @@ mod tests {
     use super::*;
     use crate::config::{
         DatabaseConfig, GymConfig, MlConfig, NetworkConfig, NotificationConfig, RefreshConfig,
-        ScheduleConfig, ThresholdsConfig, WindowConfig,
+        ScheduleConfig, SecretString, ThresholdsConfig, WindowConfig,
     };
 
     fn valid_app_config() -> AppConfig {
         AppConfig {
             database: DatabaseConfig {
-                url: "postgres://localhost/test".to_string(),
+                url: SecretString::new("postgres://localhost/test"),
                 max_connections: 5,
                 acquire_timeout_secs: 10,
+                statement_timeout_secs: 60,
             },
             gym: GymConfig {
                 api_url: "https://example.com".to_string(),
@@ -230,6 +236,13 @@ mod tests {
 
         let mut config = valid_app_config();
         config.ml.prediction_horizon_hours = 25;
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_rejects_zero_statement_timeout() {
+        let mut config = valid_app_config();
+        config.database.statement_timeout_secs = 0;
         assert!(config.validate().is_err());
     }
 

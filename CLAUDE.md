@@ -38,9 +38,10 @@ hardy-monitor/                         (workspace root)
 │   │   │   │                          holidays (Easter)
 │   │   │   └── traits.rs              Clock, Notifier, SystemClock, MockClock, MockNotifier
 │   │   └── tests/                     Integration tests (TestDatabase / wiremock): api, api_errors,
-│   │                                  db_readings, db_averages, db_alert_settings, db_models, schema,
-│   │                                  migrations, repair, forecast_log, alert_service, ntfy, notifier,
-│   │                                  schedule_clock; common/mod.rs: TestDatabase and RawTestDatabase
+│   │                                  db_connect, db_readings, db_averages, db_alert_settings, db_models,
+│   │                                  schema, migrations, repair, forecast_log, alert_service, ntfy,
+│   │                                  notifier, schedule_clock; common/mod.rs: TestDatabase and
+│   │                                  RawTestDatabase
 │   │
 │   ├── hardy-ml/                      (library — forecasting, shared by daemon and GUI)
 │   │   ├── src/                       history, profile, features, samples, model, training/ (+ quality gate;
