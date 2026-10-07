@@ -22,7 +22,7 @@ hardy-monitor/                         (workspace root)
 │   │   │   ├── db.rs                  Database (sqlx PgPool). OccupancyLog, HourlyAverage
 │   │   │   ├── error.rs               AppError, NetworkErrorKind, DatabaseError (thiserror)
 │   │   │   ├── health.rs              HealthMonitor: outage / resumed messages for the daemon
-│   │   │   ├── repair.rs              DataRepairer. Gap filling, outlier removal, smoothing
+│   │   │   ├── repair/                DataRepairer (gap filling, outliers, smoothing); nightly.rs: automatic nightly repair
 │   │   │   ├── schedule.rs            GymSchedule, Bavarian holiday detection
 │   │   │   └── traits.rs              Clock, Notifier, SystemClock, MockClock, MockNotifier
 │   │   └── tests/                     Integration tests
