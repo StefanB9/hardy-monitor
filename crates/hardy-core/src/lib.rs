@@ -12,14 +12,6 @@ pub mod retry;
 pub mod schedule;
 pub mod traits;
 
-pub use analytics::{
-    ComparisonMode, DayAnalysis, HourlyComparison, Insight, InsightCategory, OccupancyStats,
-    PeriodComparison, TimePeriod, TrendDirection, analyze_days, build_hourly_comparisons,
-    calculate_predictions, calculate_predictions_with_clock, calculate_stats, compare_periods,
-    determine_trend, find_best_time_today, find_best_time_today_with_clock, find_peak_hours,
-    find_quiet_hours, find_quiet_windows, generate_insights, midnight_utc, weekday_name,
-    weekday_short,
-};
 pub use api::{GymApiClient, GymResponse};
 pub use chrono_tz::Tz;
 pub use config::{AppConfig, MlAlgorithm, MlConfig};
