@@ -60,7 +60,6 @@ pub struct AppConfig {
     pub refresh: RefreshConfig,
     pub notifications: NotificationConfig,
     pub thresholds: ThresholdsConfig,
-    pub analytics: AnalyticsConfig,
     pub schedule: ScheduleConfig,
     pub ml: MlConfig,
 }
@@ -256,19 +255,6 @@ impl Default for ThresholdsConfig {
 }
 
 #[derive(Debug, Deserialize, Clone)]
-pub struct AnalyticsConfig {
-    pub prediction_window_days: i64,
-}
-
-impl Default for AnalyticsConfig {
-    fn default() -> Self {
-        Self {
-            prediction_window_days: 28,
-        }
-    }
-}
-
-#[derive(Debug, Deserialize, Clone)]
 pub struct ScheduleConfig {
     /// IANA timezone the gym operates in. Opening hours, holidays and all
     /// local-time aggregation are interpreted in this zone, so results do not
@@ -393,13 +379,6 @@ impl AppConfig {
             )));
         }
 
-        if self.analytics.prediction_window_days <= 0 {
-            return Err(AppError::Config(format!(
-                "analytics.prediction_window_days must be > 0, got {}",
-                self.analytics.prediction_window_days
-            )));
-        }
-
         Ok(())
     }
 
@@ -435,7 +414,6 @@ impl AppConfig {
             .set_default("notifications.cooldown_secs", 300)?
             .set_default("thresholds.low_occupancy_percent", 40.0)?
             .set_default("thresholds.high_occupancy_percent", 75.0)?
-            .set_default("analytics.prediction_window_days", 28)?
             .set_default("schedule.timezone", "Europe/Berlin")?
             .set_default("schedule.weekday.open_hour", 6)?
             .set_default("schedule.weekday.close_hour", 23)?
@@ -547,12 +525,6 @@ mod tests {
     }
 
     #[test]
-    fn test_analytics_config_defaults() {
-        let config = AnalyticsConfig::default();
-        assert_eq!(config.prediction_window_days, 28);
-    }
-
-    #[test]
     fn test_schedule_config_defaults() {
         let config = ScheduleConfig::default();
         assert_eq!(config.weekday.open_hour, 6);
@@ -576,7 +548,6 @@ mod tests {
         assert!(config.window.width > 0.0);
         assert!(config.refresh.data_fetch_interval_secs > 0);
         assert!(config.thresholds.high_occupancy_percent > config.thresholds.low_occupancy_percent);
-        assert!(config.analytics.prediction_window_days > 0);
 
         Ok(())
     }
@@ -708,7 +679,6 @@ mod tests {
             refresh: RefreshConfig::default(),
             notifications: NotificationConfig::default(),
             thresholds: ThresholdsConfig::default(),
-            analytics: AnalyticsConfig::default(),
             schedule: ScheduleConfig::default(),
             ml: MlConfig::default(),
         }
@@ -806,16 +776,6 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_nonpositive_prediction_window_fails() {
-        let mut cfg = valid_app_config();
-        cfg.analytics.prediction_window_days = 0;
-        assert!(cfg.validate().is_err());
-
-        cfg.analytics.prediction_window_days = -1;
-        assert!(cfg.validate().is_err());
-    }
-
-    #[test]
     fn test_config_default_values_are_reasonable() {
         let network = NetworkConfig::default();
         assert!(network.request_timeout_secs > 0);
@@ -865,14 +825,6 @@ mod tests {
         assert!(config.refresh.ui_interval_secs > 0);
         assert!(config.refresh.data_fetch_interval_secs > 0);
         assert!(config.refresh.tray_poll_interval_ms > 0);
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_config_prediction_window_is_positive() -> Result<()> {
-        let config = AppConfig::load()?;
-        assert!(config.analytics.prediction_window_days > 0);
 
         Ok(())
     }

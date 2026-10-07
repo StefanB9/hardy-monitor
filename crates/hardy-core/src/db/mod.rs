@@ -163,12 +163,6 @@ impl Database {
         Ok(id)
     }
 
-    #[tracing::instrument(skip_all, fields(db.operation = "get_history", days))]
-    pub async fn get_history(&self, days: i64) -> Result<Vec<OccupancyLog>> {
-        let cutoff = Utc::now() - chrono::Duration::days(days);
-        self.get_history_from(cutoff).await
-    }
-
     #[tracing::instrument(skip_all, fields(db.operation = "get_latest"))]
     pub async fn get_latest_record(&self) -> Result<Option<OccupancyLog>> {
         let log = sqlx::query_as!(
@@ -215,28 +209,6 @@ impl Database {
         .fetch_all(&self.pool)
         .await
         .context("Failed to fetch occupancy history for date range")?;
-
-        Ok(logs)
-    }
-
-    async fn get_history_from(&self, cutoff: DateTime<Utc>) -> Result<Vec<OccupancyLog>> {
-        let logs = sqlx::query_as!(
-            OccupancyLog,
-            r#"
-            SELECT
-                id as "id!",
-                timestamp as "timestamp!",
-                percentage as "percentage!",
-                source as "source!: DataSource"
-            FROM occupancy_logs
-            WHERE timestamp >= $1
-            ORDER BY timestamp ASC
-            "#,
-            cutoff
-        )
-        .fetch_all(&self.pool)
-        .await
-        .context("Failed to fetch occupancy history")?;
 
         Ok(logs)
     }

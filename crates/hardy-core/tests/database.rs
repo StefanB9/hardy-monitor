@@ -54,9 +54,9 @@ async fn test_insert_and_get_history() {
 
     let history = tdb
         .db
-        .get_history(1)
+        .get_history_range(Utc::now() - Duration::days(1), Utc::now() + Duration::minutes(1))
         .await
-        .expect("get_history should succeed");
+        .expect("history query should succeed");
 
     assert_eq!(
         history.len(),
@@ -290,7 +290,7 @@ async fn test_concurrent_inserts() {
 
     let history = tdb
         .db
-        .get_history(1)
+        .get_history_range(Utc::now() - Duration::days(1), Utc::now() + Duration::minutes(1))
         .await
         .expect("history query should succeed");
 
@@ -514,9 +514,9 @@ async fn test_occupancy_log_datetime_parsing() {
 
     let history = tdb
         .db
-        .get_history(1)
+        .get_history_range(Utc::now() - Duration::days(1), Utc::now() + Duration::minutes(1))
         .await
-        .expect("get_history should succeed");
+        .expect("history query should succeed");
 
     assert_eq!(history.len(), 1, "clean DB should contain exactly 1 record");
     let stored = history[0].timestamp;

@@ -64,7 +64,7 @@ hardy-monitor/                         (workspace root)
 │           ├── freshness.rs           Whether the newest reading is live or stale
 │           ├── tray.rs                Tray tooltip and status dot
 │           ├── alerts.rs              Alert controls (shared settings, desktop popups)
-│           ├── notifier.rs            SystemNotifier, CombinedNotifier
+│           ├── notifier.rs            SystemNotifier (desktop popups)
 │           ├── widgets/               Canvas widgets: gauge, heatmap (WeekGrid), history_chart
 │           └── views/                 now/, week, insights, model_data/, schema_notice, opening;
 │                                      components/ (cards, buttons, …)
