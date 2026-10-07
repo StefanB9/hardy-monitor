@@ -32,7 +32,7 @@ pub struct RepairProgress {
 }
 
 /// What a repair changed.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct RepairSummary {
     pub days_processed: u32,
     pub gaps_filled: u32,

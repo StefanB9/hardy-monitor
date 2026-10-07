@@ -210,7 +210,13 @@ async fn fetch_loop(
 
         // Runs while the gym is closed too, so it comes before the closed
         // check.
-        upkeep::nightly_upkeep(worker, models).await;
+        tokio::select! {
+            () = upkeep::nightly_upkeep(worker, models) => {}
+            () = &mut shutdown => {
+                tracing::info!("shutdown requested during upkeep");
+                return;
+            }
+        }
 
         if !worker.schedule.is_open(&slot) {
             tracing::debug!(

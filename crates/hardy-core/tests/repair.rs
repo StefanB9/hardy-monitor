@@ -10,6 +10,9 @@ use std::sync::Arc;
 use chrono::{DateTime, Duration, NaiveDate, TimeZone, Utc};
 use hardy_core::{DataRepairer, GymSchedule, db::DataSource};
 
+/// Plenty of time for a nightly repair in tests.
+const BUDGET: std::time::Duration = std::time::Duration::from_secs(30);
+
 fn utc(h: u32, mi: u32) -> DateTime<Utc> {
     // Monday 2024-06-17; CEST = UTC+2, so the gym is open 04:00–21:00 UTC.
     Utc.with_ymd_and_hms(2024, 6, 17, h, mi, 0).unwrap()
@@ -85,11 +88,12 @@ async fn test_nightly_repair_runs_once_per_closed_day() -> anyhow::Result<()> {
 
     let first = tokio::time::timeout(
         std::time::Duration::from_secs(30),
-        hardy_core::repair::run_nightly_repair(&tdb.db, &schedule, after_close),
+        hardy_core::repair::run_nightly_repair(&tdb.db, &schedule, after_close, BUDGET),
     )
     .await
     .context("repair timed out")??;
-    let again = hardy_core::repair::run_nightly_repair(&tdb.db, &schedule, after_close).await?;
+    let again =
+        hardy_core::repair::run_nightly_repair(&tdb.db, &schedule, after_close, BUDGET).await?;
     let state = tdb.db.get_repair_state().await?;
     let rows = tdb.db.get_history_range(utc(8, 0), utc(8, 4)).await?;
     tdb.cleanup().await;
@@ -130,5 +134,40 @@ async fn test_repair_state_records_progress_and_failures() -> anyhow::Result<()>
     assert_eq!(done.repaired_through, Some(day));
     assert_eq!(done.last_attempt_at, Some(at + Duration::minutes(30)));
     assert_eq!(done.last_error, None);
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_nightly_repair_out_of_budget_counts_as_failure() -> anyhow::Result<()> {
+    use anyhow::Context;
+    let tdb = common::TestDatabase::new().await;
+    let schedule = GymSchedule::default();
+    tdb.db.insert_record(utc(8, 0), 40.0).await?;
+    tdb.db.insert_record(utc(8, 4), 60.0).await?;
+    let after_close = utc(21, 20);
+
+    let out_of_time = hardy_core::repair::run_nightly_repair(
+        &tdb.db,
+        &schedule,
+        after_close,
+        std::time::Duration::ZERO,
+    )
+    .await;
+    let state = tdb.db.get_repair_state().await?;
+    let retried = hardy_core::repair::run_nightly_repair(
+        &tdb.db,
+        &schedule,
+        after_close + Duration::minutes(10),
+        BUDGET,
+    )
+    .await?;
+    tdb.cleanup().await;
+
+    let error = out_of_time.err().context("no time means no repair")?;
+    assert!(format!("{error:#}").contains("time"), "{error:#}");
+    assert_eq!(state.repaired_through, None);
+    assert_eq!(state.last_attempt_at, Some(after_close));
+    assert!(state.last_error.is_some_and(|e| e.contains("time")));
+    assert!(retried.is_none(), "the usual retry delay applies");
     Ok(())
 }
