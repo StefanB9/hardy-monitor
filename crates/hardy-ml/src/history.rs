@@ -40,12 +40,13 @@ impl History {
         history
     }
 
-    /// History from stored rows, keeping only measured readings (values
-    /// written or changed by Data Repair are estimates).
+    /// History from stored rows, keeping observed readings: measured ones
+    /// and smoothed ones (a reading with a spike corrected). Interpolated
+    /// gaps and boundary anchors were never observed.
     pub fn from_logs(logs: &[OccupancyLog]) -> Self {
         Self::new(
             logs.iter()
-                .filter(|log| log.source == DataSource::Measured)
+                .filter(|log| matches!(log.source, DataSource::Measured | DataSource::Smoothed))
                 .map(|log| (log.timestamp, log.percentage))
                 .collect(),
         )
@@ -306,7 +307,7 @@ mod tests {
     }
 
     #[test]
-    fn test_from_logs_keeps_measured_only() {
+    fn test_from_logs_keeps_observations_only() {
         let log = |id, minute, source| OccupancyLog {
             id,
             timestamp: at(minute),
@@ -318,8 +319,12 @@ mod tests {
             log(2, 1, DataSource::Interpolated),
             log(3, 2, DataSource::Smoothed),
             log(4, 3, DataSource::Measured),
+            log(5, 4, DataSource::Boundary),
         ]);
-        assert_eq!(h.len(), 2);
+        // Smoothed rows are readings with a spike corrected; interpolated
+        // gaps and boundary anchors were never observed.
+        assert_eq!(h.len(), 3);
+        assert_eq!(h.last_time(), Some(at(3)));
     }
 
     proptest! {

@@ -8,11 +8,14 @@
 //! - Replaces huge outliers and spikes
 //! - Smooths data using a moving average
 
+mod nightly;
+
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Duration, NaiveDate, NaiveTime, TimeZone, Timelike, Utc};
 use futures::{StreamExt, stream};
+pub use nightly::{AFTER_CLOSE, MAX_CATCH_UP_DAYS, RETRY_AFTER, repair_due, run_nightly_repair};
 use tokio::sync::mpsc;
 
 use crate::{

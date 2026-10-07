@@ -56,6 +56,10 @@ GUI's stale-data warning covers that case.
   sees repaired data), records `repaired_through` on success, logs the
   summary. A failed repair is retried next tick, at most once per 30 min.
 - Manual repair in Model & Data unchanged.
+- Decided during implementation: smoothing relabels spiky readings as
+  `smoothed` (~15% on the dev data), which the forecasting history used to
+  drop. The history now keeps measured **and smoothed** readings;
+  interpolated and boundary rows stay excluded.
 
 ## PR 3 — Live forecast accuracy (item 7)
 

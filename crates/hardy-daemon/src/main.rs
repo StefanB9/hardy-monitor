@@ -13,7 +13,7 @@ use hardy_core::{
     config::AppConfig,
     db::{Database, SchemaStatus, minute_slot},
     health::{HealthEvent, HealthMonitor},
-    retry,
+    repair, retry,
     schedule::GymSchedule,
 };
 use hardy_ml::maintenance::ModelMaintenance;
@@ -246,11 +246,9 @@ async fn fetch_loop(
             }
         }
 
-        // Starts or collects background training; nightly runs happen while
-        // the gym is closed, so this runs before the closed check.
-        if let Err(e) = models.tick(worker.database, chrono::Utc::now()).await {
-            tracing::warn!(error = %e, "model maintenance failed");
-        }
+        // Runs while the gym is closed too, so it comes before the closed
+        // check.
+        nightly_upkeep(worker, models).await;
 
         if !worker.schedule.is_open(&slot) {
             tracing::debug!(
@@ -311,6 +309,34 @@ async fn fetch_loop(
                 }
             }
         }
+    }
+}
+
+/// Repairs the day that just closed (and any missed days), then lets model
+/// maintenance start or collect training — in this order, so the nightly
+/// retrain trains on repaired data. The repair is not raced against
+/// shutdown: each day is repaired in small committed steps and a rerun is
+/// harmless, but progress is only recorded once the range is done.
+async fn nightly_upkeep(worker: &Worker<'_>, models: &mut ModelMaintenance) {
+    run_repair(worker).await;
+    if let Err(e) = models.tick(worker.database, chrono::Utc::now()).await {
+        tracing::warn!(error = %e, "model maintenance failed");
+    }
+}
+
+async fn run_repair(worker: &Worker<'_>) {
+    match repair::run_nightly_repair(worker.database, worker.schedule, chrono::Utc::now()).await {
+        Ok(Some(((first, last), summary))) => tracing::info!(
+            %first,
+            %last,
+            gaps_filled = summary.gaps_filled,
+            records_deleted = summary.records_deleted,
+            records_smoothed = summary.records_smoothed,
+            boundary_entries_added = summary.boundary_entries_added,
+            "nightly data repair done"
+        ),
+        Ok(None) => {}
+        Err(e) => tracing::warn!(error = %format!("{e:#}"), "nightly data repair failed"),
     }
 }
 

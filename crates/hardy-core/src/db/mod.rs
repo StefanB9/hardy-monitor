@@ -14,9 +14,11 @@ use crate::{config::DatabaseConfig, error::AppError, traits::Clock};
 
 mod alert_settings;
 mod ml;
+mod repair_state;
 mod schema;
 
 pub use ml::{MlState, ModelInfo, NewModel};
+pub use repair_state::RepairState;
 pub use schema::{Migrations, SchemaStatus, app_schema_version};
 
 /// Where a stored value came from.
