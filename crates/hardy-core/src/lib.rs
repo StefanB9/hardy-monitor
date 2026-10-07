@@ -4,6 +4,7 @@ pub mod api;
 pub mod config;
 pub mod db;
 pub mod error;
+pub mod health;
 pub mod ntfy;
 pub mod repair;
 pub mod retry;

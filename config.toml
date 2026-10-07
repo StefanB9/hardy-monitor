@@ -52,6 +52,9 @@ ntfy_server = "https://ntfy.sh"
 cooldown_secs = 300
 # No alerts this long after opening (it is always empty at opening time)
 opening_grace_minutes = 60
+# Tell the alert topic when no readings were stored for this many minutes
+# while the gym is open (and again when they resume)
+health_after_minutes = 5
 # Optional gym-local times in which alerts may fire; empty = any opening hour.
 # days: "daily", "weekdays" or "weekends" (holidays count as weekends)
 # windows = [
