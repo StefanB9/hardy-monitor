@@ -1,10 +1,15 @@
 //! Training: build samples, optionally tune, check against the slot-average
 //! baseline on a recent holdout, then refit on all data.
 
+mod intervals;
+mod tuning;
+
 use chrono::{DateTime, TimeDelta, Utc};
 use hardy_core::GymSchedule;
-use rayon::prelude::*;
+pub use intervals::HorizonIntervals;
+use intervals::horizon_statistics;
 use serde::{Deserialize, Serialize};
+use tuning::grid_search;
 
 use crate::{
     error::MlError,
@@ -18,11 +23,6 @@ use crate::{
 
 /// Fewer holdout samples than this cannot judge a model.
 pub const MIN_HOLDOUT_SAMPLES: usize = 50;
-/// Folds for the weekly grid search.
-const TUNING_FOLDS: usize = 3;
-/// Gap between a fold's training anchors and its validation anchors; longer
-/// than any horizon so no training target overlaps validation.
-const TUNING_GAP: TimeDelta = TimeDelta::hours(24);
 
 /// How hyperparameters are chosen.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -42,25 +42,6 @@ pub struct TrainOptions {
     /// Minimum training samples (before the holdout).
     pub min_samples: usize,
     pub holdout_days: i64,
-}
-
-/// 10th / 90th percentile of out-of-sample residuals (actual − predicted),
-/// per horizon; index `h - 1`.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct HorizonIntervals {
-    lower: Vec<f64>,
-    upper: Vec<f64>,
-}
-
-impl HorizonIntervals {
-    /// `(lower, upper)` residual offsets for a horizon; `(0, 0)` if unknown.
-    pub fn offsets(&self, hours_ahead: u32) -> (f64, f64) {
-        let i = (hours_ahead as usize).saturating_sub(1);
-        (
-            self.lower.get(i).copied().unwrap_or(0.0),
-            self.upper.get(i).copied().unwrap_or(0.0),
-        )
-    }
 }
 
 /// How the model did on the holdout, versus the slot-average baseline.
@@ -209,129 +190,23 @@ pub fn train(
     })
 }
 
-fn rows(samples: &[Sample]) -> Vec<FeatureRow> {
+pub(super) fn rows(samples: &[Sample]) -> Vec<FeatureRow> {
     samples.iter().map(|s| s.features).collect()
 }
 
-fn fit(algorithm: Algorithm, params: RfParams, samples: &[Sample]) -> Result<Model, MlError> {
+pub(super) fn fit(
+    algorithm: Algorithm,
+    params: RfParams,
+    samples: &[Sample],
+) -> Result<Model, MlError> {
     let targets: Vec<f64> = samples.iter().map(|s| s.target).collect();
     Model::fit(algorithm, params, &rows(samples), &targets)
 }
 
-/// Picks the grid entry with the lowest mean validation MAE over
-/// time-ordered folds.
-fn grid_search(samples: &[Sample]) -> RfParams {
-    let folds = time_folds(samples);
-    if folds.is_empty() {
-        return RfParams::DEFAULT;
-    }
-    let scored: Vec<(RfParams, f64)> = RfParams::weekly_grid()
-        .into_par_iter()
-        .map(|params| {
-            let maes: Vec<f64> = folds
-                .iter()
-                .filter_map(|(train, validation)| {
-                    let model = fit(Algorithm::RandomForest, params, train).ok()?;
-                    let predicted = model.predict_batch(&rows(validation)).ok()?;
-                    let actual: Vec<f64> = validation.iter().map(|s| s.target).collect();
-                    evaluation::mae(&predicted, &actual)
-                })
-                .collect();
-            #[allow(clippy::cast_precision_loss)]
-            let mean = if maes.len() == folds.len() {
-                maes.iter().sum::<f64>() / maes.len() as f64
-            } else {
-                f64::INFINITY
-            };
-            (params, mean)
-        })
-        .collect();
-    let best = scored
-        .iter()
-        .filter(|(_, mae)| mae.is_finite())
-        .min_by(|a, b| a.1.total_cmp(&b.1))
-        .map(|(params, mae)| {
-            tracing::info!(?params, cv_mae = mae, "grid search winner");
-            *params
-        });
-    best.unwrap_or(RfParams::DEFAULT)
-}
-
-/// Expanding-window folds: validate on each of the last `TUNING_FOLDS`
-/// chunks, train on anchors at least [`TUNING_GAP`] before it.
-fn time_folds(samples: &[Sample]) -> Vec<(Vec<Sample>, Vec<Sample>)> {
-    let chunk = samples.len() / (TUNING_FOLDS + 1);
-    if chunk == 0 {
-        return Vec::new();
-    }
-    (1..=TUNING_FOLDS)
-        .filter_map(|k| {
-            let validation = &samples[k * chunk..((k + 1) * chunk).min(samples.len())];
-            let validation_start = validation.first()?.anchor;
-            let train: Vec<Sample> = samples
-                .iter()
-                .take_while(|s| s.anchor < validation_start - TUNING_GAP)
-                .copied()
-                .collect();
-            (!train.is_empty()).then(|| (train, validation.to_vec()))
-        })
-        .collect()
-}
-
-fn horizon_statistics(
-    holdout: &[Sample],
-    predictions: &[f64],
-    max_hours_ahead: u32,
-) -> (HorizonIntervals, Vec<f64>) {
-    let horizons = max_hours_ahead as usize;
-    let mut residuals: Vec<Vec<f64>> = vec![Vec::new(); horizons];
-    for (sample, predicted) in holdout.iter().zip(predictions) {
-        if let Some(bucket) = residuals.get_mut((sample.hours_ahead as usize).saturating_sub(1)) {
-            bucket.push(sample.target - predicted);
-        }
-    }
-    let mut lower = Vec::with_capacity(horizons);
-    let mut upper = Vec::with_capacity(horizons);
-    let mut mae_by_horizon = Vec::with_capacity(horizons);
-    for mut bucket in residuals {
-        bucket.sort_by(f64::total_cmp);
-        lower.push(quantile(&bucket, 0.10));
-        upper.push(quantile(&bucket, 0.90));
-        #[allow(clippy::cast_precision_loss)]
-        let mae = if bucket.is_empty() {
-            f64::NAN
-        } else {
-            bucket.iter().map(|r| r.abs()).sum::<f64>() / bucket.len() as f64
-        };
-        mae_by_horizon.push(mae);
-    }
-    (HorizonIntervals { lower, upper }, mae_by_horizon)
-}
-
-/// Linear-interpolated quantile of sorted data; 0 for empty input.
-fn quantile(sorted: &[f64], q: f64) -> f64 {
-    match sorted.len() {
-        0 => 0.0,
-        1 => sorted[0],
-        n => {
-            #[allow(clippy::cast_precision_loss)]
-            let position = q.clamp(0.0, 1.0) * (n - 1) as f64;
-            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-            let below = position.floor() as usize;
-            let above = (below + 1).min(n - 1);
-            #[allow(clippy::cast_precision_loss)]
-            let weight = position - below as f64;
-            sorted[below] * (1.0 - weight) + sorted[above] * weight
-        }
-    }
-}
-
 #[cfg(test)]
 pub(crate) mod tests {
-    use anyhow::{Context, Result};
-    use approx::assert_relative_eq;
+    use anyhow::Result;
     use chrono::TimeZone;
-    use proptest::prelude::*;
 
     use super::*;
 
@@ -450,58 +325,5 @@ pub(crate) mod tests {
             ),
             Err(MlError::InsufficientData { found: 0, .. })
         ));
-    }
-
-    #[test]
-    fn test_time_folds_keep_gap_between_train_and_validation() -> Result<()> {
-        let history = learnable_history(21);
-        let schedule = GymSchedule::default();
-        let profile = SlotProfile::from_history(history.view(), schedule.timezone());
-        let samples = build_samples(
-            &history,
-            &profile,
-            &schedule,
-            SampleWindow {
-                anchors_from: local(0, 0, 0),
-                anchors_until: local(21, 0, 0),
-                targets_until: local(21, 0, 0),
-            },
-            6,
-        );
-        let folds = time_folds(&samples);
-        assert_eq!(folds.len(), TUNING_FOLDS);
-        for (train, validation) in &folds {
-            let last_train = train.last().context("train")?.anchor;
-            let first_validation = validation.first().context("validation")?.anchor;
-            assert!(first_validation - last_train > TUNING_GAP);
-        }
-        Ok(())
-    }
-
-    #[test]
-    fn test_quantile() {
-        assert_relative_eq!(quantile(&[], 0.5), 0.0);
-        assert_relative_eq!(quantile(&[3.0], 0.9), 3.0);
-        assert_relative_eq!(quantile(&[0.0, 10.0], 0.1), 1.0);
-        assert_relative_eq!(quantile(&[0.0, 5.0, 10.0], 0.5), 5.0);
-    }
-
-    proptest! {
-        #![proptest_config(ProptestConfig::with_cases(1000))]
-
-        #[test]
-        fn quantile_is_bounded_and_monotonic(
-            mut values in prop::collection::vec(-50.0f64..50.0, 1..100),
-            q1 in 0.0f64..1.0,
-            q2 in 0.0f64..1.0,
-        ) {
-            values.sort_by(f64::total_cmp);
-            let (lo, hi) = (q1.min(q2), q1.max(q2));
-            let a = quantile(&values, lo);
-            let b = quantile(&values, hi);
-            prop_assert!(a <= b + 1e-12);
-            prop_assert!(a >= values[0] - 1e-12);
-            prop_assert!(b <= values[values.len() - 1] + 1e-12);
-        }
     }
 }
