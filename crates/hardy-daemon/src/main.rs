@@ -1,6 +1,8 @@
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
+mod connect;
+
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -9,7 +11,8 @@ use hardy_core::{
     alert::AlertService,
     api::GymApiClient,
     config::AppConfig,
-    db::{Database, minute_slot},
+    db::{Database, SchemaStatus, minute_slot},
+    health::{HealthEvent, HealthMonitor},
     retry,
     schedule::GymSchedule,
 };
@@ -61,6 +64,8 @@ fn setup_logging() -> Option<tracing_appender::non_blocking::WorkerGuard> {
 }
 
 const DRIFT_THRESHOLD_SECS: i64 = 5;
+/// Fetch cycles between schema version checks (about ten minutes).
+const SCHEMA_CHECK_ITERATIONS: u64 = 10;
 const ALIGNMENT_CHECK_ITERATIONS: u64 = 60;
 
 /// Per-tick retries: three attempts, waiting 2 s then 4 s.
@@ -96,23 +101,34 @@ async fn run(config: &AppConfig) -> Result<()> {
     let shutdown = shutdown_signal();
     tokio::pin!(shutdown);
 
+    let schedule = GymSchedule::new(&config.schedule);
+    let alerts = AlertService::new(
+        &config.notifications,
+        &config.network,
+        schedule.clone(),
+        chrono::Utc::now(),
+    )?;
+    let mut health = HealthMonitor::new(config.notifications.health_after_minutes);
+
     let connect_policy = RetryPolicy::new(u32::MAX, CONNECT_RETRY_INITIAL, CONNECT_RETRY_MAX)?;
     tracing::info!("Connecting to database...");
-    let database = tokio::select! {
-        result = retry(&connect_policy, "connect_database", || async {
-            Database::connect(&config.database)
-                .await
-                .map_err(|e| AppError::from_anyhow_sqlx(&e, "connect_database"))
-        }) => result.context("Failed to connect to database")?,
-        () = &mut shutdown => {
-            tracing::info!("shutdown requested before the database connected");
-            return Ok(());
-        }
+    let Some(database) = connect::connect_database(
+        &config.database,
+        &connect_policy,
+        &schedule,
+        &alerts,
+        &mut health,
+        shutdown.as_mut(),
+    )
+    .await
+    .context("Failed to connect to database")?
+    else {
+        tracing::info!("shutdown requested before the database connected");
+        return Ok(());
     };
     tracing::info!("Database connected successfully");
 
     let api_client = GymApiClient::new(config.gym.api_url.clone(), &config.network)?;
-    let schedule = GymSchedule::new(&config.schedule);
     tracing::info!(
         timezone = %schedule.timezone(),
         weekday_open = config.schedule.weekday.open_hour,
@@ -133,12 +149,7 @@ async fn run(config: &AppConfig) -> Result<()> {
             .max(Duration::from_secs(1)),
     };
 
-    let mut alerts = AlertService::new(
-        &config.notifications,
-        &config.network,
-        schedule.clone(),
-        chrono::Utc::now(),
-    )?;
+    let mut alerts = alerts;
     tracing::info!(
         alert_topic = config.notifications.ntfy_topic.is_some(),
         control_topic = config.notifications.control_topic.is_some(),
@@ -153,6 +164,7 @@ async fn run(config: &AppConfig) -> Result<()> {
     fetch_loop(
         &worker,
         &mut alerts,
+        &mut health,
         &mut models,
         config.refresh.data_fetch_interval_secs,
         shutdown.as_mut(),
@@ -178,6 +190,7 @@ struct Worker<'a> {
 async fn fetch_loop(
     worker: &Worker<'_>,
     alerts: &mut AlertService,
+    health: &mut HealthMonitor,
     models: &mut ModelMaintenance,
     interval_secs: u64,
     mut shutdown: std::pin::Pin<&mut impl std::future::Future<Output = ()>>,
@@ -193,6 +206,7 @@ async fn fetch_loop(
 
     let mut interval = new_interval(interval_secs);
     let mut iteration_count: u64 = 0;
+    let mut schema_reported = false;
 
     loop {
         tokio::select! {
@@ -208,6 +222,10 @@ async fn fetch_loop(
         {
             interval = new_interval(interval_secs);
             interval.tick().await;
+        }
+
+        if iteration_count.is_multiple_of(SCHEMA_CHECK_ITERATIONS) {
+            check_schema(worker.database, alerts, &mut schema_reported).await;
         }
 
         // The slot is fixed when the tick fires, so retries store the reading
@@ -261,9 +279,23 @@ async fn fetch_loop(
             Ok(Ok(Stored::Inserted(percentage))) => Some(*percentage),
             _ => None,
         };
+        let health_event = match &outcome {
+            Ok(Ok(_)) => health.success(slot),
+            Ok(Err(e)) => health.failure(slot, &e.to_string()),
+            Err(_) => health.failure(slot, "fetch cycle timed out"),
+        };
         log_outcome(slot, outcome);
         if stop {
             return;
+        }
+        if let Some(event) = health_event {
+            tokio::select! {
+                () = alerts.publish_health(&event) => {}
+                () = &mut shutdown => {
+                    tracing::info!("shutdown requested");
+                    return;
+                }
+            }
         }
 
         if let Some(percentage) = stored_percentage {
@@ -279,6 +311,27 @@ async fn fetch_loop(
                 }
             }
         }
+    }
+}
+
+/// Reports once if a newer build migrated the database while this daemon
+/// runs. It keeps running: additive migrations may still work, and real
+/// breakage shows up as a health outage.
+async fn check_schema(database: &Database, alerts: &AlertService, reported: &mut bool) {
+    match database.schema_status().await {
+        Ok(SchemaStatus::DbNewer { db, app }) if !*reported => {
+            tracing::error!(
+                db,
+                app,
+                "database schema is newer than this daemon; update it"
+            );
+            alerts
+                .publish_health(&HealthEvent::SchemaAhead { db, app })
+                .await;
+            *reported = true;
+        }
+        Ok(_) => {}
+        Err(e) => tracing::warn!(error = %e, "could not check the database schema"),
     }
 }
 

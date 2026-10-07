@@ -11,10 +11,11 @@ use hardy_core::{
     GymSchedule,
     alert::{AlertDuration, AlertService, AlertSettings, SettingsSource},
     config::{NetworkConfig, NotificationConfig},
+    health::{HEALTH_TITLE, HealthEvent},
 };
 use wiremock::{
     Mock, MockServer, ResponseTemplate,
-    matchers::{body_string_contains, method, path, query_param},
+    matchers::{body_string_contains, header, method, path, query_param},
 };
 
 /// Monday 2024-06-17 at `h:mi` CEST, as UTC.
@@ -280,4 +281,24 @@ async fn test_alert_service_no_alert_when_disarmed() {
     );
 
     tdb.cleanup().await;
+}
+
+#[tokio::test]
+async fn test_alert_service_publishes_health_events_in_gym_time() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/alerts"))
+        .and(header("Title", HEALTH_TITLE))
+        .and(body_string_contains("No readings stored since 20:39"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let svc = service(&server, false, local(20, 0));
+    svc.publish_health(&HealthEvent::Down {
+        since: local(20, 39),
+        reason: "insert failed".to_string(),
+    })
+    .await;
 }

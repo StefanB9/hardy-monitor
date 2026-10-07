@@ -12,6 +12,7 @@ use crate::{
     config::{NetworkConfig, NotificationConfig},
     db::Database,
     error::AppError,
+    health::{HEALTH_TITLE, HealthEvent},
     ntfy::{NtfyClient, PollSince},
     schedule::GymSchedule,
 };
@@ -138,13 +139,25 @@ impl AlertService {
         Ok(alert)
     }
 
+    /// Sends a data-collection health message to the alert topic, with times
+    /// in the gym's timezone.
+    #[tracing::instrument(skip(self))]
+    pub async fn publish_health(&self, event: &HealthEvent) {
+        self.publish_titled(HEALTH_TITLE, &event.body(self.schedule.timezone()))
+            .await;
+    }
+
     /// Delivery failures are logged, never propagated: alerts must not
     /// disturb data collection.
     async fn publish(&self, body: &str) {
+        self.publish_titled(Alert::TITLE, body).await;
+    }
+
+    async fn publish_titled(&self, title: &str, body: &str) {
         let (Some(ntfy), Some(topic)) = (&self.ntfy, &self.alert_topic) else {
             return;
         };
-        if let Err(e) = ntfy.publish(topic, Alert::TITLE, body).await {
+        if let Err(e) = ntfy.publish(topic, title, body).await {
             tracing::warn!(error = %e, "failed to publish to ntfy");
         }
     }

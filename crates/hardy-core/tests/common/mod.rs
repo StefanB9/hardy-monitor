@@ -69,6 +69,7 @@ pub struct RawTestDatabase {
     db_name: String,
     admin_pool: PgPool,
     pub pool: PgPool,
+    pub url: String,
 }
 
 #[allow(dead_code)]
@@ -82,6 +83,7 @@ impl RawTestDatabase {
             db_name,
             admin_pool,
             pool,
+            url: test_url,
         }
     }
 

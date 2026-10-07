@@ -28,6 +28,9 @@ pub enum AppError {
 
     #[error("ML training error: {0}")]
     MlTraining(String),
+
+    #[error("Database schema {db} is newer than this build ({app}): update this program")]
+    SchemaTooNew { db: i64, app: i64 },
 }
 
 #[derive(Error, Debug, Clone, PartialEq, Eq)]
@@ -109,6 +112,12 @@ impl AppError {
     /// timeouts) stay retryable; anything else becomes a non-retryable
     /// `QueryFailed`.
     pub fn from_anyhow_sqlx(err: &anyhow::Error, context: &str) -> Self {
+        if let Some(app_err @ AppError::SchemaTooNew { .. }) = err
+            .chain()
+            .find_map(|cause| cause.downcast_ref::<AppError>())
+        {
+            return app_err.clone();
+        }
         err.chain()
             .find_map(|cause| cause.downcast_ref::<sqlx::Error>())
             .map_or_else(
@@ -171,6 +180,7 @@ impl AppError {
             AppError::Api { .. } => "api",
             AppError::Unknown(_) => "unknown",
             AppError::MlTraining(_) => "ml_training",
+            AppError::SchemaTooNew { .. } => "schema",
         }
     }
 }
@@ -180,6 +190,26 @@ mod tests {
     use anyhow::Result;
 
     use super::*;
+
+    #[test]
+    fn test_schema_too_new_display_category_and_not_retryable() {
+        let err = AppError::SchemaTooNew { db: 7, app: 5 };
+        assert_eq!(
+            err.to_string(),
+            "Database schema 7 is newer than this build (5): update this program"
+        );
+        assert_eq!(err.category(), "schema");
+        assert!(!err.is_retryable());
+    }
+
+    #[test]
+    fn test_from_anyhow_sqlx_keeps_schema_too_new() {
+        let err = anyhow::Error::new(AppError::SchemaTooNew { db: 7, app: 5 }).context("connect");
+        assert!(matches!(
+            AppError::from_anyhow_sqlx(&err, "connect_database"),
+            AppError::SchemaTooNew { db: 7, app: 5 }
+        ));
+    }
 
     #[test]
     fn test_retryable_network_timeout() {

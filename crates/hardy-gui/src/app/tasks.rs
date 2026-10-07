@@ -20,6 +20,13 @@ fn db_err(op: &'static str) -> impl Fn(anyhow::Error) -> AppError {
 }
 
 impl HardyMonitorApp {
+    pub(super) fn check_schema(&self) -> Task<Message> {
+        let db = self.db.clone();
+        Task::perform(async move { db.schema_status().await }, |r| {
+            Message::SchemaChecked(r.map_err(db_err("schema_status")))
+        })
+    }
+
     pub(super) fn load_alert_settings(&self) -> Task<Message> {
         let db = self.db.clone();
         Task::perform(async move { db.get_alert_settings().await }, |r| {

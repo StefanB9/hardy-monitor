@@ -5,6 +5,7 @@ pub mod insights;
 pub mod model_data;
 pub mod now;
 pub mod opening;
+pub mod schema_notice;
 pub mod week;
 
 pub use insights::InsightsProps;
