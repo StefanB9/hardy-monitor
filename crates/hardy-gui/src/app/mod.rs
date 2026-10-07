@@ -1,7 +1,9 @@
 //! Application state, messages and the iced entry points.
 
+mod data;
 mod maintenance;
 mod message;
+mod sidebar;
 mod tasks;
 mod update;
 mod view;
