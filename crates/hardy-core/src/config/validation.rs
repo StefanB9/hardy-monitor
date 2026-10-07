@@ -4,7 +4,7 @@ use super::AppConfig;
 use crate::error::AppError;
 
 impl AppConfig {
-    /// Rejects values that would make the app misbehave (e.g. inverted\nopening
+    /// Rejects values that would make the app misbehave (e.g. inverted opening
     /// hours or thresholds, zero intervals).
     pub fn validate(&self) -> Result<(), AppError> {
         if self.database.max_connections == 0 {

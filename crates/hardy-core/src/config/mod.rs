@@ -19,7 +19,7 @@ use serde::Deserialize;
 use tracing::warn;
 
 /// The whole configuration: defaults, then `config.toml`, then `HARDY__…`
-/// environment\nvariables.
+/// environment variables.
 #[derive(Debug, Deserialize, Clone)]
 pub struct AppConfig {
     pub database: DatabaseConfig,

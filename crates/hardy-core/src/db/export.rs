@@ -9,7 +9,7 @@ use super::{DataSource, Database, OccupancyLog};
 use crate::traits::Clock;
 
 impl Database {
-    /// Writes every reading to a timestamped CSV file in `output_dir`;\nreturns
+    /// Writes every reading to a timestamped CSV file in `output_dir`; returns
     /// its path.
     #[tracing::instrument(skip_all, fields(db.operation = "export_csv", output_dir = %output_dir.display()))]
     pub async fn export_to_csv(&self, output_dir: &Path, clock: &dyn Clock) -> Result<PathBuf> {
