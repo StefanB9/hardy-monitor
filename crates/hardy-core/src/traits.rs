@@ -19,6 +19,7 @@ pub trait Clock: Send + Sync {
     fn now_utc(&self) -> DateTime<Utc>;
 }
 
+/// [`Clock`] reading the system time.
 #[derive(Debug, Clone, Default)]
 pub struct SystemClock;
 
@@ -28,18 +29,21 @@ impl Clock for SystemClock {
     }
 }
 
+/// [`Clock`] for tests: a settable time shared between clones.
 #[derive(Debug, Clone)]
 pub struct MockClock {
     utc_time: Arc<Mutex<DateTime<Utc>>>,
 }
 
 impl MockClock {
+    /// A clock frozen at `time`.
     pub fn new(time: DateTime<Utc>) -> Self {
         Self {
             utc_time: Arc::new(Mutex::new(time)),
         }
     }
 
+    /// Moves the clock to `time`.
     pub fn set_time(&self, time: DateTime<Utc>) {
         *self
             .utc_time
@@ -47,6 +51,7 @@ impl MockClock {
             .unwrap_or_else(std::sync::PoisonError::into_inner) = time;
     }
 
+    /// Moves the clock forward by `duration`.
     pub fn advance(&self, duration: chrono::Duration) {
         let mut time = self
             .utc_time
@@ -65,20 +70,24 @@ impl Clock for MockClock {
     }
 }
 
+/// Sends a notification with a title and body.
 pub trait Notifier: Send + Sync {
     fn notify<'s>(&'s self, title: &str, body: &str) -> BoxFuture<'s, Result<()>>;
 }
 
+/// [`Notifier`] for tests: records every notification instead of sending it.
 #[derive(Debug, Clone, Default)]
 pub struct MockNotifier {
     notifications: Arc<Mutex<Vec<(String, String)>>>,
 }
 
 impl MockNotifier {
+    /// A notifier with nothing recorded.
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// Recorded `(title, body)` pairs, oldest first.
     pub fn get_notifications(&self) -> Vec<(String, String)> {
         self.notifications
             .lock()
@@ -86,6 +95,7 @@ impl MockNotifier {
             .clone()
     }
 
+    /// How many notifications were recorded.
     pub fn notification_count(&self) -> usize {
         self.notifications
             .lock()
@@ -93,6 +103,7 @@ impl MockNotifier {
             .len()
     }
 
+    /// Forgets all recorded notifications.
     pub fn clear(&self) {
         self.notifications
             .lock()
@@ -100,6 +111,7 @@ impl MockNotifier {
             .clear();
     }
 
+    /// Whether anything was recorded.
     pub fn was_called(&self) -> bool {
         !self
             .notifications

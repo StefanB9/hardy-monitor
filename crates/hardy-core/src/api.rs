@@ -7,6 +7,7 @@ use crate::{
     error::{AppError, NetworkErrorKind},
 };
 
+/// Occupancy as reported by the gym API.
 #[derive(Debug, Deserialize)]
 pub struct GymResponse {
     pub gym: i32,
@@ -36,6 +37,7 @@ impl GymResponse {
     }
 }
 
+/// HTTP client for the gym's occupancy endpoint.
 #[derive(Clone, Debug)]
 pub struct GymApiClient {
     client: reqwest::Client,
@@ -43,6 +45,7 @@ pub struct GymApiClient {
 }
 
 impl GymApiClient {
+    /// Builds a client for `url` with the configured timeouts.
     #[tracing::instrument(skip_all)]
     pub fn new(url: String, network_config: &NetworkConfig) -> Result<Self, AppError> {
         let client = reqwest::Client::builder()
@@ -57,6 +60,7 @@ impl GymApiClient {
         Ok(Self { client, url })
     }
 
+    /// Fetches and validates the current occupancy.
     #[tracing::instrument(skip_all, fields(url = %self.url, http.status_code = tracing::field::Empty))]
     pub async fn fetch_occupancy(&self) -> Result<GymResponse, AppError> {
         let response = self

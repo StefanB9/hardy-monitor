@@ -7,7 +7,7 @@ mod common;
 
 use std::sync::Arc;
 
-use chrono::{DateTime, NaiveDate, TimeZone, Utc};
+use chrono::{DateTime, Duration, NaiveDate, TimeZone, Utc};
 use hardy_core::{DataRepairer, GymSchedule, db::DataSource};
 
 fn utc(h: u32, mi: u32) -> DateTime<Utc> {
@@ -101,5 +101,34 @@ async fn test_nightly_repair_runs_once_per_closed_day() -> anyhow::Result<()> {
     assert_eq!(state.repaired_through, Some(monday));
     assert_eq!(state.last_error, None);
     assert_eq!(rows.len(), 5);
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_repair_state_records_progress_and_failures() -> anyhow::Result<()> {
+    use anyhow::Context;
+    let tdb = common::TestDatabase::new().await;
+    let initial = tdb.db.get_repair_state().await?;
+
+    let at = Utc
+        .with_ymd_and_hms(2024, 6, 18, 21, 30, 0)
+        .single()
+        .context("time")?;
+    let day = NaiveDate::from_ymd_opt(2024, 6, 18).context("date")?;
+    tdb.db.record_repair_failure(at, "boom").await?;
+    let failed = tdb.db.get_repair_state().await?;
+    tdb.db
+        .record_repair_success(day, at + Duration::minutes(30))
+        .await?;
+    let done = tdb.db.get_repair_state().await?;
+    tdb.cleanup().await;
+
+    assert_eq!(initial, hardy_core::db::RepairState::default());
+    assert_eq!(failed.repaired_through, None);
+    assert_eq!(failed.last_attempt_at, Some(at));
+    assert_eq!(failed.last_error.as_deref(), Some("boom"));
+    assert_eq!(done.repaired_through, Some(day));
+    assert_eq!(done.last_attempt_at, Some(at + Duration::minutes(30)));
+    assert_eq!(done.last_error, None);
     Ok(())
 }

@@ -55,6 +55,7 @@ pub struct Alert {
 }
 
 impl Alert {
+    /// Notification title of every alert.
     pub const TITLE: &'static str = "Hardy's Gym Monitor";
 
     /// Notification body, e.g. "Quiet now: 18% (below 25%)".
@@ -80,6 +81,7 @@ pub struct AlertEngine {
 }
 
 impl AlertEngine {
+    /// An engine that has not fired yet.
     pub fn new(rules: AlertRules) -> Self {
         Self {
             rules,

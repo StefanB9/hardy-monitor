@@ -1,29 +1,29 @@
+//! A forecast value with its interval and the method that produced it.
+
 use chrono::{DateTime, Utc};
 
+/// How a forecast value was produced.
 #[derive(Debug, Clone, PartialEq)]
 pub enum PredictionMethod {
+    /// A trained model other than a random forest.
     MachineLearning { confidence: f64 },
+    /// A trained random forest.
     RandomForest { confidence: f64, n_trees: usize },
+    /// Plain slot averages (no usable model).
     HistoricalAverage,
 }
 
 impl PredictionMethod {
+    /// Whether a trained model produced the value.
     pub fn is_ml(&self) -> bool {
         matches!(
             self,
             PredictionMethod::MachineLearning { .. } | PredictionMethod::RandomForest { .. }
         )
     }
-
-    pub fn confidence(&self) -> f64 {
-        match self {
-            PredictionMethod::MachineLearning { confidence }
-            | PredictionMethod::RandomForest { confidence, .. } => *confidence,
-            PredictionMethod::HistoricalAverage => 0.5,
-        }
-    }
 }
 
+/// One forecast value: clamped to 0–100 % with an interval that contains it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PredictionWithConfidence {
     pub timestamp: DateTime<Utc>,
@@ -35,6 +35,8 @@ pub struct PredictionWithConfidence {
 }
 
 impl PredictionWithConfidence {
+    /// Clamps all values to their ranges, orders the interval and widens it
+    /// to contain the predicted value.
     pub fn new(
         timestamp: DateTime<Utc>,
         predicted_value: f64,
@@ -64,23 +66,6 @@ impl PredictionWithConfidence {
             method,
         }
     }
-
-    pub fn is_valid(&self) -> bool {
-        self.predicted_value >= 0.0
-            && self.predicted_value <= 100.0
-            && self.confidence_low <= self.predicted_value
-            && self.confidence_high >= self.predicted_value
-            && self.confidence_score >= 0.0
-            && self.confidence_score <= 1.0
-    }
-
-    pub fn interval_width(&self) -> f64 {
-        self.confidence_high - self.confidence_low
-    }
-
-    pub fn to_simple(&self) -> (DateTime<Utc>, f64) {
-        (self.timestamp, self.predicted_value)
-    }
 }
 
 #[cfg(test)]
@@ -91,6 +76,14 @@ mod tests {
 
     use super::*;
 
+    /// The invariant `new` guarantees.
+    fn is_valid(p: &PredictionWithConfidence) -> bool {
+        (0.0..=100.0).contains(&p.predicted_value)
+            && p.confidence_low <= p.predicted_value
+            && p.confidence_high >= p.predicted_value
+            && (0.0..=1.0).contains(&p.confidence_score)
+    }
+
     #[test]
     fn test_prediction_method_is_ml() {
         let ml = PredictionMethod::MachineLearning { confidence: 0.8 };
@@ -98,15 +91,6 @@ mod tests {
 
         assert!(ml.is_ml());
         assert!(!avg.is_ml());
-    }
-
-    #[test]
-    fn test_prediction_method_confidence() {
-        let ml = PredictionMethod::MachineLearning { confidence: 0.8 };
-        let avg = PredictionMethod::HistoricalAverage;
-
-        assert_relative_eq!(ml.confidence(), 0.8);
-        assert_relative_eq!(avg.confidence(), 0.5);
     }
 
     #[test]
@@ -124,7 +108,7 @@ mod tests {
         assert_relative_eq!(pred.predicted_value, 50.0);
         assert_relative_eq!(pred.confidence_low, 40.0);
         assert_relative_eq!(pred.confidence_high, 60.0);
-        assert!(pred.is_valid());
+        assert!(is_valid(&pred));
     }
 
     #[test]
@@ -143,63 +127,6 @@ mod tests {
         assert_relative_eq!(pred.confidence_low, 0.0);
         assert_relative_eq!(pred.confidence_high, 100.0);
         assert_relative_eq!(pred.confidence_score, 1.0);
-    }
-
-    #[test]
-    fn test_interval_width() {
-        let timestamp = Utc.with_ymd_and_hms(2024, 6, 17, 10, 0, 0).unwrap();
-        let pred = PredictionWithConfidence::new(
-            timestamp,
-            50.0,
-            35.0,
-            65.0,
-            0.7,
-            PredictionMethod::HistoricalAverage,
-        );
-
-        assert_relative_eq!(pred.interval_width(), 30.0);
-    }
-
-    #[test]
-    fn test_to_simple() {
-        let timestamp = Utc.with_ymd_and_hms(2024, 6, 17, 10, 0, 0).unwrap();
-        let pred = PredictionWithConfidence::new(
-            timestamp,
-            50.0,
-            40.0,
-            60.0,
-            0.8,
-            PredictionMethod::HistoricalAverage,
-        );
-
-        let (ts, val) = pred.to_simple();
-        assert_eq!(ts, timestamp);
-        assert_relative_eq!(val, 50.0);
-    }
-
-    #[test]
-    fn test_is_valid() {
-        let timestamp = Utc.with_ymd_and_hms(2024, 6, 17, 10, 0, 0).unwrap();
-
-        let valid = PredictionWithConfidence {
-            timestamp,
-            predicted_value: 50.0,
-            confidence_low: 40.0,
-            confidence_high: 60.0,
-            confidence_score: 0.8,
-            method: PredictionMethod::HistoricalAverage,
-        };
-        assert!(valid.is_valid());
-
-        let invalid = PredictionWithConfidence {
-            timestamp,
-            predicted_value: 50.0,
-            confidence_low: 60.0,
-            confidence_high: 70.0,
-            confidence_score: 0.8,
-            method: PredictionMethod::HistoricalAverage,
-        };
-        assert!(!invalid.is_valid());
     }
 
     #[test]
@@ -224,59 +151,12 @@ mod tests {
     }
 
     #[test]
-    fn test_interval_width_always_non_negative() {
-        let ts = Utc.with_ymd_and_hms(2024, 6, 17, 10, 0, 0).unwrap();
-
-        // Case: both in range but inverted
-        let pred = PredictionWithConfidence::new(
-            ts,
-            50.0,
-            70.0,
-            30.0,
-            0.5,
-            PredictionMethod::HistoricalAverage,
-        );
-        assert!(pred.interval_width() >= 0.0);
-
-        // Case: clamping causes inversion (low clamps to 0, high clamps to 0)
-        let pred2 = PredictionWithConfidence::new(
-            ts,
-            50.0,
-            -20.0,
-            -10.0,
-            0.5,
-            PredictionMethod::HistoricalAverage,
-        );
-        assert!(pred2.interval_width() >= 0.0);
-
-        // Case: both clamp to 100
-        let pred3 = PredictionWithConfidence::new(
-            ts,
-            50.0,
-            110.0,
-            120.0,
-            0.5,
-            PredictionMethod::HistoricalAverage,
-        );
-        assert!(pred3.interval_width() >= 0.0);
-    }
-
-    #[test]
     fn test_prediction_method_random_forest_is_ml() {
         let rf = PredictionMethod::RandomForest {
             confidence: 0.85,
             n_trees: 100,
         };
         assert!(rf.is_ml());
-    }
-
-    #[test]
-    fn test_prediction_method_random_forest_confidence() {
-        let rf = PredictionMethod::RandomForest {
-            confidence: 0.85,
-            n_trees: 100,
-        };
-        assert_relative_eq!(rf.confidence(), 0.85);
     }
 
     #[test]
@@ -294,7 +174,7 @@ mod tests {
             PredictionMethod::MachineLearning { confidence: 0.8 },
         );
         assert!(
-            pred.is_valid(),
+            is_valid(&pred),
             "CI should expand to contain predicted_value: low={}, pred={}, high={}",
             pred.confidence_low,
             pred.predicted_value,
@@ -314,7 +194,7 @@ mod tests {
             PredictionMethod::MachineLearning { confidence: 0.8 },
         );
         assert!(
-            pred2.is_valid(),
+            is_valid(&pred2),
             "CI should expand to contain predicted_value: low={}, pred={}, high={}",
             pred2.confidence_low,
             pred2.predicted_value,
@@ -395,55 +275,11 @@ mod tests {
                 PredictionMethod::HistoricalAverage,
             );
             prop_assert!(
-                pred.is_valid(),
+                is_valid(&pred),
                 "new() should always produce valid predictions: \
                  low={}, pred={}, high={}, score={}",
                 pred.confidence_low, pred.predicted_value,
                 pred.confidence_high, pred.confidence_score,
-            );
-        }
-
-        #[test]
-        fn prop_interval_width_non_negative(
-            low in -50.0_f64..=200.0,
-            high in -50.0_f64..=200.0,
-        ) {
-            let ts = Utc.with_ymd_and_hms(2024, 6, 17, 10, 0, 0).unwrap();
-            let pred = PredictionWithConfidence::new(
-                ts, 50.0, low, high, 0.8,
-                PredictionMethod::HistoricalAverage,
-            );
-            let width = pred.interval_width();
-            prop_assert!(
-                width >= 0.0,
-                "interval_width should be >= 0, got {width}"
-            );
-        }
-
-        #[test]
-        fn prop_method_confidence_range(
-            confidence in 0.0_f64..=1.0,
-            n_trees in 1_usize..500,
-        ) {
-            let ml = PredictionMethod::MachineLearning { confidence };
-            let result = ml.confidence();
-            prop_assert!(
-                (0.0..=1.0).contains(&result),
-                "ML confidence out of range: {result}"
-            );
-
-            let rf = PredictionMethod::RandomForest { confidence, n_trees };
-            let result = rf.confidence();
-            prop_assert!(
-                (0.0..=1.0).contains(&result),
-                "RF confidence out of range: {result}"
-            );
-
-            let avg = PredictionMethod::HistoricalAverage;
-            let result = avg.confidence();
-            prop_assert!(
-                (0.0..=1.0).contains(&result),
-                "Historical confidence out of range: {result}"
             );
         }
     }

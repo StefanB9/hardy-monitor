@@ -108,6 +108,7 @@ pub struct Tray {
 }
 
 impl Tray {
+    /// Wraps the tray icon; `base` is the icon the status dot is drawn on.
     pub fn new(icon: TrayIcon, base: TrayBase) -> Self {
         Self {
             icon,

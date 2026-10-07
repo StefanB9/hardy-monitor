@@ -29,7 +29,8 @@ const RF_SEED: u64 = 0x4A52_4459;
 /// L2 penalty for the linear model; stabilises correlated features.
 const RIDGE_LAMBDA: f64 = 1e-3;
 
-pub type Forest = RandomForestRegressor<f64, f64, DenseMatrix<f64>, Vec<f64>>;
+/// The trained random forest type.
+pub(crate) type Forest = RandomForestRegressor<f64, f64, DenseMatrix<f64>, Vec<f64>>;
 
 /// Which backend to train.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -39,6 +40,7 @@ pub enum Algorithm {
 }
 
 impl Algorithm {
+    /// Display name, also stored with saved models.
     pub fn name(self) -> &'static str {
         match self {
             Algorithm::RandomForest => "Random Forest",
@@ -72,6 +74,8 @@ impl RfParams {
         min_samples_leaf: 10,
     };
 
+    /// Validated forest hyperparameters; rejects values outside the
+    /// supported ranges.
     pub fn new(n_trees: u16, max_depth: u16, min_samples_leaf: u16) -> Result<Self, MlError> {
         if !(1..=MAX_TREES).contains(&n_trees) {
             return Err(MlError::InvalidParams(format!(
@@ -112,14 +116,17 @@ impl RfParams {
         grid
     }
 
+    /// Number of trees.
     pub fn n_trees(self) -> u16 {
         self.n_trees
     }
 
+    /// Maximum tree depth.
     pub fn max_depth(self) -> u16 {
         self.max_depth
     }
 
+    /// Minimum samples per leaf.
     pub fn min_samples_leaf(self) -> u16 {
         self.min_samples_leaf
     }
@@ -165,6 +172,7 @@ impl Model {
         }
     }
 
+    /// Which backend this model uses.
     pub fn algorithm(&self) -> Algorithm {
         match self {
             Model::Linear { .. } => Algorithm::Linear,

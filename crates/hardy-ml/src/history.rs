@@ -75,18 +75,22 @@ impl History {
         }
     }
 
+    /// Number of readings.
     pub fn len(&self) -> usize {
         self.times.len()
     }
 
+    /// Whether there are no readings.
     pub fn is_empty(&self) -> bool {
         self.times.is_empty()
     }
 
+    /// Time of the oldest reading.
     pub fn first_time(&self) -> Option<DateTime<Utc>> {
         self.times.first().copied()
     }
 
+    /// Time of the newest reading.
     pub fn last_time(&self) -> Option<DateTime<Utc>> {
         self.times.last().copied()
     }
@@ -200,10 +204,12 @@ impl<'a> HistoryView<'a> {
         self.times.iter().copied().zip(self.values.iter().copied())
     }
 
+    /// Number of readings in the view.
     pub fn len(&self) -> usize {
         self.times.len()
     }
 
+    /// Whether the view holds no readings.
     pub fn is_empty(&self) -> bool {
         self.times.is_empty()
     }

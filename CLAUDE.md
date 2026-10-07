@@ -21,30 +21,38 @@ hardy-monitor/                         (workspace root)
 │   │   │   ├── lib.rs                 Module declarations + re-exports
 │   │   │   ├── accuracy.rs            Summaries of logged forecast accuracy
 │   │   │   ├── alert/                 Low-occupancy alerts: settings, engine, windows, phone commands, service
-│   │   │   ├── analytics.rs           OccupancyStats, insights, trend analysis
+│   │   │   ├── analytics/             Stats, day analysis, peak/quiet slots, insights, period comparison,
+│   │   │   │                          trend; time.rs: gym-local time helpers
 │   │   │   ├── api.rs                 GymApiClient (reqwest HTTP)
-│   │   │   ├── config.rs              AppConfig and sections (TOML + env var)
-│   │   │   ├── db/                    Database (sqlx PgPool): readings, averages, alert settings, models,
-│   │   │   │                          repair state, forecast log; schema.rs: migrations + version check
+│   │   │   ├── config/                AppConfig + load (TOML + env var); one file per section group;
+│   │   │   │                          validation.rs
+│   │   │   ├── db/                    Database (sqlx PgPool): readings, averages, export (CSV), alert settings,
+│   │   │   │                          ml, repair state, forecast log; schema.rs: migrations + version check
 │   │   │   ├── error.rs               AppError, NetworkErrorKind, DatabaseError (thiserror)
 │   │   │   ├── health.rs              HealthMonitor: outage / resumed messages for the daemon
 │   │   │   ├── ntfy.rs                ntfy client (publish, poll)
-│   │   │   ├── repair/                DataRepairer (gap filling, outliers, smoothing); nightly.rs: automatic nightly repair
+│   │   │   ├── repair/                DataRepairer; steps.rs: gap filling, outliers, smoothing, boundaries;
+│   │   │   │                          nightly.rs: automatic nightly repair
 │   │   │   ├── retry.rs               RetryPolicy + retry() for transient errors
-│   │   │   ├── schedule.rs            GymSchedule, Bavarian holiday detection
+│   │   │   ├── schedule/              GymSchedule; hours.rs: opening/closing times; holidays.rs: Bavarian
+│   │   │   │                          holidays (Easter)
 │   │   │   └── traits.rs              Clock, Notifier, SystemClock, MockClock, MockNotifier
-│   │   └── tests/                     Integration tests (TestDatabase / wiremock): api, database, schema,
-│   │                                  migrations, repair, forecast_log, alert_service, ntfy, app_logic;
-│   │                                  common/mod.rs: TestDatabase and RawTestDatabase helpers
+│   │   └── tests/                     Integration tests (TestDatabase / wiremock): api, api_errors,
+│   │                                  db_readings, db_averages, db_alert_settings, db_models, schema,
+│   │                                  migrations, repair, forecast_log, alert_service, ntfy, notifier,
+│   │                                  schedule_clock; common/mod.rs: TestDatabase and RawTestDatabase
 │   │
 │   ├── hardy-ml/                      (library — forecasting, shared by daemon and GUI)
-│   │   ├── src/                       history, profile, features, samples, model, training (+ quality gate),
-│   │   │                              forecast, forecast_log, retrain, maintenance, persistence
+│   │   ├── src/                       history, profile, features, samples, model, training/ (+ quality gate;
+│   │   │                              tuning, intervals), evaluation, confidence, forecast, forecast_log,
+│   │   │                              retrain, maintenance, persistence
 │   │   └── tests/maintenance.rs       Training against a real database
 │   │
 │   ├── hardy-daemon/                  (binary — headless fetch loop; the only process that migrates)
 │   │   └── src/
-│   │       ├── main.rs                Startup, fetch loop, fetch_and_store
+│   │       ├── main.rs                Startup and the fetch loop
+│   │       ├── cycle.rs               One fetch cycle: fetch, store, log (shutdown grace)
+│   │       ├── timing.rs              Minute alignment and drift correction
 │   │       ├── connect.rs             Database connect with retry, health and schema checks
 │   │       ├── upkeep.rs              Nightly repair + training, schema check, forecast logging
 │   │       ├── forecasts.rs           Hourly forecast log (accuracy tracking)
@@ -55,8 +63,9 @@ hardy-monitor/                         (workspace root)
 │       └── src/
 │           ├── main.rs                Entry point, tray icon, iced runner
 │           ├── lib.rs                 Module declarations
-│           ├── app/                   HardyMonitorApp, Message (mod), update, maintenance (export/repair),
-│           │                          view (shell), tasks (DB loads)
+│           ├── app/                   HardyMonitorApp (mod), message (Message, ViewMode), update, data
+│           │                          (applying loaded data), maintenance (export/repair), view (shell),
+│           │                          sidebar, tasks (DB loads)
 │           ├── style.rs               Design tokens: colours, occupancy scale, type/spacing scales
 │           ├── forecasting.rs         Forecast state: history, loaded model, forecasts, quiet window
 │           ├── quiet_window.rs        Next quiet hour (forecast, else slot averages)
@@ -64,8 +73,9 @@ hardy-monitor/                         (workspace root)
 │           ├── freshness.rs           Whether the newest reading is live or stale
 │           ├── tray.rs                Tray tooltip and status dot
 │           ├── alerts.rs              Alert controls (shared settings, desktop popups)
-│           ├── notifier.rs            SystemNotifier, CombinedNotifier
-│           ├── widgets/               Canvas widgets: gauge, heatmap (WeekGrid), history_chart
+│           ├── notifier.rs            SystemNotifier (desktop popups)
+│           ├── widgets/               Canvas widgets: gauge, heatmap/ (grid.rs: WeekGrid), history_chart/
+│           │                          (plot, layers, axis)
 │           └── views/                 now/, week, insights, model_data/, schema_notice, opening;
 │                                      components/ (cards, buttons, …)
 ```

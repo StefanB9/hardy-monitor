@@ -68,6 +68,7 @@ impl SlotProfile {
         self.stat(t, tz).map_or(self.overall_mean, |s| s.mean)
     }
 
+    /// Mean of all readings; the fallback for slots without data.
     pub fn overall_mean(&self) -> f64 {
         self.overall_mean
     }

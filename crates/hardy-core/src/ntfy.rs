@@ -65,6 +65,8 @@ impl fmt::Debug for NtfyClient {
 }
 
 impl NtfyClient {
+    /// Builds a client for `server` with the configured timeouts; `token` is
+    /// sent as a bearer token.
     pub fn new(
         server: &str,
         token: Option<String>,
@@ -165,6 +167,7 @@ pub struct NtfyNotifier {
 }
 
 impl NtfyNotifier {
+    /// Publishes through `client` to `topic`.
     pub fn new(client: NtfyClient, topic: String) -> Self {
         Self { client, topic }
     }
