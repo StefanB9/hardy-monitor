@@ -162,6 +162,7 @@ impl Database {
             .context("Failed to list models")
     }
 
+    /// Training coordination state (retrain requests, last attempt).
     #[tracing::instrument(skip_all, fields(db.operation = "get_ml_state"))]
     pub async fn get_ml_state(&self) -> Result<MlState> {
         let row = sqlx::query!(
