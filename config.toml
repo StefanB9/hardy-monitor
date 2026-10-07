@@ -9,6 +9,9 @@
 # Connection pool limits (DATABASE_URL itself comes from .env / environment).
 max_connections = 5
 acquire_timeout_secs = 10
+# PostgreSQL cancels any single query running longer than this, so a hanging
+# database cannot stall the daemon or the GUI.
+statement_timeout_secs = 60
 
 [gym]
 api_url = "https://portal.aidoo-online.de/workload?mandant=202300180_fuerstenfeldbruck&stud_nr=3&jsonResponse=1"

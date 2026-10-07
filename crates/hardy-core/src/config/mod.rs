@@ -11,7 +11,9 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use config::{Config, Environment, File};
 pub use connection::{DatabaseConfig, GymConfig, NetworkConfig};
-use connection::{default_acquire_timeout_secs, default_max_connections};
+use connection::{
+    default_acquire_timeout_secs, default_max_connections, default_statement_timeout_secs,
+};
 pub use display::{RefreshConfig, ThresholdsConfig, WindowConfig};
 pub use ml::{MlAlgorithm, MlConfig};
 pub use notifications::NotificationConfig;
@@ -54,6 +56,7 @@ impl AppConfig {
             .set_default("database.url", database_url)?
             .set_default("database.max_connections", default_max_connections())?
             .set_default("database.acquire_timeout_secs", default_acquire_timeout_secs())?
+            .set_default("database.statement_timeout_secs", default_statement_timeout_secs())?
             .set_default("gym.api_url", "https://portal.aidoo-online.de/workload?mandant=202300180_fuerstenfeldbruck&stud_nr=3&jsonResponse=1")?
             .set_default("network.request_timeout_secs", 30)?
             .set_default("network.connect_timeout_secs", 10)?

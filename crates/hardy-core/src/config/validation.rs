@@ -12,6 +12,11 @@ impl AppConfig {
                 "database.max_connections must be > 0".to_string(),
             ));
         }
+        if self.database.statement_timeout_secs == 0 {
+            return Err(AppError::Config(
+                "database.statement_timeout_secs must be > 0".to_string(),
+            ));
+        }
         if self.database.acquire_timeout_secs == 0 {
             return Err(AppError::Config(
                 "database.acquire_timeout_secs must be > 0".to_string(),
@@ -113,6 +118,7 @@ mod tests {
                 url: SecretString::new("postgres://localhost/test"),
                 max_connections: 5,
                 acquire_timeout_secs: 10,
+                statement_timeout_secs: 60,
             },
             gym: GymConfig {
                 api_url: "https://example.com".to_string(),
@@ -230,6 +236,13 @@ mod tests {
 
         let mut config = valid_app_config();
         config.ml.prediction_horizon_hours = 25;
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_rejects_zero_statement_timeout() {
+        let mut config = valid_app_config();
+        config.database.statement_timeout_secs = 0;
         assert!(config.validate().is_err());
     }
 
