@@ -32,6 +32,7 @@ impl ViewMode {
         ViewMode::ModelData,
     ];
 
+    /// Page title shown in the header and sidebar.
     pub fn title(self) -> &'static str {
         match self {
             ViewMode::Now => "Now",
@@ -41,6 +42,7 @@ impl ViewMode {
         }
     }
 
+    /// Sidebar icon glyph.
     pub fn icon(self) -> &'static str {
         match self {
             ViewMode::Now => "◉",

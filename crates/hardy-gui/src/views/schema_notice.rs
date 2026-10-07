@@ -46,6 +46,7 @@ pub fn notice(gate: &SchemaGate) -> Option<(&'static str, String)> {
     })
 }
 
+/// Full-window notice while the database schema does not match.
 pub fn view(gate: &SchemaGate) -> Element<'_, Message> {
     let (title, body) = notice(gate).unwrap_or(("", String::new()));
     let mut content = column![

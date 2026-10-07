@@ -45,6 +45,7 @@ pub struct ModelMaintenance {
 }
 
 impl ModelMaintenance {
+    /// Maintenance with the given settings and opening hours.
     pub fn new(config: MlConfig, schedule: GymSchedule) -> Self {
         Self {
             config,

@@ -156,22 +156,27 @@ impl AlertSettings {
         self.enabled && self.active_until.is_none_or(|until| now < until)
     }
 
+    /// Whether alerts are armed (until [`Self::active_until`], if set).
     pub fn enabled(&self) -> bool {
         self.enabled
     }
 
+    /// Occupancy below which an alert fires.
     pub fn threshold_percent(&self) -> f64 {
         self.threshold_percent
     }
 
+    /// When the armed state ends; `None` means no end.
     pub fn active_until(&self) -> Option<DateTime<Utc>> {
         self.active_until
     }
 
+    /// When the settings were last changed.
     pub fn updated_at(&self) -> DateTime<Utc> {
         self.updated_at
     }
 
+    /// Who last changed the settings.
     pub fn updated_by(&self) -> SettingsSource {
         self.updated_by
     }

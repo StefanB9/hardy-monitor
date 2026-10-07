@@ -173,6 +173,7 @@ fn insight_row(insight: &Insight) -> Element<'_, Message> {
     .into()
 }
 
+/// The Insights page.
 pub fn view(props: InsightsProps<'_>) -> Element<'_, Message> {
     let (low, high) = (props.low_threshold, props.high_threshold);
 

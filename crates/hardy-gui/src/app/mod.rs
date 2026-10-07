@@ -105,6 +105,7 @@ pub struct HardyMonitorApp {
 }
 
 impl HardyMonitorApp {
+    /// Creates the app and its startup tasks (schema check, first loads).
     pub fn new(
         db: Database,
         tray: Option<Tray>,
@@ -187,6 +188,7 @@ impl HardyMonitorApp {
         (app, Task::batch([initial, alignment]))
     }
 
+    /// UI tick, aligned data polling, tray polling and window-close events.
     pub fn subscription(&self) -> Subscription<Message> {
         let ui_interval = Duration::from_secs(self.config.refresh.ui_interval_secs);
         let data_interval = Duration::from_secs(self.config.refresh.data_fetch_interval_secs);
@@ -207,6 +209,7 @@ impl HardyMonitorApp {
         Subscription::batch(subs)
     }
 
+    /// The app always uses the dark theme.
     #[allow(clippy::unused_self)]
     pub fn theme(&self) -> Theme {
         Theme::Dark

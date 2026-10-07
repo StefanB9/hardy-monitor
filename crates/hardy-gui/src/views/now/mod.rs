@@ -44,6 +44,7 @@ pub struct NowProps<'a> {
     pub gauge_cache: &'a Cache,
 }
 
+/// The Now page.
 pub fn view<'a>(props: &NowProps<'a>) -> Element<'a, Message> {
     let top = row![
         status::card(props).width(Length::FillPortion(4)),

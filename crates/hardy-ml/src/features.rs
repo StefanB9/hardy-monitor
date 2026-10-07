@@ -51,6 +51,7 @@ const SAME_TIME_TOLERANCE: TimeDelta = TimeDelta::minutes(10);
 pub struct FeatureRow(pub [f64; NUM_FEATURES]);
 
 impl FeatureRow {
+    /// The feature values in model input order.
     pub fn as_slice(&self) -> &[f64] {
         &self.0
     }

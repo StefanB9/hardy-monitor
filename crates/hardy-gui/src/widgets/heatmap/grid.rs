@@ -29,6 +29,8 @@ impl Default for WeekGrid {
 }
 
 impl WeekGrid {
+    /// Places hourly averages on the grid; hours outside opening times are
+    /// closed.
     pub fn new(data: &[HourlyAverage], schedule: &GymSchedule) -> Self {
         let mut values = [[None; 24]; 7];
         for avg in data {
@@ -81,6 +83,7 @@ impl WeekGrid {
         extremes
     }
 
+    /// The cell for a weekday (0 = Monday) and gym-local hour.
     pub fn cell(&self, day: usize, hour: u32) -> Cell {
         let Some(open) = self.open.get(day) else {
             return Cell::Closed;

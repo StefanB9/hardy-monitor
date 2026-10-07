@@ -2,6 +2,7 @@ use anyhow::Result;
 use futures::future::BoxFuture;
 use hardy_core::traits::Notifier;
 
+/// [`Notifier`] showing desktop notifications.
 #[derive(Debug, Clone, Default)]
 pub struct SystemNotifier;
 

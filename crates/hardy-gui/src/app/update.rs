@@ -9,6 +9,7 @@ use super::{HardyMonitorApp, Message, ViewMode};
 use crate::views::schema_notice::SchemaGate;
 
 impl HardyMonitorApp {
+    /// Handles one message and returns the follow-up tasks.
     pub fn update(&mut self, message: Message) -> Task<Message> {
         if self.schema != SchemaGate::Ready {
             return self.update_blocked(message);

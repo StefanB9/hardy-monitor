@@ -15,6 +15,7 @@ use crate::{
 };
 
 impl HardyMonitorApp {
+    /// The whole window: schema notice, or sidebar, header and active view.
     pub fn view(&self) -> Element<'_, Message> {
         if self.schema != SchemaGate::Ready {
             return views::schema_notice::view(&self.schema);

@@ -302,6 +302,7 @@ fn export_card<'a>(props: &ModelDataProps<'a>) -> Element<'a, Message> {
     card("Export", body).width(Length::Fill).into()
 }
 
+/// The Model & Data page.
 pub fn view(props: ModelDataProps<'_>) -> Element<'_, Message> {
     let content = row![
         column![model_card(&props), accuracy::card(props.accuracy)]

@@ -165,6 +165,7 @@ fn extremes_table<'a>(grid: &WeekGrid, low: f64, high: f64) -> Element<'a, Messa
     }
 }
 
+/// The Week page.
 pub fn view(props: WeekProps<'_>) -> Element<'_, Message> {
     let (low, high) = (props.low_threshold, props.high_threshold);
     let heatmap = Canvas::new(HeatmapWidget {
