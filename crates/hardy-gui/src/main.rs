@@ -94,7 +94,8 @@ fn main() -> Result<()> {
 
     let (database, icon, tray_icon_data) = rt.block_on(async {
         tracing::info!("Connecting to database...");
-        let database = db::Database::connect(&config.database, db::Migrations::Apply).await?;
+        // The daemon owns the schema; the GUI only checks it (see app).
+        let database = db::Database::connect(&config.database, db::Migrations::Verify).await?;
         tracing::info!("Database connected successfully");
 
         let (icon, tray_icon_data) = tokio::join!(load_icon_async(), load_tray_icon_async());

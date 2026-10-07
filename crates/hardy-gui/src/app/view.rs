@@ -11,12 +11,15 @@ use crate::{
     style::{self, OccupancyLevel},
     views::{
         self, InsightsProps, ModelDataProps, NowProps, WeekProps, components::secondary_button,
-        opening::opening_status,
+        opening::opening_status, schema_notice::SchemaGate,
     },
 };
 
 impl HardyMonitorApp {
     pub fn view(&self) -> Element<'_, Message> {
+        if self.schema != SchemaGate::Ready {
+            return views::schema_notice::view(&self.schema);
+        }
         let content = match self.ui.current_view {
             ViewMode::Now => views::now::view(&self.now_props()),
             ViewMode::Week => views::week::view(WeekProps {

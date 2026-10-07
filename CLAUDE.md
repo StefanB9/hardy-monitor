@@ -21,6 +21,7 @@ hardy-monitor/                         (workspace root)
 │   │   │   ├── config.rs              AppConfig, MlConfig, MlAlgorithm (TOML + env var)
 │   │   │   ├── db.rs                  Database (sqlx PgPool). OccupancyLog, HourlyAverage
 │   │   │   ├── error.rs               AppError, NetworkErrorKind, DatabaseError (thiserror)
+│   │   │   ├── health.rs              HealthMonitor: outage / resumed messages for the daemon
 │   │   │   ├── repair.rs              DataRepairer. Gap filling, outlier removal, smoothing
 │   │   │   ├── schedule.rs            GymSchedule, Bavarian holiday detection
 │   │   │   └── traits.rs              Clock, Notifier, SystemClock, MockClock, MockNotifier
@@ -213,7 +214,7 @@ Minimum necessary. `pub(super)` or `pub(crate)` for internal types. Private fiel
 ## Database & sqlx
 
 - **Migrations:** Use `cargo sqlx migrate add -r <name>` to create reversible migration files. Run from the project root.
-- **Running migrations:** Migrations run automatically via `sqlx::migrate!("../../migrations")` in `Database::new()` (relative to `hardy-core`'s `CARGO_MANIFEST_DIR`). `DATABASE_URL` is read from `.env`.
+- **Running migrations:** Only the daemon migrates: it connects with `Migrations::Apply`, the GUI with `Migrations::Verify` and waits (full-window notice) until `Database::schema_status()` is `Current`. A build older than the database refuses to run (`AppError::SchemaTooNew`). `Database::new()` (tests) applies migrations. `DATABASE_URL` is read from `.env`.
 - **Offline cache:** After adding or changing queries, regenerate with `cargo sqlx prepare --workspace` from the project root. Commit the `.sqlx/` directory.
 - **Compile-time checked queries:** Use `sqlx::query!` and `sqlx::query_as!` — never raw string queries without compile-time verification.
 - **Never hand-create migration files.** Always use the `cargo sqlx migrate add` command so timestamps are generated correctly.

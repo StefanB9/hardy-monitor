@@ -14,7 +14,7 @@ use hardy_core::{
     alert::{AlertDuration, AlertRules, AlertSettings},
     analytics::{DayAnalysis, Insight, OccupancyStats, TrendDirection},
     config::AppConfig,
-    db::{Database, HourlyAverage, MlState, ModelInfo, OccupancyLog},
+    db::{Database, HourlyAverage, MlState, ModelInfo, OccupancyLog, SchemaStatus},
     error::AppError,
     repair::RepairSummary,
     schedule::GymSchedule,
@@ -29,6 +29,7 @@ use crate::{
     alerts::AlertControls,
     forecasting::Forecasting,
     freshness::{Freshness, freshness},
+    views::schema_notice::SchemaGate,
     widgets::heatmap::WeekGrid,
 };
 
@@ -137,6 +138,8 @@ pub struct HardyMonitorApp {
     alerts: AlertControls,
     export_status: Option<String>,
     repair: RepairState,
+    /// No queries run until the schema matches this build.
+    schema: SchemaGate,
 }
 
 /// Everything the application reacts to.
@@ -188,6 +191,10 @@ pub enum Message {
     ModelStatusLoaded(Result<(Option<ModelInfo>, MlState), AppError>),
     ModelLoaded(Result<(ModelInfo, Arc<ModelArtifact>), AppError>),
     TrainModelRequested,
+
+    /// Result of comparing the database schema with this build.
+    SchemaChecked(Result<SchemaStatus, AppError>),
+    RetrySchemaCheck,
 }
 
 impl HardyMonitorApp {
@@ -255,17 +262,10 @@ impl HardyMonitorApp {
                 last_result: None,
             },
             config,
+            schema: SchemaGate::Checking,
         };
 
-        let initial = Task::batch([
-            app.load_alert_settings(),
-            app.load_forecast_history(),
-            app.load_model_status(),
-            app.load_chart_history(),
-            app.load_analytics(),
-            app.load_insights_data(),
-            app.fetch_latest(),
-        ]);
+        let initial = app.check_schema();
 
         let seconds_to_next_minute = 60 - now.timestamp() % 60;
         let alignment = Task::perform(
@@ -302,6 +302,19 @@ impl HardyMonitorApp {
     #[allow(clippy::unused_self)]
     pub fn theme(&self) -> Theme {
         Theme::Dark
+    }
+
+    /// Everything loaded once the schema is known to match.
+    fn start(&self) -> Task<Message> {
+        Task::batch([
+            self.load_alert_settings(),
+            self.load_forecast_history(),
+            self.load_model_status(),
+            self.load_chart_history(),
+            self.load_analytics(),
+            self.load_insights_data(),
+            self.fetch_latest(),
+        ])
     }
 
     /// Whether the newest reading is live; unknown until the first poll.

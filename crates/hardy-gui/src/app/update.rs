@@ -9,7 +9,7 @@ use hardy_core::{
         ComparisonMode, analyze_days, calculate_stats, compare_periods, find_peak_hours,
         find_quiet_hours, generate_insights,
     },
-    db::HourlyAverage,
+    db::{HourlyAverage, SchemaStatus},
     error::AppError,
     repair::DataRepairer,
 };
@@ -18,10 +18,16 @@ use muda::MenuEvent;
 use tray_icon::TrayIconEvent;
 
 use super::{HardyMonitorApp, Message, RepairPreset, ViewMode};
-use crate::{freshness::Freshness, time_range::parse_date, widgets::heatmap::WeekGrid};
+use crate::{
+    freshness::Freshness, time_range::parse_date, views::schema_notice::SchemaGate,
+    widgets::heatmap::WeekGrid,
+};
 
 impl HardyMonitorApp {
     pub fn update(&mut self, message: Message) -> Task<Message> {
+        if self.schema != SchemaGate::Ready {
+            return self.update_blocked(message);
+        }
         match message {
             Message::Tick => {
                 self.refresh_forecasts();
@@ -29,7 +35,10 @@ impl HardyMonitorApp {
                 self.ui.chart_cache.clear();
                 Task::none()
             }
-            Message::NotificationSent => Task::none(),
+            // A late schema check after start changes nothing.
+            Message::NotificationSent | Message::SchemaChecked(_) | Message::RetrySchemaCheck => {
+                Task::none()
+            }
             Message::FetchAlignmentComplete => {
                 self.ui.is_poll_aligned = true;
                 self.poll()
@@ -287,6 +296,41 @@ impl HardyMonitorApp {
                     }
                 }
                 Task::none()
+            }
+            _ => Task::none(),
+        }
+    }
+
+    /// Until the schema matches: only the schema check, the tray and the
+    /// window work; nothing touches the database.
+    fn update_blocked(&mut self, message: Message) -> Task<Message> {
+        match message {
+            Message::SchemaChecked(result) => {
+                self.schema = match result {
+                    Ok(SchemaStatus::Current) => SchemaGate::Ready,
+                    Ok(status) => SchemaGate::Mismatch(status),
+                    Err(e) => SchemaGate::CheckFailed(e.to_string()),
+                };
+                if self.schema == SchemaGate::Ready {
+                    tracing::info!("database schema matches; starting");
+                    self.start()
+                } else {
+                    tracing::warn!(schema = ?self.schema, "database schema does not match");
+                    Task::none()
+                }
+            }
+            Message::RetrySchemaCheck => {
+                self.schema = SchemaGate::Checking;
+                self.check_schema()
+            }
+            Message::FetchAlignmentComplete => {
+                self.ui.is_poll_aligned = true;
+                Task::none()
+            }
+            Message::TrayCheck => self.handle_tray(),
+            Message::WindowCloseRequested => {
+                self.ui.is_window_visible = false;
+                window::latest().and_then(|id| window::minimize(id, true))
             }
             _ => Task::none(),
         }
