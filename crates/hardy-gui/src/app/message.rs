@@ -11,6 +11,7 @@ use hardy_core::{
 };
 use hardy_ml::ModelArtifact;
 
+use super::loads::RequestId;
 use crate::time_range::{AnalyticsRange, ChartRange};
 
 /// The four top-level views.
@@ -71,8 +72,10 @@ pub enum Message {
 
     /// Newest stored reading: when it was taken and its value.
     FetchCompleted(Result<Option<(DateTime<Utc>, f64)>, AppError>),
-    HistoryLoaded(Result<Vec<OccupancyLog>, AppError>),
-    AnalyticsLoaded(Result<Vec<HourlyAverage>, AppError>),
+    /// Chart readings; applied only if `RequestId` is the newest chart load.
+    HistoryLoaded(RequestId, Result<Vec<OccupancyLog>, AppError>),
+    /// Hourly averages; applied only if `RequestId` is the newest one.
+    AnalyticsLoaded(RequestId, Result<Vec<HourlyAverage>, AppError>),
     InsightsDataLoaded {
         current: Result<Vec<HourlyAverage>, AppError>,
         baseline: Result<Vec<HourlyAverage>, AppError>,
@@ -115,4 +118,91 @@ pub enum Message {
     /// Result of comparing the database schema with this build.
     SchemaChecked(Result<SchemaStatus, AppError>),
     RetrySchemaCheck,
+}
+
+impl Message {
+    /// Whether this delivers the result of a database load counted as
+    /// pending. Every counted load produces exactly one such message.
+    pub(crate) fn finishes_load(&self) -> bool {
+        match self {
+            Message::FetchCompleted(_)
+            | Message::HistoryLoaded(..)
+            | Message::AnalyticsLoaded(..)
+            | Message::InsightsDataLoaded { .. }
+            | Message::AlertSettingsLoaded(_)
+            | Message::ExportCompleted(_)
+            | Message::RepairCompleted(_)
+            | Message::ForecastHistoryLoaded(_)
+            | Message::ModelStatusLoaded(_)
+            | Message::ModelLoaded(_)
+            | Message::AccuracyLoaded(_) => true,
+            Message::Tick
+            | Message::FetchTick
+            | Message::FetchAlignmentComplete
+            | Message::RefreshNow
+            | Message::NotificationThresholdChanged(_)
+            | Message::NotificationThresholdReleased
+            | Message::NotificationToggled(_)
+            | Message::NotificationDurationSelected(_)
+            | Message::NotificationSent
+            | Message::SwitchView(_)
+            | Message::SwitchAnalyticsRange(_)
+            | Message::ChartRangeSelected(_)
+            | Message::CustomStartChanged(_)
+            | Message::CustomEndChanged(_)
+            | Message::ApplyCustomRange
+            | Message::ExportCsv
+            | Message::ClearExportStatus
+            | Message::TrayCheck
+            | Message::WindowCloseRequested
+            | Message::RepairStartDateChanged(_)
+            | Message::RepairEndDateChanged(_)
+            | Message::RepairPresetSelected(_)
+            | Message::StartRepairJob
+            | Message::TrainModelRequested
+            | Message::SchemaChecked(_)
+            | Message::RetrySchemaCheck => false,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use hardy_core::error::AppError;
+
+    use super::*;
+
+    fn failed<T>() -> Result<T, AppError> {
+        Err(AppError::validation("x"))
+    }
+
+    #[test]
+    fn test_message_finishes_load_only_for_load_results() {
+        let results = [
+            Message::FetchCompleted(failed()),
+            Message::HistoryLoaded(RequestId::default(), failed()),
+            Message::AnalyticsLoaded(RequestId::default(), failed()),
+            Message::InsightsDataLoaded {
+                current: failed(),
+                baseline: failed(),
+            },
+            Message::AlertSettingsLoaded(failed()),
+            Message::ExportCompleted(failed()),
+            Message::RepairCompleted(failed()),
+            Message::ForecastHistoryLoaded(failed()),
+            Message::ModelStatusLoaded(failed()),
+            Message::ModelLoaded(failed()),
+            Message::AccuracyLoaded(failed()),
+        ];
+        assert!(results.iter().all(Message::finishes_load));
+
+        let others = [
+            Message::Tick,
+            Message::RefreshNow,
+            Message::ApplyCustomRange,
+            Message::SchemaChecked(failed()),
+            Message::NotificationSent,
+        ];
+        assert!(!others.iter().any(Message::finishes_load));
+    }
 }
