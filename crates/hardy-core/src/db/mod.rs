@@ -102,7 +102,7 @@ impl Database {
         let pool = PgPoolOptions::new()
             .max_connections(config.max_connections)
             .acquire_timeout(Duration::from_secs(config.acquire_timeout_secs))
-            .connect(&config.url)
+            .connect(config.url.expose())
             .await
             .context("Failed to connect to PostgreSQL database")?;
 

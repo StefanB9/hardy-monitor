@@ -104,13 +104,13 @@ mod tests {
     use super::*;
     use crate::config::{
         DatabaseConfig, GymConfig, MlConfig, NetworkConfig, NotificationConfig, RefreshConfig,
-        ScheduleConfig, ThresholdsConfig, WindowConfig,
+        ScheduleConfig, SecretString, ThresholdsConfig, WindowConfig,
     };
 
     fn valid_app_config() -> AppConfig {
         AppConfig {
             database: DatabaseConfig {
-                url: "postgres://localhost/test".to_string(),
+                url: SecretString::new("postgres://localhost/test"),
                 max_connections: 5,
                 acquire_timeout_secs: 10,
             },

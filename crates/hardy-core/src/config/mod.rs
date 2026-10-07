@@ -3,6 +3,7 @@ mod display;
 mod ml;
 mod notifications;
 mod schedule;
+mod secret;
 mod validation;
 
 use std::path::PathBuf;
@@ -13,8 +14,9 @@ pub use connection::{DatabaseConfig, GymConfig, NetworkConfig};
 use connection::{default_acquire_timeout_secs, default_max_connections};
 pub use display::{RefreshConfig, ThresholdsConfig, WindowConfig};
 pub use ml::{MlAlgorithm, MlConfig};
-pub use notifications::{NotificationConfig, SecretString};
+pub use notifications::NotificationConfig;
 pub use schedule::{ScheduleConfig, ScheduleHours};
+pub use secret::SecretString;
 use serde::Deserialize;
 use tracing::warn;
 

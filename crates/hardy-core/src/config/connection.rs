@@ -2,11 +2,14 @@
 
 use serde::Deserialize;
 
+use super::SecretString;
+
 /// PostgreSQL connection and pool limits (`DATABASE_URL` comes from the
 /// environment).
 #[derive(Debug, Deserialize, Clone)]
 pub struct DatabaseConfig {
-    pub url: String,
+    /// Connection URL, including credentials.
+    pub url: SecretString,
     /// Upper bound on pooled connections; keep small for hosted free tiers.
     #[serde(default = "default_max_connections")]
     pub max_connections: u32,
@@ -19,7 +22,7 @@ impl DatabaseConfig {
     /// Config for `url` with default pool settings.
     pub fn with_url(url: impl Into<String>) -> Self {
         Self {
-            url: url.into(),
+            url: SecretString::new(url),
             max_connections: default_max_connections(),
             acquire_timeout_secs: default_acquire_timeout_secs(),
         }
@@ -75,5 +78,13 @@ mod tests {
         assert_eq!(config.max_connections, 5);
         assert_eq!(config.acquire_timeout_secs, 10);
         Ok(())
+    }
+
+    #[test]
+    fn test_database_config_debug_hides_url() {
+        let config = DatabaseConfig::with_url("postgres://hardy:s3cret@db.example/hardy");
+        let shown = format!("{config:?}");
+        assert!(!shown.contains("s3cret"), "{shown}");
+        assert!(!shown.contains("db.example"), "{shown}");
     }
 }
