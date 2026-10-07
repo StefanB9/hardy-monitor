@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 use hardy_core::{
     alert::AlertSettings,
-    db::{HourlyAverage, MlState, ModelInfo, OccupancyLog},
+    db::{HorizonAccuracy, HourlyAverage, MlState, ModelInfo, OccupancyLog},
     error::AppError,
 };
 use hardy_ml::{ModelArtifact, features::FEATURE_VERSION};
@@ -128,6 +128,22 @@ impl HardyMonitorApp {
             |(current, baseline)| Message::InsightsDataLoaded {
                 current: current.map_err(db_err("get_insights_current")),
                 baseline: baseline.map_err(db_err("get_insights_baseline")),
+            },
+        )
+    }
+
+    /// Scores of the daemon's logged forecasts over the last days.
+    pub(super) fn load_accuracy(&self) -> Task<Message> {
+        let now = self.clock.now_utc();
+        let tz = self.schedule.timezone();
+        let first_day = now.with_timezone(&tz).date_naive()
+            - chrono::TimeDelta::days(crate::views::model_data::ACCURACY_DAYS - 1);
+        let since = hardy_core::analytics::midnight_local_as_utc(first_day, tz);
+        let db = self.db.clone();
+        Task::perform(
+            async move { db.forecast_accuracy(since, now, tz).await },
+            |r: anyhow::Result<Vec<HorizonAccuracy>>| {
+                Message::AccuracyLoaded(r.map_err(db_err("forecast_accuracy")))
             },
         )
     }

@@ -152,3 +152,33 @@ async fn test_tick_trains_missing_model_in_background() {
 
     tdb.cleanup().await;
 }
+
+#[tokio::test]
+async fn test_current_model_after_training_and_restart() -> anyhow::Result<()> {
+    use anyhow::Context;
+    let tdb = common::TestDatabase::new().await;
+    insert_learnable_history(&tdb.db, 21).await;
+
+    let mut maintenance = ModelMaintenance::new(config(), GymSchedule::default());
+    let before = maintenance.current_model().map(|(id, _)| id);
+    let outcome = tokio::time::timeout(
+        Duration::from_secs(300),
+        maintenance.train_now(&tdb.db, RetrainReason::Requested, local(21, 0, 30)),
+    )
+    .await
+    .context("training finishes")??;
+    let TrainingOutcome::Stored { id, .. } = outcome else {
+        anyhow::bail!("expected a stored model");
+    };
+    let after_training = maintenance.current_model().map(|(id, _)| id);
+
+    let mut restarted = ModelMaintenance::new(config(), GymSchedule::default());
+    restarted.load_previous(&tdb.db).await?;
+    let after_restart = restarted.current_model().map(|(id, _)| id);
+    tdb.cleanup().await;
+
+    assert_eq!(before, None);
+    assert_eq!(after_training, Some(id));
+    assert_eq!(after_restart, Some(id));
+    Ok(())
+}

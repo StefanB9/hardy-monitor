@@ -39,6 +39,8 @@ pub struct ModelMaintenance {
     config: MlConfig,
     schedule: GymSchedule,
     previous_params: Option<RfParams>,
+    /// Newest stored model, kept for forecasting.
+    current: Option<(i64, Box<ModelArtifact>)>,
     running: Option<JoinHandle<Result<TrainingOutcome>>>,
 }
 
@@ -48,22 +50,33 @@ impl ModelMaintenance {
             config,
             schedule,
             previous_params: None,
+            current: None,
             running: None,
         }
     }
 
-    /// Reads the newest stored model's hyperparameters so nightly runs can
-    /// reuse them.
+    /// Loads the newest stored model, for forecasting and so nightly runs
+    /// can reuse its hyperparameters.
     #[tracing::instrument(skip_all)]
     pub async fn load_previous(&mut self, db: &Database) -> Result<()> {
         if let Some(info) = db.latest_model_info(FEATURE_VERSION).await? {
             let bytes = db.load_model(info.id).await?;
             match ModelArtifact::from_bytes(&bytes) {
-                Ok(artifact) => self.previous_params = artifact.model.rf_params(),
+                Ok(artifact) => {
+                    self.previous_params = artifact.model.rf_params();
+                    self.current = Some((info.id, Box::new(artifact)));
+                }
                 Err(e) => tracing::warn!(error = %e, id = info.id, "stored model unreadable"),
             }
         }
         Ok(())
+    }
+
+    /// The newest usable model and its id, for forecasting.
+    pub fn current_model(&self) -> Option<(i64, &ModelArtifact)> {
+        self.current
+            .as_ref()
+            .map(|(id, artifact)| (*id, artifact.as_ref()))
     }
 
     /// Whether a training run is in progress.
@@ -120,8 +133,9 @@ impl ModelMaintenance {
             now,
         )
         .await?;
-        if let TrainingOutcome::Stored { artifact, .. } = &outcome {
+        if let TrainingOutcome::Stored { id, artifact } = &outcome {
             self.previous_params = artifact.model.rf_params();
+            self.current = Some((*id, artifact.clone()));
         }
         Ok(outcome)
     }
@@ -137,6 +151,7 @@ impl ModelMaintenance {
                     "new model stored"
                 );
                 self.previous_params = artifact.model.rf_params();
+                self.current = Some((id, artifact));
             }
             Ok(TrainingOutcome::Rejected(e)) => {
                 tracing::warn!(error = %e, "training produced no model");

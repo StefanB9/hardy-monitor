@@ -2,6 +2,9 @@
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 mod connect;
+mod forecasts;
+mod logging;
+mod upkeep;
 
 use std::time::Duration;
 
@@ -11,57 +14,12 @@ use hardy_core::{
     alert::AlertService,
     api::GymApiClient,
     config::AppConfig,
-    db::{Database, SchemaStatus, minute_slot},
-    health::{HealthEvent, HealthMonitor},
-    repair, retry,
+    db::{Database, minute_slot},
+    health::HealthMonitor,
+    retry,
     schedule::GymSchedule,
 };
 use hardy_ml::maintenance::ModelMaintenance;
-use tracing_subscriber::{EnvFilter, fmt, prelude::*};
-
-#[cfg(debug_assertions)]
-fn setup_logging() -> Option<tracing_appender::non_blocking::WorkerGuard> {
-    let filter = if std::env::var("RUST_LOG").is_ok() {
-        EnvFilter::from_default_env()
-    } else {
-        EnvFilter::builder()
-            .with_default_directive(tracing::level_filters::LevelFilter::INFO.into())
-            .parse_lossy("hardy_core=debug,hardy_daemon=debug")
-    };
-
-    tracing_subscriber::registry()
-        .with(fmt::layer())
-        .with(filter)
-        .init();
-
-    None
-}
-
-#[cfg(not(debug_assertions))]
-fn setup_logging() -> Option<tracing_appender::non_blocking::WorkerGuard> {
-    let file_appender = tracing_appender::rolling::daily("logs", "hardy-monitor.log");
-    let (non_blocking_writer, guard) = tracing_appender::non_blocking(file_appender);
-
-    let filter = if std::env::var("RUST_LOG").is_ok() {
-        EnvFilter::from_default_env()
-    } else {
-        EnvFilter::builder()
-            .with_default_directive(tracing::level_filters::LevelFilter::INFO.into())
-            .parse_lossy("hardy_core=info,hardy_daemon=info")
-    };
-
-    tracing_subscriber::registry()
-        .with(
-            fmt::layer()
-                .with_writer(non_blocking_writer)
-                .with_ansi(false)
-                .with_target(false),
-        )
-        .with(filter)
-        .init();
-
-    Some(guard)
-}
 
 const DRIFT_THRESHOLD_SECS: i64 = 5;
 /// Fetch cycles between schema version checks (about ten minutes).
@@ -86,7 +44,7 @@ const CYCLE_HEADROOM: Duration = Duration::from_secs(5);
 const SHUTDOWN_GRACE: Duration = Duration::from_secs(5);
 
 fn main() -> Result<()> {
-    let _log_guard = setup_logging();
+    let _log_guard = logging::setup_logging();
 
     let config = AppConfig::load().context("Failed to load configuration")?;
 
@@ -147,6 +105,8 @@ async fn run(config: &AppConfig) -> Result<()> {
         cycle_budget: Duration::from_secs(config.refresh.data_fetch_interval_secs)
             .saturating_sub(CYCLE_HEADROOM)
             .max(Duration::from_secs(1)),
+        forecast_hours: u32::try_from(config.ml.prediction_horizon_hours)
+            .context("ml.prediction_horizon_hours out of range")?,
     };
 
     let mut alerts = alerts;
@@ -184,6 +144,7 @@ struct Worker<'a> {
     schedule: &'a GymSchedule,
     fetch_policy: RetryPolicy,
     cycle_budget: Duration,
+    forecast_hours: u32,
 }
 
 /// Runs fetch cycles aligned to full minutes until `shutdown` completes.
@@ -225,7 +186,7 @@ async fn fetch_loop(
         }
 
         if iteration_count.is_multiple_of(SCHEMA_CHECK_ITERATIONS) {
-            check_schema(worker.database, alerts, &mut schema_reported).await;
+            upkeep::check_schema(worker.database, alerts, &mut schema_reported).await;
         }
 
         // The slot is fixed when the tick fires, so retries store the reading
@@ -248,7 +209,7 @@ async fn fetch_loop(
 
         // Runs while the gym is closed too, so it comes before the closed
         // check.
-        nightly_upkeep(worker, models).await;
+        upkeep::nightly_upkeep(worker, models).await;
 
         if !worker.schedule.is_open(&slot) {
             tracing::debug!(
@@ -258,21 +219,7 @@ async fn fetch_loop(
             continue;
         }
 
-        let cycle = fetch_and_store(worker, slot);
-        tokio::pin!(cycle);
-        let first = tokio::select! {
-            result = tokio::time::timeout(worker.cycle_budget, &mut cycle) => Some(result),
-            () = &mut shutdown => None,
-        };
-        let (outcome, stop) = if let Some(result) = first {
-            (result, false)
-        } else {
-            tracing::info!("shutdown requested, finishing in-flight fetch");
-            // SAFETY: if the grace period also expires, the cycle is dropped.
-            // A single INSERT commits atomically or not at all and the minute
-            // slot is unique, so no partial or duplicate row can result.
-            (tokio::time::timeout(SHUTDOWN_GRACE, &mut cycle).await, true)
-        };
+        let (outcome, stop) = run_cycle(worker, slot, shutdown.as_mut()).await;
         let stored_percentage = match &outcome {
             Ok(Ok(Stored::Inserted(percentage))) => Some(*percentage),
             _ => None,
@@ -285,6 +232,9 @@ async fn fetch_loop(
         log_outcome(slot, outcome);
         if stop {
             return;
+        }
+        if forecasts::is_logging_slot(slot) {
+            upkeep::log_forecasts(worker, models, slot).await;
         }
         if let Some(event) = health_event {
             tokio::select! {
@@ -312,53 +262,30 @@ async fn fetch_loop(
     }
 }
 
-/// Repairs the day that just closed (and any missed days), then lets model
-/// maintenance start or collect training — in this order, so the nightly
-/// retrain trains on repaired data. The repair is not raced against
-/// shutdown: each day is repaired in small committed steps and a rerun is
-/// harmless, but progress is only recorded once the range is done.
-async fn nightly_upkeep(worker: &Worker<'_>, models: &mut ModelMaintenance) {
-    run_repair(worker).await;
-    if let Err(e) = models.tick(worker.database, chrono::Utc::now()).await {
-        tracing::warn!(error = %e, "model maintenance failed");
+/// Fetches and stores one reading within the cycle budget. On shutdown the
+/// in-flight cycle gets a short grace period; `true` means stop afterwards.
+async fn run_cycle(
+    worker: &Worker<'_>,
+    slot: chrono::DateTime<chrono::Utc>,
+    mut shutdown: std::pin::Pin<&mut impl std::future::Future<Output = ()>>,
+) -> (
+    Result<Result<Stored, AppError>, tokio::time::error::Elapsed>,
+    bool,
+) {
+    let cycle = fetch_and_store(worker, slot);
+    tokio::pin!(cycle);
+    let first = tokio::select! {
+        result = tokio::time::timeout(worker.cycle_budget, &mut cycle) => Some(result),
+        () = &mut shutdown => None,
+    };
+    if let Some(result) = first {
+        return (result, false);
     }
-}
-
-async fn run_repair(worker: &Worker<'_>) {
-    match repair::run_nightly_repair(worker.database, worker.schedule, chrono::Utc::now()).await {
-        Ok(Some(((first, last), summary))) => tracing::info!(
-            %first,
-            %last,
-            gaps_filled = summary.gaps_filled,
-            records_deleted = summary.records_deleted,
-            records_smoothed = summary.records_smoothed,
-            boundary_entries_added = summary.boundary_entries_added,
-            "nightly data repair done"
-        ),
-        Ok(None) => {}
-        Err(e) => tracing::warn!(error = %format!("{e:#}"), "nightly data repair failed"),
-    }
-}
-
-/// Reports once if a newer build migrated the database while this daemon
-/// runs. It keeps running: additive migrations may still work, and real
-/// breakage shows up as a health outage.
-async fn check_schema(database: &Database, alerts: &AlertService, reported: &mut bool) {
-    match database.schema_status().await {
-        Ok(SchemaStatus::DbNewer { db, app }) if !*reported => {
-            tracing::error!(
-                db,
-                app,
-                "database schema is newer than this daemon; update it"
-            );
-            alerts
-                .publish_health(&HealthEvent::SchemaAhead { db, app })
-                .await;
-            *reported = true;
-        }
-        Ok(_) => {}
-        Err(e) => tracing::warn!(error = %e, "could not check the database schema"),
-    }
+    tracing::info!("shutdown requested, finishing in-flight fetch");
+    // SAFETY: if the grace period also expires, the cycle is dropped. A
+    // single INSERT commits atomically or not at all and the minute slot is
+    // unique, so no partial or duplicate row can result.
+    (tokio::time::timeout(SHUTDOWN_GRACE, &mut cycle).await, true)
 }
 
 fn new_interval(interval_secs: u64) -> tokio::time::Interval {
