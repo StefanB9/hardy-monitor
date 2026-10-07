@@ -71,3 +71,35 @@ async fn test_repair_labels_provenance_and_is_idempotent() {
     drop(db);
     tdb.cleanup().await;
 }
+
+#[tokio::test]
+async fn test_nightly_repair_runs_once_per_closed_day() -> anyhow::Result<()> {
+    use anyhow::Context;
+    let tdb = common::TestDatabase::new().await;
+    let schedule = GymSchedule::default();
+    let monday = NaiveDate::from_ymd_opt(2024, 6, 17).context("date")?;
+    // A 3-minute gap on Monday; 23:20 local is after closing + 15 min.
+    tdb.db.insert_record(utc(8, 0), 40.0).await?;
+    tdb.db.insert_record(utc(8, 4), 60.0).await?;
+    let after_close = utc(21, 20);
+
+    let first = tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        hardy_core::repair::run_nightly_repair(&tdb.db, &schedule, after_close),
+    )
+    .await
+    .context("repair timed out")??;
+    let again = hardy_core::repair::run_nightly_repair(&tdb.db, &schedule, after_close).await?;
+    let state = tdb.db.get_repair_state().await?;
+    let rows = tdb.db.get_history_range(utc(8, 0), utc(8, 4)).await?;
+    tdb.cleanup().await;
+
+    let (days, summary) = first.context("Monday was due")?;
+    assert_eq!(days, (monday, monday));
+    assert_eq!(summary.gaps_filled, 3);
+    assert!(again.is_none(), "a repaired day is not repaired twice");
+    assert_eq!(state.repaired_through, Some(monday));
+    assert_eq!(state.last_error, None);
+    assert_eq!(rows.len(), 5);
+    Ok(())
+}
