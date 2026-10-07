@@ -44,7 +44,9 @@ hardy-monitor/                         (workspace root)
 │   │
 │   ├── hardy-daemon/                  (binary — headless fetch loop; the only process that migrates)
 │   │   └── src/
-│   │       ├── main.rs                Startup, fetch loop, fetch_and_store
+│   │       ├── main.rs                Startup and the fetch loop
+│   │       ├── cycle.rs               One fetch cycle: fetch, store, log (shutdown grace)
+│   │       ├── timing.rs              Minute alignment and drift correction
 │   │       ├── connect.rs             Database connect with retry, health and schema checks
 │   │       ├── upkeep.rs              Nightly repair + training, schema check, forecast logging
 │   │       ├── forecasts.rs           Hourly forecast log (accuracy tracking)

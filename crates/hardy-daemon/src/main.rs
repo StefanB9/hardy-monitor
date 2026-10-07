@@ -2,26 +2,31 @@
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 mod connect;
+mod cycle;
 mod forecasts;
 mod logging;
+mod timing;
 mod upkeep;
 
 use std::time::Duration;
 
 use anyhow::{Context, Result};
 use hardy_core::{
-    AppError, RetryPolicy,
+    RetryPolicy,
     alert::AlertService,
     api::GymApiClient,
     config::AppConfig,
     db::{Database, minute_slot},
     health::HealthMonitor,
-    retry,
     schedule::GymSchedule,
 };
 use hardy_ml::maintenance::ModelMaintenance;
 
-const DRIFT_THRESHOLD_SECS: i64 = 5;
+use crate::{
+    cycle::{Stored, log_outcome, run_cycle},
+    timing::{new_interval, realign_if_drifted, wait_for_minute_alignment},
+};
+
 /// Fetch cycles between schema version checks (about ten minutes).
 const SCHEMA_CHECK_ITERATIONS: u64 = 10;
 const ALIGNMENT_CHECK_ITERATIONS: u64 = 60;
@@ -38,10 +43,6 @@ const CONNECT_RETRY_MAX: Duration = Duration::from_secs(60);
 /// Head-room left in each fetch interval so a slow cycle never overlaps the
 /// next tick.
 const CYCLE_HEADROOM: Duration = Duration::from_secs(5);
-
-/// How long an in-flight fetch may continue after a shutdown request; stays
-/// below Docker's default 10 s stop timeout.
-const SHUTDOWN_GRACE: Duration = Duration::from_secs(5);
 
 fn main() -> Result<()> {
     let _log_guard = logging::setup_logging();
@@ -262,89 +263,6 @@ async fn fetch_loop(
     }
 }
 
-/// Fetches and stores one reading within the cycle budget. On shutdown the
-/// in-flight cycle gets a short grace period; `true` means stop afterwards.
-async fn run_cycle(
-    worker: &Worker<'_>,
-    slot: chrono::DateTime<chrono::Utc>,
-    mut shutdown: std::pin::Pin<&mut impl std::future::Future<Output = ()>>,
-) -> (
-    Result<Result<Stored, AppError>, tokio::time::error::Elapsed>,
-    bool,
-) {
-    let cycle = fetch_and_store(worker, slot);
-    tokio::pin!(cycle);
-    let first = tokio::select! {
-        result = tokio::time::timeout(worker.cycle_budget, &mut cycle) => Some(result),
-        () = &mut shutdown => None,
-    };
-    if let Some(result) = first {
-        return (result, false);
-    }
-    tracing::info!("shutdown requested, finishing in-flight fetch");
-    // SAFETY: if the grace period also expires, the cycle is dropped. A
-    // single INSERT commits atomically or not at all and the minute slot is
-    // unique, so no partial or duplicate row can result.
-    (tokio::time::timeout(SHUTDOWN_GRACE, &mut cycle).await, true)
-}
-
-fn new_interval(interval_secs: u64) -> tokio::time::Interval {
-    let mut interval = tokio::time::interval(Duration::from_secs(interval_secs));
-    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    interval
-}
-
-/// Re-aligns to the next full minute if the timer drifted; returns whether it
-/// did.
-async fn realign_if_drifted() -> bool {
-    let seconds_into_minute = chrono::Utc::now().timestamp() % 60;
-    let drift = if seconds_into_minute <= 30 {
-        seconds_into_minute
-    } else {
-        60 - seconds_into_minute
-    };
-
-    if drift > DRIFT_THRESHOLD_SECS {
-        tracing::warn!(
-            drift_secs = drift,
-            threshold_secs = DRIFT_THRESHOLD_SECS,
-            "timer drift detected, re-syncing"
-        );
-        wait_for_minute_alignment().await;
-        true
-    } else {
-        tracing::debug!(
-            drift_secs = drift,
-            threshold_secs = DRIFT_THRESHOLD_SECS,
-            "alignment check passed"
-        );
-        false
-    }
-}
-
-fn log_outcome(
-    slot: chrono::DateTime<chrono::Utc>,
-    outcome: Result<Result<Stored, AppError>, tokio::time::error::Elapsed>,
-) {
-    match outcome {
-        Ok(Ok(Stored::Inserted(percentage))) => {
-            tracing::info!(%slot, occupancy_pct = percentage, "recorded occupancy");
-        }
-        Ok(Ok(Stored::SlotTaken(percentage))) => {
-            tracing::debug!(%slot, occupancy_pct = percentage, "minute slot already filled");
-        }
-        Ok(Err(AppError::Validation(reason))) => {
-            tracing::warn!(%slot, %reason, "rejected invalid reading");
-        }
-        Ok(Err(e)) => {
-            tracing::error!(%slot, error = %e, "failed to fetch/store data");
-        }
-        Err(_) => {
-            tracing::error!(%slot, "fetch cycle timed out");
-        }
-    }
-}
-
 /// Completes on Ctrl-C or, on Unix, SIGTERM (sent by `docker stop`).
 async fn shutdown_signal() {
     let ctrl_c = async {
@@ -373,50 +291,4 @@ async fn shutdown_signal() {
         () = ctrl_c => tracing::info!("received Ctrl-C"),
         () = terminate => tracing::info!("received SIGTERM"),
     }
-}
-
-async fn wait_for_minute_alignment() {
-    let now = chrono::Utc::now();
-    let seconds_until_next_minute = 60 - (now.timestamp() % 60);
-    if seconds_until_next_minute > 0 && seconds_until_next_minute < 60 {
-        tracing::info!(
-            wait_secs = seconds_until_next_minute,
-            "waiting for next full minute"
-        );
-        let sleep_secs = seconds_until_next_minute.try_into().unwrap_or(0);
-        tokio::time::sleep(Duration::from_secs(sleep_secs)).await;
-    }
-}
-
-/// What happened to a fetched reading.
-enum Stored {
-    Inserted(f64),
-    SlotTaken(f64),
-}
-
-#[tracing::instrument(skip_all, fields(%slot))]
-async fn fetch_and_store(
-    worker: &Worker<'_>,
-    slot: chrono::DateTime<chrono::Utc>,
-) -> Result<Stored, AppError> {
-    let response = retry(&worker.fetch_policy, "fetch_occupancy", || {
-        worker.api_client.fetch_occupancy()
-    })
-    .await?;
-    let percentage = response.occupancy_percentage()?;
-
-    let inserted = retry(&worker.fetch_policy, "insert_record", || async {
-        worker
-            .database
-            .insert_record(slot, percentage)
-            .await
-            .map_err(|e| AppError::from_anyhow_sqlx(&e, "insert_record"))
-    })
-    .await?;
-
-    Ok(if inserted.is_some() {
-        Stored::Inserted(percentage)
-    } else {
-        Stored::SlotTaken(percentage)
-    })
 }
