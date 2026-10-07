@@ -8,6 +8,7 @@ use hardy_core::{alert::AlertRules, config::AppConfig, db};
 use hardy_gui::{
     app::{HardyMonitorApp, Message},
     notifier::SystemNotifier,
+    tray::{Tray, TrayBase},
 };
 use image::GenericImageView;
 use muda::{Menu, MenuItem, PredefinedMenuItem};
@@ -27,17 +28,49 @@ async fn load_icon_async() -> Option<iced::window::Icon> {
     .flatten()
 }
 
-async fn load_tray_icon_async() -> Option<Icon> {
+const TRAY_ICON_SIZE: u32 = 64;
+
+/// The tray icon's pixels; kept so the status dot can be drawn onto them.
+async fn load_tray_icon_async() -> Option<TrayBase> {
     tokio::task::spawn_blocking(|| {
         let bytes = include_bytes!("../assets/icon.png");
-        let img = image::load_from_memory(bytes).ok()?;
+        // Trays show 16–32 px; a small base keeps redrawing the dot cheap.
+        let img = image::load_from_memory(bytes).ok()?.resize(
+            TRAY_ICON_SIZE,
+            TRAY_ICON_SIZE,
+            image::imageops::FilterType::Lanczos3,
+        );
         let (width, height) = img.dimensions();
-        let rgba = img.into_rgba8().into_raw();
-        Icon::from_rgba(rgba, width, height).ok()
+        Some(TrayBase {
+            rgba: img.into_rgba8().into_raw(),
+            width,
+            height,
+        })
     })
     .await
     .ok()
     .flatten()
+}
+
+/// Tray icon with its menu; `None` (logged) if the platform refuses it.
+fn build_tray(base: &TrayBase) -> Option<Tray> {
+    let menu = Menu::new();
+    let show_item = MenuItem::with_id("show", "Show/Hide", true, None);
+    let quit_item = MenuItem::with_id("quit", "Quit", true, None);
+    if let Err(e) = menu.append_items(&[&show_item, &PredefinedMenuItem::separator(), &quit_item]) {
+        tracing::error!("Failed to build menu: {e}");
+    }
+    let icon = Icon::from_rgba(base.rgba.clone(), base.width, base.height)
+        .map_err(|e| tracing::error!("Failed to decode tray icon: {e}"))
+        .ok()?;
+    TrayIconBuilder::new()
+        .with_menu(Box::new(menu))
+        .with_tooltip("Hardy's Gym Monitor")
+        .with_icon(icon)
+        .build()
+        .map_err(|e| tracing::error!("Failed to build tray icon: {e}"))
+        .ok()
+        .map(|tray| Tray::new(tray, base.clone()))
 }
 
 #[cfg(debug_assertions)]
@@ -103,7 +136,7 @@ fn main() -> Result<()> {
         Ok::<_, anyhow::Error>((database, icon, tray_icon_data))
     })?;
 
-    let tray_icon_data = tray_icon_data.context("Failed to load tray icon")?;
+    let tray_base = tray_icon_data.context("Failed to load tray icon")?;
     let alert_rules = AlertRules::new(
         config.notifications.cooldown_secs,
         config.notifications.opening_grace_minutes,
@@ -115,23 +148,7 @@ fn main() -> Result<()> {
 
     let app = iced::application(
         move || {
-            let tray_menu = Menu::new();
-            let show_item = MenuItem::with_id("show", "Show/Hide", true, None);
-            let quit_item = MenuItem::with_id("quit", "Quit", true, None);
-
-            if let Err(e) =
-                tray_menu.append_items(&[&show_item, &PredefinedMenuItem::separator(), &quit_item])
-            {
-                tracing::error!("Failed to build menu: {e}");
-            }
-
-            let tray_icon = TrayIconBuilder::new()
-                .with_menu(Box::new(tray_menu))
-                .with_tooltip("Hardy's Gym Monitor")
-                .with_icon(tray_icon_data.clone())
-                .build()
-                .map_err(|e| tracing::error!("Failed to build tray icon: {e}"))
-                .ok();
+            let tray = build_tray(&tray_base);
 
             // Phone alerts are sent by the daemon; the GUI only shows
             // desktop popups.
@@ -139,7 +156,7 @@ fn main() -> Result<()> {
 
             HardyMonitorApp::new(
                 database.clone(),
-                tray_icon,
+                tray,
                 config.clone(),
                 Arc::new(hardy_core::SystemClock),
                 Arc::new(notifier),

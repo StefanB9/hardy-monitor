@@ -28,6 +28,7 @@ impl HardyMonitorApp {
                 self.refresh_forecasts();
                 // The "now" marker moves.
                 self.ui.chart_cache.clear();
+                self.update_tray();
                 Task::none()
             }
             // A late schema check after start changes nothing.
@@ -300,6 +301,7 @@ impl HardyMonitorApp {
             self.data.occupancy = None;
             self.ui.gauge_cache.clear();
             self.stop_loading();
+            self.update_tray();
             Task::none()
         }
     }
@@ -359,6 +361,7 @@ impl HardyMonitorApp {
                 |()| Message::NotificationSent,
             ));
         }
+        self.update_tray();
         Task::batch(tasks)
     }
 

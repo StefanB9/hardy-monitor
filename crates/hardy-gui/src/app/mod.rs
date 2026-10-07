@@ -26,14 +26,15 @@ use hardy_core::{
 };
 use hardy_ml::ModelArtifact;
 use iced::{Subscription, Task, Theme, widget::canvas::Cache, window};
-use tray_icon::TrayIcon;
 
 pub use crate::time_range::{AnalyticsRange, ChartRange};
 use crate::{
     alerts::AlertControls,
     forecasting::Forecasting,
     freshness::{Freshness, freshness},
-    views::schema_notice::SchemaGate,
+    style::{self, OccupancyLevel},
+    tray::{Tray, TrayStatus, quiet_label, rgba8, tooltip_text},
+    views::{opening::opening_status, schema_notice::SchemaGate},
     widgets::heatmap::WeekGrid,
 };
 
@@ -136,7 +137,7 @@ pub struct HardyMonitorApp {
     schedule: GymSchedule,
     clock: Arc<dyn Clock>,
     notifier: Arc<dyn Notifier>,
-    _tray_icon: Option<TrayIcon>,
+    tray: Option<Tray>,
     error: Option<AppError>,
 
     data: MonitorState,
@@ -207,7 +208,7 @@ pub enum Message {
 impl HardyMonitorApp {
     pub fn new(
         db: Database,
-        tray_icon: Option<TrayIcon>,
+        tray: Option<Tray>,
         config: Arc<AppConfig>,
         clock: Arc<dyn Clock>,
         notifier: Arc<dyn Notifier>,
@@ -229,7 +230,7 @@ impl HardyMonitorApp {
             schedule,
             clock,
             notifier,
-            _tray_icon: tray_icon,
+            tray,
             error: None,
             data: MonitorState {
                 occupancy: None,
@@ -324,6 +325,43 @@ impl HardyMonitorApp {
             self.load_accuracy(),
             self.fetch_latest(),
         ])
+    }
+
+    /// Summarises the current state in the tray tooltip and status dot.
+    fn update_tray(&mut self) {
+        if self.tray.is_none() {
+            return;
+        }
+        let now = self.clock.now_utc();
+        let tz = self.schedule.timezone();
+        let warning = self.freshness().warning(tz);
+        let level = self.data.occupancy.map(|p| {
+            let level = OccupancyLevel::from_percentage(
+                p,
+                self.config.thresholds.low_occupancy_percent,
+                self.config.thresholds.high_occupancy_percent,
+            );
+            (p, level)
+        });
+        let quiet = self
+            .data
+            .forecasting
+            .quiet_window()
+            .map(|w| quiet_label(w.start, now, tz));
+        let opening = opening_status(now, &self.schedule);
+        let tooltip = tooltip_text(&TrayStatus {
+            occupancy: level.map(|(p, l)| (p, l.label())),
+            quiet_hour: quiet.as_deref(),
+            warning: warning.as_deref(),
+            opening: &opening,
+        });
+        let color = match level {
+            Some((_, l)) if warning.is_none() => l.color(),
+            _ => style::TEXT_TERTIARY,
+        };
+        if let Some(tray) = &mut self.tray {
+            tray.update(tooltip, rgba8(color));
+        }
     }
 
     /// Whether the newest reading is live; unknown until the first poll.
