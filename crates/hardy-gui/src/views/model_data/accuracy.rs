@@ -1,5 +1,5 @@
 //! "Live accuracy": how the daemon's logged forecasts compared with what
-//! actually happened, next to plain averages.
+//! actually happened, next to the baseline.
 
 use hardy_core::accuracy::{AccuracySummary, ErrorPair};
 use iced::{
@@ -17,7 +17,7 @@ use crate::{
 /// Days shown, newest last.
 pub(crate) const DAYS: i64 = 14;
 
-/// How much lower the forecast error is than the averages' (0.25 = 25%).
+/// How much lower the forecast error is than the baseline's (0.25 = 25%).
 fn improvement(pair: &ErrorPair) -> f64 {
     if pair.baseline_mae > 0.0 {
         1.0 - pair.forecast_mae / pair.baseline_mae
@@ -85,7 +85,7 @@ pub(super) fn card(summary: Option<&AccuracySummary>) -> Element<'_, Message> {
             Some("what the app showed".to_string()),
         ),
         stat(
-            "Plain averages",
+            "Baseline",
             format!("{:.1} pts", overall.baseline_mae),
             style::TEXT_PRIMARY,
             Some("same hours".to_string()),
@@ -115,7 +115,7 @@ pub(super) fn card(summary: Option<&AccuracySummary>) -> Element<'_, Message> {
                 .color(style::TEXT_TERTIARY),
             Space::new().width(Length::Fill),
             legend_item(style::FORECAST, "Forecast"),
-            legend_item(style::TEXT_TERTIARY, "Averages"),
+            legend_item(style::TEXT_TERTIARY, "Baseline"),
         ]
         .spacing(style::SPACE_L)
         .align_y(Alignment::Center)
@@ -172,7 +172,7 @@ mod tests {
     }
 
     #[test]
-    fn test_improvement_relative_to_averages() {
+    fn test_improvement_relative_to_baseline() {
         assert_relative_eq!(improvement(&pair(3.0, 4.0)), 0.25);
         assert_relative_eq!(improvement(&pair(5.0, 4.0)), -0.25);
         assert_relative_eq!(improvement(&pair(1.0, 0.0)), 0.0);

@@ -77,7 +77,7 @@ pub(super) fn card<'a>(props: &NowProps<'a>) -> container::Container<'a, Message
     let level = OccupancyLevel::from_percentage(window.expected, low, high);
     let source = match window.source {
         Source::Forecast if props.has_model => "Forecast from the trained model",
-        Source::Forecast => "Forecast from recent averages",
+        Source::Forecast => "Baseline forecast (no model yet)",
         Source::Averages => "Typical for this weekday",
     };
     let headline = column![

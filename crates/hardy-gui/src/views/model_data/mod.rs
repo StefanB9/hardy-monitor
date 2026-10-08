@@ -36,7 +36,7 @@ pub struct ModelDataProps<'a> {
     pub export_status: Option<&'a str>,
 }
 
-/// Green for a clear improvement over averages, amber for a small one.
+/// Green for a clear improvement over the baseline, amber for a small one.
 fn improvement_color(improvement: f64) -> iced::Color {
     if improvement >= 0.15 {
         style::SUCCESS
@@ -137,8 +137,8 @@ fn model_card<'a>(props: &ModelDataProps<'a>) -> Element<'a, Message> {
     match props.model {
         None => {
             body = body.push(empty_state(
-                "No model yet. The daemon trains one every night; until then forecasts use recent \
-                 averages.",
+                "No model yet. The daemon trains one every night; until then forecasts use the \
+                 baseline: typical times, adjusted for how busy it is right now.",
             ));
         }
         Some(model) => {
@@ -147,7 +147,7 @@ fn model_card<'a>(props: &ModelDataProps<'a>) -> Element<'a, Message> {
                 .push(
                     row![
                         stat(
-                            "Better than averages",
+                            "Better than baseline",
                             format!("{:.0}%", improvement * 100.0),
                             improvement_color(improvement),
                             Some("lower error on the last 7 days".to_string()),
@@ -177,7 +177,7 @@ fn model_card<'a>(props: &ModelDataProps<'a>) -> Element<'a, Message> {
                 )
                 .push(
                     text(format!(
-                        "Typical error {:.1} pts (averages: {:.1} pts)",
+                        "Typical error {:.1} pts (baseline: {:.1} pts)",
                         model.holdout_mae, model.baseline_mae
                     ))
                     .size(style::TEXT_BODY)
