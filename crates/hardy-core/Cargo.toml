@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 anyhow = { workspace = true }
 chrono = { workspace = true }
+chrono-tz = { workspace = true }
 config = { workspace = true }
 csv = { workspace = true }
 dirs = { workspace = true }
@@ -13,9 +14,10 @@ dotenvy = { workspace = true }
 futures = { workspace = true }
 reqwest = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
 sqlx = { workspace = true }
 thiserror = { workspace = true }
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["time"] }
 tracing = { workspace = true }
 
 [dev-dependencies]
@@ -23,6 +25,7 @@ approx = { workspace = true }
 proptest = { workspace = true }
 temp-env = { workspace = true }
 tempfile = { workspace = true }
+tokio = { workspace = true, features = ["test-util"] }
 toml = { workspace = true }
 wiremock = { workspace = true }
 

@@ -1,166 +1,300 @@
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
+mod connect;
+mod cycle;
+mod forecasts;
+mod logging;
+mod timing;
+mod upkeep;
+
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use hardy_core::{api, config::AppConfig, db, schedule::GymSchedule};
-use tracing_subscriber::{EnvFilter, fmt, prelude::*};
+use hardy_core::{
+    RetryPolicy,
+    alert::AlertService,
+    api::GymApiClient,
+    config::AppConfig,
+    db::{Database, minute_slot},
+    health::HealthMonitor,
+    schedule::GymSchedule,
+};
+use hardy_ml::maintenance::ModelMaintenance;
 
-#[cfg(debug_assertions)]
-fn setup_logging() -> Option<tracing_appender::non_blocking::WorkerGuard> {
-    let filter = if std::env::var("RUST_LOG").is_ok() {
-        EnvFilter::from_default_env()
-    } else {
-        EnvFilter::builder()
-            .with_default_directive(tracing::level_filters::LevelFilter::INFO.into())
-            .parse_lossy("hardy_core=debug,hardy_daemon=debug")
-    };
+use crate::{
+    cycle::{Stored, log_outcome, run_cycle},
+    timing::{new_interval, realign_if_drifted, wait_for_minute_alignment},
+};
 
-    tracing_subscriber::registry()
-        .with(fmt::layer())
-        .with(filter)
-        .init();
-
-    None
-}
-
-#[cfg(not(debug_assertions))]
-fn setup_logging() -> Option<tracing_appender::non_blocking::WorkerGuard> {
-    let file_appender = tracing_appender::rolling::daily("logs", "hardy-monitor.log");
-    let (non_blocking_writer, guard) = tracing_appender::non_blocking(file_appender);
-
-    let filter = if std::env::var("RUST_LOG").is_ok() {
-        EnvFilter::from_default_env()
-    } else {
-        EnvFilter::builder()
-            .with_default_directive(tracing::level_filters::LevelFilter::INFO.into())
-            .parse_lossy("hardy_core=info,hardy_daemon=info")
-    };
-
-    tracing_subscriber::registry()
-        .with(
-            fmt::layer()
-                .with_writer(non_blocking_writer)
-                .with_ansi(false)
-                .with_target(false),
-        )
-        .with(filter)
-        .init();
-
-    Some(guard)
-}
-
-const DRIFT_THRESHOLD_SECS: i64 = 5;
+/// Fetch cycles between schema version checks (about ten minutes).
+const SCHEMA_CHECK_ITERATIONS: u64 = 10;
 const ALIGNMENT_CHECK_ITERATIONS: u64 = 60;
 
+/// Per-tick retries: three attempts, waiting 2 s then 4 s.
+const FETCH_ATTEMPTS: u32 = 3;
+const FETCH_RETRY_INITIAL: Duration = Duration::from_secs(2);
+const FETCH_RETRY_MAX: Duration = Duration::from_secs(4);
+
+/// Startup connection retries continue until shutdown, backing off to 60 s.
+const CONNECT_RETRY_INITIAL: Duration = Duration::from_secs(1);
+const CONNECT_RETRY_MAX: Duration = Duration::from_secs(60);
+
+/// Head-room left in each fetch interval so a slow cycle never overlaps the
+/// next tick.
+const CYCLE_HEADROOM: Duration = Duration::from_secs(5);
+
 fn main() -> Result<()> {
-    let _log_guard = setup_logging();
+    let _log_guard = logging::setup_logging();
 
     let config = AppConfig::load().context("Failed to load configuration")?;
 
     let rt = tokio::runtime::Runtime::new().context("Failed to create tokio runtime")?;
 
-    rt.block_on(async {
-        tracing::info!("Starting Hardy Monitor in daemon mode");
+    rt.block_on(run(&config))
+}
 
-        tracing::info!("Connecting to database...");
-        let database = db::Database::new(&config.database.url).await?;
-        tracing::info!("Database connected successfully");
+async fn run(config: &AppConfig) -> Result<()> {
+    tracing::info!("Starting Hardy Monitor in daemon mode");
 
-        let api_client = api::GymApiClient::new(config.gym.api_url.clone(), &config.network)?;
-        tracing::info!("API client initialized");
+    let shutdown = shutdown_signal();
+    tokio::pin!(shutdown);
 
-        let schedule = GymSchedule::new(&config.schedule);
-        tracing::info!(
-            weekday_open = config.schedule.weekday.open_hour,
-            weekday_close = config.schedule.weekday.close_hour,
-            weekend_open = config.schedule.weekend.open_hour,
-            weekend_close = config.schedule.weekend.close_hour,
-            "schedule configured"
-        );
+    let schedule = GymSchedule::new(&config.schedule);
+    let alerts = AlertService::new(
+        &config.notifications,
+        &config.network,
+        schedule.clone(),
+        chrono::Utc::now(),
+    )?;
+    let mut health = HealthMonitor::new(config.notifications.health_after_minutes);
 
-        wait_for_minute_alignment().await;
+    let connect_policy = RetryPolicy::new(u32::MAX, CONNECT_RETRY_INITIAL, CONNECT_RETRY_MAX)?;
+    tracing::info!("Connecting to database...");
+    let Some(database) = connect::connect_database(
+        &config.database,
+        &connect_policy,
+        &schedule,
+        &alerts,
+        &mut health,
+        shutdown.as_mut(),
+    )
+    .await
+    .context("Failed to connect to database")?
+    else {
+        tracing::info!("shutdown requested before the database connected");
+        return Ok(());
+    };
+    tracing::info!("Database connected successfully");
 
-        let interval_secs = config.refresh.data_fetch_interval_secs;
-        tracing::info!(interval_secs, "starting fetch loop");
+    let api_client = GymApiClient::new(config.gym.api_url.clone(), &config.network)?;
+    tracing::info!(
+        timezone = %schedule.timezone(),
+        weekday_open = config.schedule.weekday.open_hour,
+        weekday_close = config.schedule.weekday.close_hour,
+        weekend_open = config.schedule.weekend.open_hour,
+        weekend_close = config.schedule.weekend.close_hour,
+        "schedule configured"
+    );
 
-        let mut interval = tokio::time::interval(Duration::from_secs(interval_secs));
-        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let fetch_policy = RetryPolicy::new(FETCH_ATTEMPTS, FETCH_RETRY_INITIAL, FETCH_RETRY_MAX)?;
+    let worker = Worker {
+        api_client: &api_client,
+        database: &database,
+        schedule: &schedule,
+        fetch_policy,
+        cycle_budget: Duration::from_secs(config.refresh.data_fetch_interval_secs)
+            .saturating_sub(CYCLE_HEADROOM)
+            .max(Duration::from_secs(1)),
+        forecast_hours: u32::try_from(config.ml.prediction_horizon_hours)
+            .context("ml.prediction_horizon_hours out of range")?,
+    };
 
-        let mut iteration_count: u64 = 0;
+    let mut alerts = alerts;
+    tracing::info!(
+        alert_topic = config.notifications.ntfy_topic.is_some(),
+        control_topic = config.notifications.control_topic.is_some(),
+        "alerts configured"
+    );
 
-        loop {
+    let mut models = ModelMaintenance::new(config.ml.clone(), schedule.clone());
+    if let Err(e) = models.load_previous(&database).await {
+        tracing::warn!(error = %e, "could not read the stored model");
+    }
+
+    fetch_loop(
+        &worker,
+        &mut alerts,
+        &mut health,
+        &mut models,
+        config.refresh.data_fetch_interval_secs,
+        shutdown.as_mut(),
+    )
+    .await;
+
+    tracing::info!("closing database pool");
+    database.close().await;
+    tracing::info!("daemon stopped");
+    Ok(())
+}
+
+/// Everything a fetch cycle needs, borrowed for the daemon's lifetime.
+struct Worker<'a> {
+    api_client: &'a GymApiClient,
+    database: &'a Database,
+    schedule: &'a GymSchedule,
+    fetch_policy: RetryPolicy,
+    cycle_budget: Duration,
+    forecast_hours: u32,
+}
+
+/// Runs fetch cycles aligned to full minutes until `shutdown` completes.
+async fn fetch_loop(
+    worker: &Worker<'_>,
+    alerts: &mut AlertService,
+    health: &mut HealthMonitor,
+    models: &mut ModelMaintenance,
+    interval_secs: u64,
+    mut shutdown: std::pin::Pin<&mut impl std::future::Future<Output = ()>>,
+) {
+    tokio::select! {
+        () = wait_for_minute_alignment() => {}
+        () = &mut shutdown => {
+            tracing::info!("shutdown requested during startup alignment");
+            return;
+        }
+    }
+    tracing::info!(interval_secs, "starting fetch loop");
+
+    let mut interval = new_interval(interval_secs);
+    let mut iteration_count: u64 = 0;
+    let mut schema_reported = false;
+
+    loop {
+        tokio::select! {
+            _ = interval.tick() => {}
+            () = &mut shutdown => {
+                tracing::info!("shutdown requested");
+                return;
+            }
+        }
+        iteration_count += 1;
+
+        if iteration_count.is_multiple_of(ALIGNMENT_CHECK_ITERATIONS) && realign_if_drifted().await
+        {
+            interval = new_interval(interval_secs);
             interval.tick().await;
-            iteration_count += 1;
+        }
 
-            if iteration_count.is_multiple_of(ALIGNMENT_CHECK_ITERATIONS) {
-                let now = chrono::Utc::now();
-                let seconds_into_minute = now.timestamp() % 60;
-                let drift = if seconds_into_minute <= 30 {
-                    seconds_into_minute
-                } else {
-                    60 - seconds_into_minute
-                };
+        if iteration_count.is_multiple_of(SCHEMA_CHECK_ITERATIONS) {
+            upkeep::check_schema(worker.database, alerts, &mut schema_reported).await;
+        }
 
-                if drift > DRIFT_THRESHOLD_SECS {
-                    tracing::warn!(
-                        drift_secs = drift,
-                        threshold_secs = DRIFT_THRESHOLD_SECS,
-                        "timer drift detected, re-syncing"
-                    );
-                    wait_for_minute_alignment().await;
-                    interval = tokio::time::interval(Duration::from_secs(interval_secs));
-                    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-                    interval.tick().await;
-                } else {
-                    tracing::debug!(
-                        drift_secs = drift,
-                        threshold_secs = DRIFT_THRESHOLD_SECS,
-                        "alignment check passed"
-                    );
+        // The slot is fixed when the tick fires, so retries store the reading
+        // in the minute it belongs to.
+        let slot = minute_slot(chrono::Utc::now());
+
+        // Phone commands are handled even while the gym is closed, so alerts
+        // can be armed ahead of time.
+        tokio::select! {
+            result = alerts.process_commands(worker.database, chrono::Utc::now()) => {
+                if let Err(e) = result {
+                    tracing::warn!(error = %e, "failed to process phone commands");
                 }
             }
-
-            let now_local = chrono::Local::now();
-            if !schedule.is_open(&now_local) {
-                tracing::debug!(
-                    time = %now_local.format("%H:%M"),
-                    "gym is closed, skipping fetch"
-                );
-                continue;
+            () = &mut shutdown => {
+                tracing::info!("shutdown requested");
+                return;
             }
+        }
 
-            match fetch_and_store(&api_client, &database).await {
-                Ok(percentage) => {
-                    tracing::info!(occupancy_pct = percentage, "recorded occupancy");
-                }
-                Err(e) => {
-                    tracing::error!(error = %e, "failed to fetch/store data");
+        // Runs while the gym is closed too, so it comes before the closed
+        // check.
+        tokio::select! {
+            () = upkeep::nightly_upkeep(worker, models) => {}
+            () = &mut shutdown => {
+                tracing::info!("shutdown requested during upkeep");
+                return;
+            }
+        }
+
+        if !worker.schedule.is_open(&slot) {
+            tracing::debug!(
+                gym_time = %slot.with_timezone(&worker.schedule.timezone()).format("%H:%M"),
+                "gym is closed, skipping fetch"
+            );
+            continue;
+        }
+
+        let (outcome, stop) = run_cycle(worker, slot, shutdown.as_mut()).await;
+        let stored_percentage = match &outcome {
+            Ok(Ok(Stored::Inserted(percentage))) => Some(*percentage),
+            _ => None,
+        };
+        let health_event = match &outcome {
+            Ok(Ok(_)) => health.success(slot),
+            Ok(Err(e)) => health.failure(slot, &e.to_string()),
+            Err(_) => health.failure(slot, "fetch cycle timed out"),
+        };
+        log_outcome(slot, outcome);
+        if stop {
+            return;
+        }
+        if forecasts::is_logging_slot(slot) {
+            upkeep::log_forecasts(worker, models, slot).await;
+        }
+        if let Some(event) = health_event {
+            tokio::select! {
+                () = alerts.publish_health(&event) => {}
+                () = &mut shutdown => {
+                    tracing::info!("shutdown requested");
+                    return;
                 }
             }
         }
-    })
-}
 
-async fn wait_for_minute_alignment() {
-    let now = chrono::Utc::now();
-    let seconds_until_next_minute = 60 - (now.timestamp() % 60);
-    if seconds_until_next_minute > 0 && seconds_until_next_minute < 60 {
-        tracing::info!(
-            wait_secs = seconds_until_next_minute,
-            "waiting for next full minute"
-        );
-        let sleep_secs = seconds_until_next_minute.try_into().unwrap_or(0);
-        tokio::time::sleep(Duration::from_secs(sleep_secs)).await;
+        if let Some(percentage) = stored_percentage {
+            tokio::select! {
+                result = alerts.process_reading(worker.database, percentage, slot) => {
+                    if let Err(e) = result {
+                        tracing::warn!(error = %e, "failed to evaluate alert");
+                    }
+                }
+                () = &mut shutdown => {
+                    tracing::info!("shutdown requested");
+                    return;
+                }
+            }
+        }
     }
 }
 
-#[tracing::instrument(skip_all)]
-async fn fetch_and_store(api_client: &api::GymApiClient, database: &db::Database) -> Result<f64> {
-    let response = api_client.fetch_occupancy().await?;
-    let percentage = response.occupancy_percentage()?;
-    let timestamp = chrono::Utc::now();
-    database.insert_record(timestamp, percentage).await?;
-    Ok(percentage)
+/// Completes on Ctrl-C or, on Unix, SIGTERM (sent by `docker stop`).
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        if let Err(e) = tokio::signal::ctrl_c().await {
+            tracing::error!(error = %e, "failed to listen for Ctrl-C");
+            std::future::pending::<()>().await;
+        }
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(mut signal) => {
+                signal.recv().await;
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "failed to listen for SIGTERM");
+                std::future::pending::<()>().await;
+            }
+        }
+    };
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        () = ctrl_c => tracing::info!("received Ctrl-C"),
+        () = terminate => tracing::info!("received SIGTERM"),
+    }
 }

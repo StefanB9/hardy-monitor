@@ -1,0 +1,65 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT\n                (f.target AT TIME ZONE $3)::date AS \"day!\",\n                f.horizon_hours AS \"horizon_hours!\",\n                COUNT(*) AS \"scored!\",\n                COUNT(f.model_id) AS \"from_model!\",\n                AVG(ABS(f.predicted - o.percentage)) AS \"forecast_mae!\",\n                AVG(ABS(f.baseline - o.percentage)) AS \"baseline_mae!\"\n            FROM forecast_log f\n            JOIN occupancy_logs o\n              ON o.timestamp = f.target AND o.source IN ('measured', 'smoothed')\n            WHERE f.target >= $1 AND f.target < $2\n            GROUP BY 1, 2\n            ORDER BY 1, 2\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "day!",
+        "type_info": "Date",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 1,
+        "name": "horizon_hours!",
+        "type_info": "Int2",
+        "origin": {
+          "Table": {
+            "table": "forecast_log",
+            "name": "horizon_hours"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "scored!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 3,
+        "name": "from_model!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 4,
+        "name": "forecast_mae!",
+        "type_info": "Float8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 5,
+        "name": "baseline_mae!",
+        "type_info": "Float8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Timestamptz",
+        "Timestamptz",
+        "Text"
+      ]
+    },
+    "nullable": [
+      null,
+      false,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "a4a35c59c6e607abf290ec6dc49b92aa58d51dfe6590596312ed0634d9f54666"
+}

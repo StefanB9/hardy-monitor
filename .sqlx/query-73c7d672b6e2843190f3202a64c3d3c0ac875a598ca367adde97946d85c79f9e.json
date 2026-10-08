@@ -1,0 +1,50 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT repaired_through, last_attempt_at, last_error FROM repair_state WHERE id = 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "repaired_through",
+        "type_info": "Date",
+        "origin": {
+          "Table": {
+            "table": "repair_state",
+            "name": "repaired_through"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "last_attempt_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "repair_state",
+            "name": "last_attempt_at"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "last_error",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "repair_state",
+            "name": "last_error"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "73c7d672b6e2843190f3202a64c3d3c0ac875a598ca367adde97946d85c79f9e"
+}

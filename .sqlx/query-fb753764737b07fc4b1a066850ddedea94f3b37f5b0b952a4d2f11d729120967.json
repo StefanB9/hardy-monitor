@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            UPDATE ml_state\n            SET last_attempt_at = $1,\n                retrain_requested_at = CASE\n                    WHEN retrain_requested_at <= $1 THEN NULL\n                    ELSE retrain_requested_at\n                END\n            WHERE id = 1\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "fb753764737b07fc4b1a066850ddedea94f3b37f5b0b952a4d2f11d729120967"
+}

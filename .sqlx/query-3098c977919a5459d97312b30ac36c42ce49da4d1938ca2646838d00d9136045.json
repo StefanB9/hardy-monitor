@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            UPDATE alert_settings\n            SET enabled = $1,\n                threshold_percent = $2,\n                active_until = $3,\n                updated_at = $4,\n                updated_by = $5\n            WHERE id = 1\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Bool",
+        "Float8",
+        "Timestamptz",
+        "Timestamptz",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "3098c977919a5459d97312b30ac36c42ce49da4d1938ca2646838d00d9136045"
+}

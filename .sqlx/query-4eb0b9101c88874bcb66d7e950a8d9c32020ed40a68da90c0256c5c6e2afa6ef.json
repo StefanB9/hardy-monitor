@@ -1,0 +1,112 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT id, trained_at, feature_version, algorithm, training_samples,\n                   holdout_mae, baseline_mae, tuned\n            FROM ml_models\n            WHERE feature_version = $1\n            ORDER BY trained_at DESC, id DESC\n            LIMIT 1\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "ml_models",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "trained_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "ml_models",
+            "name": "trained_at"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "feature_version",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "ml_models",
+            "name": "feature_version"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "algorithm",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "ml_models",
+            "name": "algorithm"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "training_samples",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "ml_models",
+            "name": "training_samples"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "holdout_mae",
+        "type_info": "Float8",
+        "origin": {
+          "Table": {
+            "table": "ml_models",
+            "name": "holdout_mae"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "baseline_mae",
+        "type_info": "Float8",
+        "origin": {
+          "Table": {
+            "table": "ml_models",
+            "name": "baseline_mae"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "tuned",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "ml_models",
+            "name": "tuned"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "4eb0b9101c88874bcb66d7e950a8d9c32020ed40a68da90c0256c5c6e2afa6ef"
+}

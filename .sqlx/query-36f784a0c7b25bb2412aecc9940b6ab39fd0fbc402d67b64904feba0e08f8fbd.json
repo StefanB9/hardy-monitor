@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE ml_state SET retrain_requested_at = $1 WHERE id = 1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "36f784a0c7b25bb2412aecc9940b6ab39fd0fbc402d67b64904feba0e08f8fbd"
+}

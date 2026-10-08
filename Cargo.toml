@@ -1,7 +1,7 @@
 cargo-features = ["panic-immediate-abort"]
 
 [workspace]
-members = ["crates/hardy-core", "crates/hardy-daemon", "crates/hardy-gui"]
+members = ["crates/hardy-core", "crates/hardy-daemon", "crates/hardy-gui", "crates/hardy-ml"]
 resolver = "3"
 
 [workspace.lints.rust]
@@ -23,6 +23,7 @@ missing_panics_doc = "allow"
 [workspace.dependencies]
 # --- Shared across multiple crates ---
 anyhow = { version = "1.0.104", default-features = false, features = ["std"] }
+chrono-tz = { version = "0.10.4", default-features = false, features = ["serde"] }
 
 # --- GUI-only ---
 approx = { version = "0.6.0-rc2", default-features = false }
@@ -49,13 +50,14 @@ proptest = { version = "1.11.0" }
 rayon = { version = "1.12.0", default-features = false }
 reqwest = { version = "0.13.5", default-features = false, features = ["json", "native-tls"] }
 serde = { version = "1.0.229", default-features = false, features = ["derive"] }
+serde_json = { version = "1.0.151", default-features = false, features = ["std"] }
 smartcore = { version = "0.4.10", default-features = false, features = ["serde"] }
 sqlx = { version = "0.9.0", default-features = false, features = ["chrono", "macros", "migrate", "postgres", "runtime-tokio", "tls-rustls"] }
 temp-env = { version = "0.3.6" }
 tempfile = { version = "3.27.0" }
 thiserror = { version = "2.0.21", default-features = false }
 tokio = { version = "1.53.2", default-features = false, features = ["macros", "rt-multi-thread"] }
-toml = { version = "1.1.6", default-features = false, features = ["parse"] }
+toml = { version = "1.1.6", default-features = false, features = ["parse", "serde"] }
 tracing = { version = "0.1.44", default-features = false, features = ["attributes", "std"] }
 tracing-appender = { version = "0.2.5", default-features = false }
 tracing-subscriber = { version = "0.3.23", default-features = false, features = ["env-filter", "fmt", "std"] }
@@ -86,3 +88,11 @@ overflow-checks = true
 panic = "unwind"
 rpath = true
 strip = false
+
+# Random forest training is ~20x slower unoptimised. smartcore's generic
+# code is instantiated in hardy-ml, so both need optimising to keep tests fast.
+[profile.dev.package.smartcore]
+opt-level = 3
+
+[profile.dev.package.hardy-ml]
+opt-level = 3

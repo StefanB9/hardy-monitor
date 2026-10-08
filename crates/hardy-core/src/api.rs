@@ -7,6 +7,7 @@ use crate::{
     error::{AppError, NetworkErrorKind},
 };
 
+/// Occupancy as reported by the gym API.
 #[derive(Debug, Deserialize)]
 pub struct GymResponse {
     pub gym: i32,
@@ -17,15 +18,26 @@ pub struct GymResponse {
 }
 
 impl GymResponse {
+    /// The reported occupancy in percent. Rejects values that cannot be a
+    /// percentage (non-finite or outside `0..=100`) so they never reach the
+    /// database.
     pub fn occupancy_percentage(&self) -> Result<f64, AppError> {
-        self.num_val.parse::<f64>().map_err(|e| {
+        let value = self.num_val.parse::<f64>().map_err(|e| {
             AppError::Validation(format!(
                 "Failed to parse occupancy percentage from numval: {e}"
             ))
-        })
+        })?;
+        if (0.0..=100.0).contains(&value) {
+            Ok(value)
+        } else {
+            Err(AppError::Validation(format!(
+                "occupancy percentage out of range [0, 100]: {value}"
+            )))
+        }
     }
 }
 
+/// HTTP client for the gym's occupancy endpoint.
 #[derive(Clone, Debug)]
 pub struct GymApiClient {
     client: reqwest::Client,
@@ -33,6 +45,7 @@ pub struct GymApiClient {
 }
 
 impl GymApiClient {
+    /// Builds a client for `url` with the configured timeouts.
     #[tracing::instrument(skip_all)]
     pub fn new(url: String, network_config: &NetworkConfig) -> Result<Self, AppError> {
         let client = reqwest::Client::builder()
@@ -47,6 +60,7 @@ impl GymApiClient {
         Ok(Self { client, url })
     }
 
+    /// Fetches and validates the current occupancy.
     #[tracing::instrument(skip_all, fields(url = %self.url, http.status_code = tracing::field::Empty))]
     pub async fn fetch_occupancy(&self) -> Result<GymResponse, AppError> {
         let response = self
@@ -78,6 +92,7 @@ impl GymApiClient {
 mod tests {
     use anyhow::Result;
     use approx::assert_relative_eq;
+    use proptest::prelude::*;
 
     use super::*;
 
@@ -123,11 +138,20 @@ mod tests {
     }
 
     #[test]
-    fn test_occupancy_percentage_over_hundred() -> Result<()> {
+    fn test_occupancy_percentage_over_hundred_rejected() {
         let response = make_response("120.5");
-        let val = response.occupancy_percentage()?;
-        assert_relative_eq!(val, 120.5);
-        Ok(())
+        assert!(response.occupancy_percentage().is_err());
+    }
+
+    #[test]
+    fn test_occupancy_percentage_non_finite_rejected() {
+        for num_val in ["NaN", "inf", "-inf"] {
+            let response = make_response(num_val);
+            assert!(
+                response.occupancy_percentage().is_err(),
+                "{num_val} must be rejected"
+            );
+        }
     }
 
     #[test]
@@ -152,11 +176,19 @@ mod tests {
     }
 
     #[test]
-    fn test_occupancy_percentage_negative() -> Result<()> {
+    fn test_occupancy_percentage_negative_rejected() {
         let response = make_response("-5.0");
-        let val = response.occupancy_percentage()?;
-        assert_relative_eq!(val, -5.0);
-        Ok(())
+        assert!(response.occupancy_percentage().is_err());
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(1000))]
+
+        #[test]
+        fn occupancy_percentage_accepts_exactly_the_valid_range(value in -1000.0f64..1000.0) {
+            let result = make_response(&value.to_string()).occupancy_percentage();
+            prop_assert_eq!(result.is_ok(), (0.0..=100.0).contains(&value));
+        }
     }
 
     #[test]

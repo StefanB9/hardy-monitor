@@ -1,6 +1,11 @@
+pub(crate) mod alerts;
 pub mod app;
-pub mod ml;
+pub mod forecasting;
+pub(crate) mod freshness;
 pub mod notifier;
+pub mod quiet_window;
 pub mod style;
+pub(crate) mod time_range;
+pub mod tray;
 pub mod views;
 pub mod widgets;

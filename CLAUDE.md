@@ -4,49 +4,84 @@ Gym occupancy monitoring application built in Rust. Fetches real-time occupancy 
 
 ## Project Structure
 
-Cargo workspace with 3 members:
+Cargo workspace with 4 members:
 
 ```
 hardy-monitor/                         (workspace root)
 ├── Cargo.toml                         [workspace] manifest — all dependency versions here
-├── migrations/                        sqlx migrations (single table: occupancy_logs)
+├── config.toml                        Documented example configuration
+├── migrations/                        sqlx migrations: occupancy_logs (+ quarantine), alert_settings,
+│                                      ml_models / ml_state, repair_state, forecast_log
 ├── .sqlx/                             sqlx offline query cache
+├── docs/plan/                         Approved plans
 │
 ├── crates/
-│   ├── hardy-core/                    (library — shared by daemon and GUI)
+│   ├── hardy-core/                    (library — shared by daemon, ML and GUI)
 │   │   ├── src/
 │   │   │   ├── lib.rs                 Module declarations + re-exports
-│   │   │   ├── analytics.rs           OccupancyStats, insights, trend analysis, predictions
+│   │   │   ├── accuracy.rs            Summaries of logged forecast accuracy
+│   │   │   ├── alert/                 Low-occupancy alerts: settings, engine, windows, phone commands, service
+│   │   │   ├── analytics/             Stats, day analysis, peak/quiet slots, insights, period comparison,
+│   │   │   │                          trend; time.rs: gym-local time helpers
 │   │   │   ├── api.rs                 GymApiClient (reqwest HTTP)
-│   │   │   ├── config.rs              AppConfig, MlConfig, MlAlgorithm (TOML + env var)
-│   │   │   ├── db.rs                  Database (sqlx PgPool). OccupancyLog, HourlyAverage
+│   │   │   ├── config/                AppConfig + load (TOML + env var); one file per section group;
+│   │   │   │                          validation.rs
+│   │   │   ├── db/                    Database (sqlx PgPool): readings, averages, export (CSV), alert settings,
+│   │   │   │                          ml, repair state, forecast log; schema.rs: migrations + version check
 │   │   │   ├── error.rs               AppError, NetworkErrorKind, DatabaseError (thiserror)
-│   │   │   ├── repair.rs              DataRepairer. Gap filling, outlier removal, smoothing
-│   │   │   ├── schedule.rs            GymSchedule, Bavarian holiday detection
+│   │   │   ├── health.rs              HealthMonitor: outage / resumed messages for the daemon
+│   │   │   ├── ntfy.rs                ntfy client (publish, poll)
+│   │   │   ├── repair/                DataRepairer; steps.rs: gap filling, outliers, smoothing, boundaries;
+│   │   │   │                          nightly.rs: automatic nightly repair
+│   │   │   ├── retry.rs               RetryPolicy + retry() for transient errors
+│   │   │   ├── schedule/              GymSchedule; hours.rs: opening/closing times; holidays.rs: Bavarian
+│   │   │   │                          holidays (Easter)
 │   │   │   └── traits.rs              Clock, Notifier, SystemClock, MockClock, MockNotifier
-│   │   └── tests/                     Integration tests
-│   │       ├── api.rs                 wiremock-based API client tests
-│   │       ├── database.rs            PostgreSQL tests (TestDatabase isolation)
-│   │       ├── app_logic.rs           MockClock/MockNotifier behavior tests
-│   │       └── common/mod.rs          TestDatabase helper
+│   │   └── tests/                     Integration tests (TestDatabase / wiremock): api, api_errors,
+│   │                                  db_connect, db_readings, db_averages, db_alert_settings, db_models,
+│   │                                  schema, migrations, repair, forecast_log, alert_service, ntfy,
+│   │                                  notifier, schedule_clock; common/mod.rs: TestDatabase and
+│   │                                  RawTestDatabase
 │   │
-│   ├── hardy-daemon/                  (binary — headless fetch loop)
-│   │   └── src/main.rs               Daemon loop, logging, fetch_and_store
+│   ├── hardy-ml/                      (library — forecasting, shared by daemon and GUI)
+│   │   ├── src/                       history, profile, features, samples, model, training/ (+ quality gate;
+│   │   │                              tuning, intervals), evaluation, confidence, forecast, forecast_log,
+│   │   │                              retrain, maintenance, persistence
+│   │   └── tests/maintenance.rs       Training against a real database
+│   │
+│   ├── hardy-daemon/                  (binary — headless fetch loop; the only process that migrates)
+│   │   └── src/
+│   │       ├── main.rs                Startup and the fetch loop
+│   │       ├── cycle.rs               One fetch cycle: fetch, store, log (shutdown grace)
+│   │       ├── timing.rs              Minute alignment and drift correction
+│   │       ├── connect.rs             Database connect with retry, health and schema checks
+│   │       ├── upkeep.rs              Nightly repair + training, schema check, forecast logging
+│   │       ├── forecasts.rs           Hourly forecast log (accuracy tracking)
+│   │       └── logging.rs             tracing setup (console / rotated file)
 │   │
 │   └── hardy-gui/                     (binary + library — iced desktop GUI)
 │       ├── assets/icon.png
 │       └── src/
 │           ├── main.rs                Entry point, tray icon, iced runner
 │           ├── lib.rs                 Module declarations
-│           ├── app.rs                 HardyMonitorApp, Message, update/view/subscription
-│           ├── style.rs               Iced theme customization
-│           ├── notifier.rs            SystemNotifier, CombinedNotifier
-│           ├── ml/                    OccupancyPredictor, linfa, feature extraction
-│           ├── widgets/               Custom widgets (gauge, heatmap, charts)
-│           └── views/                 Dashboard, weekly, insights, ML predictions, repair
+│           ├── app/                   HardyMonitorApp (mod), message (Message, ViewMode), update, data
+│           │                          (applying loaded data), maintenance (export/repair), view (shell),
+│           │                          sidebar, tasks (DB loads)
+│           ├── style.rs               Design tokens: colours, occupancy scale, type/spacing scales
+│           ├── forecasting.rs         Forecast state: history, loaded model, forecasts, quiet window
+│           ├── quiet_window.rs        Next quiet hour (forecast, else slot averages)
+│           ├── time_range.rs          ChartRange / AnalyticsRange and the instants they cover
+│           ├── freshness.rs           Whether the newest reading is live or stale
+│           ├── tray.rs                Tray tooltip and status dot
+│           ├── alerts.rs              Alert controls (shared settings, desktop popups)
+│           ├── notifier.rs            SystemNotifier (desktop popups)
+│           ├── widgets/               Canvas widgets: gauge, heatmap/ (grid.rs: WeekGrid), history_chart/
+│           │                          (plot, layers, axis)
+│           └── views/                 now/, week, insights, model_data/, schema_notice, opening;
+│                                      components/ (cards, buttons, …)
 ```
 
-**Dependency boundary:** Core has zero GUI dependencies. Both binaries depend on core. GUI depends on core + GUI-specific crates. Never reverse.
+**Dependency boundary:** core ← ml ← daemon / gui. Core has zero GUI or ML dependencies; `hardy-ml` depends only on core plus ML crates; both binaries depend on core and ml. GUI-only crates stay in `hardy-gui`. Never reverse.
 
 ## Planning Process
 
@@ -72,6 +107,8 @@ cargo build -p hardy-gui                      # Build GUI only
 ```
 
 **Always use `cargo nextest run` instead of `cargo test`.** Nextest is the project's test runner.
+
+**Headless GUI checks (Linux/CI-like environments):** the committed iced features target the desktop platform and do not build on a bare Linux box. For local verification only, temporarily add iced's `x11` + `tiny-skia` features, run the GUI under `xvfb-run` with `ICED_BACKEND=tiny-skia`, skip the tray (no tray host under Xvfb) and screenshot with ImageMagick `import`. Never commit those changes.
 
 **`--all-targets` is mandatory** for `clippy` and `check`. Lints must pass in tests and examples — not just lib/bin targets. Test code follows the same quality standards as production code.
 
@@ -197,7 +234,7 @@ Minimum necessary. `pub(super)` or `pub(crate)` for internal types. Private fiel
 
 **Rule 2: Minimum Features Enabled.** Strictly limit feature opt-ins to the absolute bare minimum required for the code to compile and run. Never use blanket features like `features = ["full"]`. This keeps compile times fast, binary sizes small, and the attack surface minimal.
 
-**Rule 3: GUI deps stay in hardy-gui.** Any dependency only needed for GUI/ML/notifications belongs in `hardy-gui/Cargo.toml`, not `hardy-core`. All versions are defined in the workspace root `[workspace.dependencies]`.
+**Rule 3: Deps live in the narrowest crate.** GUI-only dependencies belong in `hardy-gui/Cargo.toml`, ML-only ones in `hardy-ml/Cargo.toml`, never in `hardy-core`. All versions are defined in the workspace root `[workspace.dependencies]`.
 
 **General:**
 - New dependencies require justification: what problem, why this crate, what alternatives were considered.
@@ -206,7 +243,7 @@ Minimum necessary. `pub(super)` or `pub(crate)` for internal types. Private fiel
 ## Database & sqlx
 
 - **Migrations:** Use `cargo sqlx migrate add -r <name>` to create reversible migration files. Run from the project root.
-- **Running migrations:** Migrations run automatically via `sqlx::migrate!("../../migrations")` in `Database::new()` (relative to `hardy-core`'s `CARGO_MANIFEST_DIR`). `DATABASE_URL` is read from `.env`.
+- **Running migrations:** Only the daemon migrates: it connects with `Migrations::Apply`, the GUI with `Migrations::Verify` and waits (full-window notice) until `Database::schema_status()` is `Current`. A build older than the database refuses to run (`AppError::SchemaTooNew`). `Database::new()` (tests) applies migrations. `DATABASE_URL` is read from `.env`.
 - **Offline cache:** After adding or changing queries, regenerate with `cargo sqlx prepare --workspace` from the project root. Commit the `.sqlx/` directory.
 - **Compile-time checked queries:** Use `sqlx::query!` and `sqlx::query_as!` — never raw string queries without compile-time verification.
 - **Never hand-create migration files.** Always use the `cargo sqlx migrate add` command so timestamps are generated correctly.

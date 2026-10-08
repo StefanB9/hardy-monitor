@@ -1,0 +1,74 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT\n                enabled,\n                threshold_percent,\n                active_until,\n                updated_at,\n                updated_by as \"updated_by: SettingsSource\"\n            FROM alert_settings\n            WHERE id = 1\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "enabled",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "alert_settings",
+            "name": "enabled"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "threshold_percent",
+        "type_info": "Float8",
+        "origin": {
+          "Table": {
+            "table": "alert_settings",
+            "name": "threshold_percent"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "active_until",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "alert_settings",
+            "name": "active_until"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "updated_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "alert_settings",
+            "name": "updated_at"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "updated_by: SettingsSource",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "alert_settings",
+            "name": "updated_by"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "d1d500dfd613047d6967415430b305f5e76fb4250c05d64940d98dc18ced657f"
+}

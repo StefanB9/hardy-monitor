@@ -1,326 +1,249 @@
-use chrono::{DateTime, Local, Utc};
-use hardy_core::analytics::{self, DayAnalysis, Insight, OccupancyStats, TrendDirection};
+//! "Insights": summary statistics, busiest and quietest slots, and findings
+//! over the last four weeks.
+
+use hardy_core::analytics::{
+    Insight, InsightCategory, OccupancyStats, TrendDirection, weekday_short,
+};
 use iced::{
-    Alignment, Border, Element, Length,
-    widget::{Space, column, container, row, scrollable, text},
+    Alignment, Border, Color, Element, Length,
+    widget::{column, container, row, text},
 };
 
-use crate::{app::Message, style, views::components::card_container};
+use crate::{
+    app::Message,
+    style::{self, OccupancyLevel},
+    views::components::{badge, card, empty_state, scroll, stat},
+};
 
+/// Everything the Insights view shows.
 #[derive(Clone, Copy)]
 pub struct InsightsProps<'a> {
     pub trend: Option<TrendDirection>,
     pub stats: Option<&'a OccupancyStats>,
+    /// `(weekday, hour, average)` of the busiest slots.
     pub peak_hours: &'a [(i32, i32, f64)],
+    /// `(weekday, hour, average)` of the quietest slots.
     pub quiet_hours: &'a [(i32, i32, f64)],
-    pub day_analysis: &'a [DayAnalysis],
     pub insights: &'a [Insight],
-    pub ml_has_model: bool,
-    pub ml_training_in_progress: bool,
-    pub ml_last_trained: Option<DateTime<Utc>>,
+    pub low_threshold: f64,
+    pub high_threshold: f64,
 }
 
-#[allow(clippy::too_many_lines)]
-pub fn view(props: InsightsProps<'_>) -> Element<'_, Message> {
-    let trend_card = {
-        let (trend_icon, trend_text, trend_color) = match props.trend {
-            Some(TrendDirection::Increasing) => ("^", "Getting Busier", style::ACCENT_RED),
-            Some(TrendDirection::Decreasing) => ("v", "Getting Quieter", style::ACCENT_GREEN),
-            Some(TrendDirection::Stable) => ("->", "Staying Stable", style::ACCENT_CYAN),
-            Some(TrendDirection::Insufficient) | None => {
-                ("?", "Collecting Data", style::TEXT_MUTED)
-            }
-        };
-
-        card_container(column![
-            text("Overall Trend").size(14).color(style::TEXT_MUTED),
-            Space::new().height(15),
-            row![
-                text(trend_icon).size(32).color(trend_color),
-                Space::new().width(15),
-                column![
-                    text(trend_text).size(20).color(trend_color),
-                    text("vs previous 4 weeks")
-                        .size(12)
-                        .color(style::TEXT_MUTED),
-                ]
-            ]
-            .align_y(Alignment::Center)
-        ])
-        .width(Length::FillPortion(1))
+fn trend_tile(trend: Option<TrendDirection>) -> (String, Color) {
+    let (label, color) = match trend {
+        Some(TrendDirection::Increasing) => ("▲ Getting busier", style::OCC_BUSY),
+        Some(TrendDirection::Decreasing) => ("▼ Getting quieter", style::OCC_QUIET),
+        Some(TrendDirection::Stable) => ("● Stable", style::TEXT_PRIMARY),
+        Some(TrendDirection::Insufficient) | None => ("Not enough data", style::TEXT_TERTIARY),
     };
+    (label.to_string(), color)
+}
 
-    let stats_card = if let Some(stats) = props.stats {
-        let consistency = if stats.coefficient_of_variation < 0.3 {
-            ("Very Predictable", style::ACCENT_GREEN)
-        } else if stats.coefficient_of_variation < 0.5 {
-            ("Moderately Predictable", style::ACCENT_ORANGE)
-        } else {
-            ("Highly Variable", style::ACCENT_RED)
-        };
-
-        card_container(column![
-            text("Statistics").size(14).color(style::TEXT_MUTED),
-            Space::new().height(15),
-            row![
-                column![
-                    text("Average").size(12).color(style::TEXT_MUTED),
-                    text(format!("{:.1}%", stats.mean))
-                        .size(24)
-                        .color(style::TEXT_BRIGHT),
-                ],
-                Space::new().width(30),
-                column![
-                    text("Range").size(12).color(style::TEXT_MUTED),
-                    text(format!("{:.0}% - {:.0}%", stats.min, stats.max))
-                        .size(18)
-                        .color(style::TEXT_BRIGHT),
-                ],
-            ]
-            .align_y(Alignment::End),
-            Space::new().height(15),
-            row![
-                text("Consistency: ").size(12).color(style::TEXT_MUTED),
-                text(consistency.0).size(12).color(consistency.1),
-            ]
-        ])
-        .width(Length::FillPortion(1))
+/// How much occupancy differs between hours of the week, i.e. how much
+/// choosing the right time pays off.
+fn timing_impact(stats: &OccupancyStats) -> &'static str {
+    if stats.coefficient_of_variation < 0.3 {
+        "Small"
+    } else if stats.coefficient_of_variation < 0.5 {
+        "Noticeable"
     } else {
-        card_container(column![
-            text("Statistics").size(14).color(style::TEXT_MUTED),
-            Space::new().height(20),
-            text("Loading...").color(style::TEXT_MUTED),
-        ])
-        .width(Length::FillPortion(1))
+        "Large"
+    }
+}
+
+fn category_icon(category: InsightCategory) -> (&'static str, Color) {
+    match category {
+        InsightCategory::Trend => ("↗", style::ACCENT),
+        InsightCategory::Peak => ("▲", style::OCC_BUSY),
+        InsightCategory::QuietTime => ("▼", style::OCC_QUIET),
+        InsightCategory::Anomaly => ("!", style::WARNING),
+        InsightCategory::DayPattern => ("▦", style::FORECAST),
+        InsightCategory::Consistency => ("≈", style::TEXT_SECONDARY),
+    }
+}
+
+fn tiles<'a>(props: &InsightsProps<'a>) -> Element<'a, Message> {
+    let (trend, trend_color) = trend_tile(props.trend);
+    let tile = |content: Element<'a, Message>| {
+        container(content)
+            .padding(style::CARD_PADDING)
+            .width(Length::FillPortion(1))
+            .style(|_| container::Style {
+                background: Some(style::BG_CARD.into()),
+                border: Border {
+                    color: style::BORDER,
+                    width: 1.0,
+                    radius: style::RADIUS_CARD.into(),
+                },
+                ..Default::default()
+            })
     };
+    let mut tiles = row![tile(stat(
+        "Trend",
+        trend,
+        trend_color,
+        Some("vs. the 4 weeks before".to_string()),
+    ))]
+    .spacing(style::SPACE_L);
 
-    let peak_card = card_container(column![
-        text("Busiest Times").size(14).color(style::TEXT_MUTED),
-        Space::new().height(15),
-        {
-            let mut peak_col = column![].spacing(8);
-            for (weekday, hour, pct) in props.peak_hours.iter().take(5) {
-                peak_col = peak_col.push(
-                    row![
-                        container(text(format!("{pct:.0}%")).size(12).color(style::BG_DARK))
-                            .padding([4, 8])
-                            .style(|_| container::Style {
-                                background: Some(style::ACCENT_RED.into()),
-                                border: Border {
-                                    radius: 4.0.into(),
-                                    ..Default::default()
-                                },
-                                ..Default::default()
-                            }),
-                        Space::new().width(10),
-                        text(format!(
-                            "{} {:02}:00",
-                            analytics::weekday_short(*weekday),
-                            hour
-                        ))
-                        .size(14)
-                        .color(style::TEXT_BRIGHT),
-                    ]
-                    .align_y(Alignment::Center),
-                );
-            }
-            peak_col
-        }
-    ])
-    .width(Length::FillPortion(1));
-
-    let quiet_card = card_container(column![
-        text("Quietest Times").size(14).color(style::TEXT_MUTED),
-        Space::new().height(15),
-        {
-            let mut quiet_col = column![].spacing(8);
-            for (weekday, hour, pct) in props.quiet_hours.iter().take(5) {
-                quiet_col = quiet_col.push(
-                    row![
-                        container(text(format!("{pct:.0}%")).size(12).color(style::BG_DARK))
-                            .padding([4, 8])
-                            .style(|_| container::Style {
-                                background: Some(style::ACCENT_GREEN.into()),
-                                border: Border {
-                                    radius: 4.0.into(),
-                                    ..Default::default()
-                                },
-                                ..Default::default()
-                            }),
-                        Space::new().width(10),
-                        text(format!(
-                            "{} {:02}:00",
-                            analytics::weekday_short(*weekday),
-                            hour
-                        ))
-                        .size(14)
-                        .color(style::TEXT_BRIGHT),
-                    ]
-                    .align_y(Alignment::Center),
-                );
-            }
-            quiet_col
-        }
-    ])
-    .width(Length::FillPortion(1));
-
-    let days_card = card_container(column![
-        text("Daily Patterns").size(14).color(style::TEXT_MUTED),
-        Space::new().height(15),
-        {
-            let mut days_row = row![].spacing(30);
-            for day in props.day_analysis {
-                if day.sample_count > 0 {
-                    #[allow(clippy::cast_possible_truncation)]
-                    let bar_height = (day.avg_occupancy * 1.5).max(5.0) as f32;
-                    let color = if day.avg_occupancy < 40.0 {
-                        style::ACCENT_GREEN
-                    } else if day.avg_occupancy < 60.0 {
-                        style::ACCENT_ORANGE
-                    } else {
-                        style::ACCENT_RED
-                    };
-
-                    days_row = days_row.push(
-                        column![
-                            container(Space::new().width(30).height(Length::Fixed(bar_height)))
-                                .style(move |_| container::Style {
-                                    background: Some(color.into()),
-                                    border: Border {
-                                        radius: 4.0.into(),
-                                        ..Default::default()
-                                    },
-                                    ..Default::default()
-                                }),
-                            Space::new().height(8),
-                            text(&day.day_name[..3]).size(12).color(style::TEXT_MUTED),
-                            text(format!("{:.0}%", day.avg_occupancy))
-                                .size(12)
-                                .color(style::TEXT_BRIGHT),
-                        ]
-                        .align_x(Alignment::Center),
-                    );
-                }
-            }
-            container(days_row)
-                .width(Length::Fill)
-                .align_x(Alignment::Center)
-        }
-    ])
-    .width(Length::Fill);
-
-    let insights_card = card_container(column![
-        text("Key Insights").size(14).color(style::TEXT_MUTED),
-        Space::new().height(15),
-        {
-            let mut insights_col = column![].spacing(12);
-            for insight in props.insights.iter().take(6) {
-                let importance_color = match insight.importance {
-                    5 => style::ACCENT_GREEN,
-                    4 => style::ACCENT_CYAN,
-                    3 => style::ACCENT_ORANGE,
-                    _ => style::TEXT_MUTED,
-                };
-
-                insights_col = insights_col.push(
-                    container(column![
-                        row![
-                            container(
-                                text(format!("{}", insight.importance))
-                                    .size(10)
-                                    .color(style::BG_DARK)
-                            )
-                            .padding([2, 6])
-                            .style(move |_| container::Style {
-                                background: Some(importance_color.into()),
-                                border: Border {
-                                    radius: 8.0.into(),
-                                    ..Default::default()
-                                },
-                                ..Default::default()
-                            }),
-                            Space::new().width(10),
-                            text(&insight.title).size(14).color(style::TEXT_BRIGHT),
-                        ]
-                        .align_y(Alignment::Center),
-                        Space::new().height(4),
-                        text(&insight.description).size(12).color(style::TEXT_MUTED),
-                    ])
-                    .padding(12)
-                    .style(|_| container::Style {
-                        background: Some(style::BG_DARK.into()),
-                        border: Border {
-                            radius: 8.0.into(),
-                            ..Default::default()
-                        },
-                        ..Default::default()
-                    }),
-                );
-            }
-
-            if props.insights.is_empty() {
-                insights_col = insights_col.push(
-                    text("No insights yet. Keep collecting data!")
-                        .size(14)
-                        .color(style::TEXT_MUTED),
-                );
-            }
-
-            insights_col
-        }
-    ])
-    .width(Length::Fill);
-
-    let ml_status_card = {
-        let (status_text, status_color) = if props.ml_training_in_progress {
-            ("Training...", style::ACCENT_ORANGE)
-        } else if props.ml_has_model {
-            ("Active", style::ACCENT_GREEN)
-        } else {
-            ("Collecting data", style::TEXT_MUTED)
+    if let Some(stats) = props.stats {
+        let level_color = |p| {
+            OccupancyLevel::from_percentage(p, props.low_threshold, props.high_threshold).color()
         };
+        tiles = tiles
+            .push(tile(stat(
+                "Average",
+                format!("{:.0}%", stats.mean),
+                level_color(stats.mean),
+                Some(format!("median {:.0}%", stats.median)),
+            )))
+            .push(tile(stat(
+                "Range of hourly averages",
+                format!("{:.0} – {:.0}%", stats.min, stats.max),
+                style::TEXT_PRIMARY,
+                Some("quietest to busiest hour".to_string()),
+            )))
+            .push(tile(stat(
+                "Impact of timing",
+                timing_impact(stats).to_string(),
+                style::TEXT_PRIMARY,
+                Some(format!("hours differ by ± {:.0} pts", stats.std_dev)),
+            )));
+    }
+    tiles.into()
+}
 
-        let trained_str = props.ml_last_trained.map_or_else(
-            || "N/A".to_string(),
-            |t| t.with_timezone(&Local).format("%Y-%m-%d %H:%M").to_string(),
-        );
-
-        card_container(column![
-            text("ML Prediction Model")
-                .size(14)
-                .color(style::TEXT_MUTED),
-            Space::new().height(15),
+fn slot_list<'a>(
+    title: &'a str,
+    slots: &[(i32, i32, f64)],
+    low: f64,
+    high: f64,
+) -> Element<'a, Message> {
+    if slots.is_empty() {
+        return card(title, empty_state("Not enough data yet"))
+            .width(Length::FillPortion(1))
+            .into();
+    }
+    let mut list = column![].spacing(style::SPACE_S);
+    for &(weekday, hour, value) in slots.iter().take(5) {
+        list = list.push(
             row![
-                text("Status:").size(12).color(style::TEXT_MUTED),
-                Space::new().width(8),
-                text(status_text).size(12).color(status_color),
-                Space::new().width(Length::Fill),
-                text("Last trained:").size(12).color(style::TEXT_MUTED),
-                Space::new().width(8),
-                text(trained_str).size(12).color(style::TEXT_BRIGHT),
+                text(format!("{} {hour:02}:00", weekday_short(weekday)))
+                    .size(style::TEXT_BODY)
+                    .color(style::TEXT_PRIMARY)
+                    .width(Length::Fill),
+                badge(
+                    format!("{value:.0}%"),
+                    OccupancyLevel::from_percentage(value, low, high).color()
+                ),
             ]
             .align_y(Alignment::Center),
-        ])
-        .width(Length::Fill)
+        );
+    }
+    card(title, list).width(Length::FillPortion(1)).into()
+}
+
+fn insight_row(insight: &Insight) -> Element<'_, Message> {
+    let (icon, color) = category_icon(insight.category);
+    row![
+        container(text(icon).size(style::TEXT_HEADING).color(color))
+            .center_x(32)
+            .center_y(32)
+            .style(move |_| container::Style {
+                background: Some(style::tint(color, 0.14).into()),
+                border: Border {
+                    radius: style::RADIUS_CONTROL.into(),
+                    ..Default::default()
+                },
+                ..Default::default()
+            }),
+        column![
+            text(&insight.title)
+                .size(style::TEXT_BODY)
+                .color(style::TEXT_PRIMARY),
+            text(&insight.description)
+                .size(style::TEXT_CAPTION)
+                .color(style::TEXT_SECONDARY),
+        ]
+        .spacing(2)
+        .width(Length::Fill),
+    ]
+    .spacing(style::SPACE_M)
+    .align_y(Alignment::Center)
+    .into()
+}
+
+/// The Insights page.
+pub fn view(props: InsightsProps<'_>) -> Element<'_, Message> {
+    let (low, high) = (props.low_threshold, props.high_threshold);
+
+    let findings: Element<'_, Message> = if props.insights.is_empty() {
+        empty_state("No findings yet — they appear after a few weeks of data.")
+    } else {
+        let mut list = column![].spacing(style::SPACE_L);
+        for insight in props.insights.iter().take(8) {
+            list = list.push(insight_row(insight));
+        }
+        list.into()
     };
 
     let content = column![
-        row![trend_card, stats_card]
-            .spacing(20)
-            .height(Length::Fixed(160.0)),
-        Space::new().height(20),
-        days_card,
-        Space::new().height(20),
-        row![peak_card, quiet_card].spacing(20),
-        Space::new().height(20),
-        insights_card,
-        Space::new().height(20),
-        ml_status_card,
+        tiles(&props),
+        row![
+            slot_list("Busiest times", props.peak_hours, low, high),
+            slot_list("Quietest times", props.quiet_hours, low, high),
+        ]
+        .spacing(style::SPACE_L),
+        card("Findings", findings).width(Length::Fill),
     ]
-    .padding(10);
+    .spacing(style::SPACE_L);
 
-    scrollable(content)
-        .height(Length::Fill)
-        .width(Length::Fill)
-        .into()
+    scroll(content)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn stats(cv: f64) -> OccupancyStats {
+        OccupancyStats {
+            mean: 30.0,
+            median: 28.0,
+            std_dev: cv * 30.0,
+            min: 5.0,
+            max: 60.0,
+            sample_count: 100,
+            coefficient_of_variation: cv,
+        }
+    }
+
+    #[test]
+    fn test_timing_impact_bands() {
+        assert_eq!(timing_impact(&stats(0.2)), "Small");
+        assert_eq!(timing_impact(&stats(0.4)), "Noticeable");
+        assert_eq!(timing_impact(&stats(0.7)), "Large");
+    }
+
+    #[test]
+    fn test_trend_tile_labels() {
+        assert_eq!(
+            trend_tile(Some(TrendDirection::Increasing)).0,
+            "▲ Getting busier"
+        );
+        assert_eq!(trend_tile(None).0, "Not enough data");
+    }
+
+    #[test]
+    fn test_every_category_has_an_icon() {
+        for category in [
+            InsightCategory::Trend,
+            InsightCategory::Peak,
+            InsightCategory::QuietTime,
+            InsightCategory::Anomaly,
+            InsightCategory::DayPattern,
+            InsightCategory::Consistency,
+        ] {
+            assert_ne!(category_icon(category).0, "");
+        }
+    }
 }

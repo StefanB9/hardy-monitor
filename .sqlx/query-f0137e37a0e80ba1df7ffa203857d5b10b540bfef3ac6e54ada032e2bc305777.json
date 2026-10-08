@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE ml_state SET last_error = $1 WHERE id = 1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "f0137e37a0e80ba1df7ffa203857d5b10b540bfef3ac6e54ada032e2bc305777"
+}
