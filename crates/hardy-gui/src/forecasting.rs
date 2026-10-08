@@ -12,8 +12,9 @@ use hardy_ml::{History, ModelArtifact, PredictionWithConfidence, SlotProfile, ba
 
 use crate::quiet_window::{QuietWindow, next_quiet_window};
 
-/// History kept for features ("same time last week") and the baseline.
-pub(crate) const HISTORY_DAYS: i64 = 8;
+/// History kept for the baseline, which needs the most (model features
+/// reach back one week).
+pub(crate) const HISTORY_DAYS: i64 = hardy_ml::BASELINE_HISTORY_DAYS;
 
 /// What the model view shows about the active model.
 #[derive(Debug, Clone, PartialEq)]
