@@ -1,10 +1,9 @@
 //! Integration tests for API responses and failures the client rejects.
 //!
 //! These tests use wiremock to simulate the gym API.
-#![allow(clippy::unwrap_used)]
-#![allow(clippy::expect_used)]
 #![allow(clippy::float_cmp)]
 
+use anyhow::{Context, Result};
 use hardy_core::{api::GymApiClient, config::NetworkConfig};
 use wiremock::{
     Mock, MockServer, ResponseTemplate,
@@ -12,7 +11,7 @@ use wiremock::{
 };
 
 #[tokio::test]
-async fn test_fetch_occupancy_server_error() {
+async fn test_fetch_occupancy_server_error() -> Result<()> {
     let mock_server = MockServer::start().await;
 
     Mock::given(method("GET"))
@@ -26,19 +25,20 @@ async fn test_fetch_occupancy_server_error() {
         connect_timeout_secs: 5,
     };
 
-    let client = GymApiClient::new(mock_server.uri(), &config).unwrap();
+    let client = GymApiClient::new(mock_server.uri(), &config)?;
     let result = client.fetch_occupancy().await;
 
     assert!(result.is_err(), "Should fail on 500 error");
-    let err = result.unwrap_err();
+    let err = result.err().context("expected an error")?;
     assert!(
         err.to_string().contains("500"),
         "Error should mention status code"
     );
+    Ok(())
 }
 
 #[tokio::test]
-async fn test_fetch_occupancy_not_found() {
+async fn test_fetch_occupancy_not_found() -> Result<()> {
     let mock_server = MockServer::start().await;
 
     Mock::given(method("GET"))
@@ -52,14 +52,15 @@ async fn test_fetch_occupancy_not_found() {
         connect_timeout_secs: 5,
     };
 
-    let client = GymApiClient::new(mock_server.uri(), &config).unwrap();
+    let client = GymApiClient::new(mock_server.uri(), &config)?;
     let result = client.fetch_occupancy().await;
 
     assert!(result.is_err(), "Should fail on 404 error");
+    Ok(())
 }
 
 #[tokio::test]
-async fn test_fetch_occupancy_invalid_json() {
+async fn test_fetch_occupancy_invalid_json() -> Result<()> {
     let mock_server = MockServer::start().await;
 
     Mock::given(method("GET"))
@@ -73,14 +74,15 @@ async fn test_fetch_occupancy_invalid_json() {
         connect_timeout_secs: 5,
     };
 
-    let client = GymApiClient::new(mock_server.uri(), &config).unwrap();
+    let client = GymApiClient::new(mock_server.uri(), &config)?;
     let result = client.fetch_occupancy().await;
 
     assert!(result.is_err(), "Should fail on invalid JSON");
+    Ok(())
 }
 
 #[tokio::test]
-async fn test_fetch_occupancy_missing_fields() {
+async fn test_fetch_occupancy_missing_fields() -> Result<()> {
     let mock_server = MockServer::start().await;
 
     let body = r#"{
@@ -99,14 +101,15 @@ async fn test_fetch_occupancy_missing_fields() {
         connect_timeout_secs: 5,
     };
 
-    let client = GymApiClient::new(mock_server.uri(), &config).unwrap();
+    let client = GymApiClient::new(mock_server.uri(), &config)?;
     let result = client.fetch_occupancy().await;
 
     assert!(result.is_err(), "Should fail on missing fields");
+    Ok(())
 }
 
 #[tokio::test]
-async fn test_fetch_occupancy_timeout() {
+async fn test_fetch_occupancy_timeout() -> Result<()> {
     let mock_server = MockServer::start().await;
 
     Mock::given(method("GET"))
@@ -124,14 +127,15 @@ async fn test_fetch_occupancy_timeout() {
         connect_timeout_secs: 1,
     };
 
-    let client = GymApiClient::new(mock_server.uri(), &config).unwrap();
+    let client = GymApiClient::new(mock_server.uri(), &config)?;
     let result = client.fetch_occupancy().await;
 
     assert!(result.is_err(), "Should timeout");
+    Ok(())
 }
 
 #[tokio::test]
-async fn test_fetch_occupancy_very_large_percentage_rejected() {
+async fn test_fetch_occupancy_very_large_percentage_rejected() -> Result<()> {
     let mock_server = MockServer::start().await;
 
     let body = r#"{
@@ -152,17 +156,18 @@ async fn test_fetch_occupancy_very_large_percentage_rejected() {
         connect_timeout_secs: 5,
     };
 
-    let client = GymApiClient::new(mock_server.uri(), &config).unwrap();
-    let response = client.fetch_occupancy().await.unwrap();
+    let client = GymApiClient::new(mock_server.uri(), &config)?;
+    let response = client.fetch_occupancy().await?;
 
     assert!(
         response.occupancy_percentage().is_err(),
         "percentages above 100 must be rejected"
     );
+    Ok(())
 }
 
 #[tokio::test]
-async fn test_fetch_occupancy_negative_percentage_rejected() {
+async fn test_fetch_occupancy_negative_percentage_rejected() -> Result<()> {
     let mock_server = MockServer::start().await;
 
     let body = r#"{
@@ -183,17 +188,18 @@ async fn test_fetch_occupancy_negative_percentage_rejected() {
         connect_timeout_secs: 5,
     };
 
-    let client = GymApiClient::new(mock_server.uri(), &config).unwrap();
-    let response = client.fetch_occupancy().await.unwrap();
+    let client = GymApiClient::new(mock_server.uri(), &config)?;
+    let response = client.fetch_occupancy().await?;
 
     assert!(
         response.occupancy_percentage().is_err(),
         "negative percentages must be rejected"
     );
+    Ok(())
 }
 
 #[tokio::test]
-async fn test_fetch_occupancy_whitespace_numval_fails() {
+async fn test_fetch_occupancy_whitespace_numval_fails() -> Result<()> {
     let mock_server = MockServer::start().await;
 
     let body = r#"{
@@ -214,18 +220,19 @@ async fn test_fetch_occupancy_whitespace_numval_fails() {
         connect_timeout_secs: 5,
     };
 
-    let client = GymApiClient::new(mock_server.uri(), &config).unwrap();
-    let response = client.fetch_occupancy().await.unwrap();
+    let client = GymApiClient::new(mock_server.uri(), &config)?;
+    let response = client.fetch_occupancy().await?;
 
     let result = response.occupancy_percentage();
     assert!(
         result.is_err(),
         "Whitespace in numval should cause parse error"
     );
+    Ok(())
 }
 
 #[tokio::test]
-async fn test_fetch_occupancy_rate_limited() {
+async fn test_fetch_occupancy_rate_limited() -> Result<()> {
     let mock_server = MockServer::start().await;
 
     Mock::given(method("GET"))
@@ -239,13 +246,14 @@ async fn test_fetch_occupancy_rate_limited() {
         connect_timeout_secs: 5,
     };
 
-    let client = GymApiClient::new(mock_server.uri(), &config).unwrap();
+    let client = GymApiClient::new(mock_server.uri(), &config)?;
     let result = client.fetch_occupancy().await;
 
     assert!(result.is_err(), "Should fail on 429 rate limit");
-    let err = result.unwrap_err();
+    let err = result.err().context("expected an error")?;
     assert!(
         err.to_string().contains("429"),
         "Error should mention 429 status"
     );
+    Ok(())
 }

@@ -1,11 +1,10 @@
 //! Integration tests for `AlertService`: phone commands and alert delivery
 //! against a real database and a mocked ntfy server.
-#![allow(clippy::unwrap_used)]
-#![allow(clippy::expect_used)]
 #![allow(clippy::float_cmp)]
 
 mod common;
 
+use anyhow::{Context, Result};
 use chrono::{DateTime, TimeDelta, TimeZone, Utc};
 use hardy_core::{
     GymSchedule,
@@ -19,11 +18,12 @@ use wiremock::{
 };
 
 /// Monday 2024-06-17 at `h:mi` CEST, as UTC.
-fn local(h: u32, mi: u32) -> DateTime<Utc> {
-    chrono_tz::Europe::Berlin
+fn local(h: u32, mi: u32) -> Result<DateTime<Utc>> {
+    Ok(chrono_tz::Europe::Berlin
         .with_ymd_and_hms(2024, 6, 17, h, mi, 0)
-        .unwrap()
-        .with_timezone(&Utc)
+        .single()
+        .context("unambiguous local time")?
+        .with_timezone(&Utc))
 }
 
 fn config(server: &MockServer, control: bool) -> NotificationConfig {
@@ -37,14 +37,14 @@ fn config(server: &MockServer, control: bool) -> NotificationConfig {
     }
 }
 
-fn service(server: &MockServer, control: bool, now: DateTime<Utc>) -> AlertService {
+fn service(server: &MockServer, control: bool, now: DateTime<Utc>) -> Result<AlertService> {
     AlertService::new(
         &config(server, control),
         &NetworkConfig::default(),
         GymSchedule::default(),
         now,
     )
-    .unwrap()
+    .context("alert service should build")
 }
 
 fn ndjson(messages: &[(&str, &str)]) -> String {
@@ -68,10 +68,10 @@ async fn mock_poll(server: &MockServer, since: &str, messages: &[(&str, &str)]) 
 }
 
 #[tokio::test]
-async fn test_alert_service_on_command_arms_and_replies() {
-    let tdb = common::TestDatabase::new().await;
+async fn test_alert_service_on_command_arms_and_replies() -> Result<()> {
+    let tdb = common::TestDatabase::new().await?;
     let server = MockServer::start().await;
-    let start = local(10, 0);
+    let start = local(10, 0)?;
     mock_poll(
         &server,
         &start.timestamp().to_string(),
@@ -86,36 +86,36 @@ async fn test_alert_service_on_command_arms_and_replies() {
         .mount(&server)
         .await;
 
-    let mut svc = service(&server, true, start);
+    let mut svc = service(&server, true, start)?;
     let applied = svc
-        .process_commands(&tdb.db, local(10, 1))
+        .process_commands(&tdb.db, local(10, 1)?)
         .await
-        .expect("commands processed");
+        .context("commands processed")?;
     assert_eq!(applied, 1);
 
-    let settings = tdb.db.get_alert_settings().await.unwrap();
-    assert!(settings.is_active(local(12, 0)));
-    assert!(!settings.is_active(local(12, 1)));
+    let settings = tdb.db.get_alert_settings().await?;
+    assert!(settings.is_active(local(12, 0)?));
+    assert!(!settings.is_active(local(12, 1)?));
     assert_eq!(settings.threshold_percent(), 25.0);
     assert_eq!(settings.updated_by(), SettingsSource::Phone);
 
     tdb.cleanup().await;
+    Ok(())
 }
 
 #[tokio::test]
-async fn test_alert_service_off_and_status_commands() {
-    let tdb = common::TestDatabase::new().await;
+async fn test_alert_service_off_and_status_commands() -> Result<()> {
+    let tdb = common::TestDatabase::new().await?;
     let server = MockServer::start().await;
-    let start = local(10, 0);
+    let start = local(10, 0)?;
     let armed = AlertSettings::armed(
         40.0,
         AlertDuration::Always,
         start,
         &GymSchedule::default(),
         SettingsSource::Gui,
-    )
-    .unwrap();
-    tdb.db.save_alert_settings(&armed).await.unwrap();
+    )?;
+    tdb.db.save_alert_settings(&armed).await?;
 
     mock_poll(
         &server,
@@ -136,21 +136,19 @@ async fn test_alert_service_off_and_status_commands() {
         .mount(&server)
         .await;
 
-    let mut svc = service(&server, true, start);
-    assert_eq!(
-        svc.process_commands(&tdb.db, local(10, 1)).await.unwrap(),
-        2
-    );
-    assert!(!tdb.db.get_alert_settings().await.unwrap().enabled());
+    let mut svc = service(&server, true, start)?;
+    assert_eq!(svc.process_commands(&tdb.db, local(10, 1)?).await?, 2);
+    assert!(!tdb.db.get_alert_settings().await?.enabled());
 
     tdb.cleanup().await;
+    Ok(())
 }
 
 #[tokio::test]
-async fn test_alert_service_invalid_command_replies_usage_and_keeps_settings() {
-    let tdb = common::TestDatabase::new().await;
+async fn test_alert_service_invalid_command_replies_usage_and_keeps_settings() -> Result<()> {
+    let tdb = common::TestDatabase::new().await?;
     let server = MockServer::start().await;
-    let start = local(10, 0);
+    let start = local(10, 0)?;
     mock_poll(
         &server,
         &start.timestamp().to_string(),
@@ -164,22 +162,20 @@ async fn test_alert_service_invalid_command_replies_usage_and_keeps_settings() {
         .mount(&server)
         .await;
 
-    let before = tdb.db.get_alert_settings().await.unwrap();
-    let mut svc = service(&server, true, start);
-    assert_eq!(
-        svc.process_commands(&tdb.db, local(10, 1)).await.unwrap(),
-        0
-    );
-    assert_eq!(tdb.db.get_alert_settings().await.unwrap(), before);
+    let before = tdb.db.get_alert_settings().await?;
+    let mut svc = service(&server, true, start)?;
+    assert_eq!(svc.process_commands(&tdb.db, local(10, 1)?).await?, 0);
+    assert_eq!(tdb.db.get_alert_settings().await?, before);
 
     tdb.cleanup().await;
+    Ok(())
 }
 
 #[tokio::test]
-async fn test_alert_service_polls_from_last_seen_message() {
-    let tdb = common::TestDatabase::new().await;
+async fn test_alert_service_polls_from_last_seen_message() -> Result<()> {
+    let tdb = common::TestDatabase::new().await?;
     let server = MockServer::start().await;
-    let start = local(10, 0);
+    let start = local(10, 0)?;
     mock_poll(&server, &start.timestamp().to_string(), &[("m1", "status")]).await;
     mock_poll(&server, "m1", &[]).await;
     Mock::given(method("POST"))
@@ -187,23 +183,21 @@ async fn test_alert_service_polls_from_last_seen_message() {
         .mount(&server)
         .await;
 
-    let mut svc = service(&server, true, start);
-    svc.process_commands(&tdb.db, local(10, 1)).await.unwrap();
-    svc.process_commands(&tdb.db, local(10, 2)).await.unwrap();
+    let mut svc = service(&server, true, start)?;
+    svc.process_commands(&tdb.db, local(10, 1)?).await?;
+    svc.process_commands(&tdb.db, local(10, 2)?).await?;
 
     tdb.cleanup().await;
+    Ok(())
 }
 
 #[tokio::test]
-async fn test_alert_service_without_control_topic_does_not_poll() {
-    let tdb = common::TestDatabase::new().await;
+async fn test_alert_service_without_control_topic_does_not_poll() -> Result<()> {
+    let tdb = common::TestDatabase::new().await?;
     let server = MockServer::start().await;
 
-    let mut svc = service(&server, false, local(10, 0));
-    assert_eq!(
-        svc.process_commands(&tdb.db, local(10, 1)).await.unwrap(),
-        0
-    );
+    let mut svc = service(&server, false, local(10, 0)?)?;
+    assert_eq!(svc.process_commands(&tdb.db, local(10, 1)?).await?, 0);
     assert!(
         server
             .received_requests()
@@ -213,21 +207,21 @@ async fn test_alert_service_without_control_topic_does_not_poll() {
     );
 
     tdb.cleanup().await;
+    Ok(())
 }
 
 #[tokio::test]
-async fn test_alert_service_publishes_alert_once_per_dip() {
-    let tdb = common::TestDatabase::new().await;
+async fn test_alert_service_publishes_alert_once_per_dip() -> Result<()> {
+    let tdb = common::TestDatabase::new().await?;
     let server = MockServer::start().await;
     let armed = AlertSettings::armed(
         30.0,
         AlertDuration::UntilClosing,
-        local(9, 0),
+        local(9, 0)?,
         &GymSchedule::default(),
         SettingsSource::Gui,
-    )
-    .unwrap();
-    tdb.db.save_alert_settings(&armed).await.unwrap();
+    )?;
+    tdb.db.save_alert_settings(&armed).await?;
     Mock::given(method("POST"))
         .and(path("/alerts"))
         .and(body_string_contains("Quiet now: 20% (below 30%)"))
@@ -236,40 +230,33 @@ async fn test_alert_service_publishes_alert_once_per_dip() {
         .mount(&server)
         .await;
 
-    let mut svc = service(&server, false, local(9, 0));
-    let now = local(10, 0);
-    assert!(
-        svc.process_reading(&tdb.db, 45.0, now)
-            .await
-            .unwrap()
-            .is_none()
-    );
+    let mut svc = service(&server, false, local(9, 0)?)?;
+    let now = local(10, 0)?;
+    assert!(svc.process_reading(&tdb.db, 45.0, now).await?.is_none());
     assert!(
         svc.process_reading(&tdb.db, 20.0, now + TimeDelta::minutes(1))
-            .await
-            .unwrap()
+            .await?
             .is_some()
     );
     assert!(
         svc.process_reading(&tdb.db, 18.0, now + TimeDelta::minutes(2))
-            .await
-            .unwrap()
+            .await?
             .is_none()
     );
 
     tdb.cleanup().await;
+    Ok(())
 }
 
 #[tokio::test]
-async fn test_alert_service_no_alert_when_disarmed() {
-    let tdb = common::TestDatabase::new().await;
+async fn test_alert_service_no_alert_when_disarmed() -> Result<()> {
+    let tdb = common::TestDatabase::new().await?;
     let server = MockServer::start().await;
 
-    let mut svc = service(&server, false, local(9, 0));
+    let mut svc = service(&server, false, local(9, 0)?)?;
     assert!(
-        svc.process_reading(&tdb.db, 1.0, local(12, 0))
-            .await
-            .unwrap()
+        svc.process_reading(&tdb.db, 1.0, local(12, 0)?)
+            .await?
             .is_none()
     );
     assert!(
@@ -281,10 +268,11 @@ async fn test_alert_service_no_alert_when_disarmed() {
     );
 
     tdb.cleanup().await;
+    Ok(())
 }
 
 #[tokio::test]
-async fn test_alert_service_publishes_health_events_in_gym_time() {
+async fn test_alert_service_publishes_health_events_in_gym_time() -> Result<()> {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/alerts"))
@@ -295,10 +283,11 @@ async fn test_alert_service_publishes_health_events_in_gym_time() {
         .mount(&server)
         .await;
 
-    let svc = service(&server, false, local(20, 0));
+    let svc = service(&server, false, local(20, 0)?)?;
     svc.publish_health(&HealthEvent::Down {
-        since: local(20, 39),
+        since: local(20, 39)?,
         reason: "insert failed".to_string(),
     })
     .await;
+    Ok(())
 }

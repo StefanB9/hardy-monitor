@@ -35,7 +35,7 @@ async fn add_future_migration(pool: &sqlx::PgPool) -> Result<()> {
 
 #[tokio::test]
 async fn test_schema_verify_does_not_migrate() -> Result<()> {
-    let raw = common::RawTestDatabase::new().await;
+    let raw = common::RawTestDatabase::new().await?;
     let db = Database::connect(&DatabaseConfig::with_url(&raw.url), Migrations::Verify).await?;
 
     let status = db.schema_status().await?;
@@ -56,7 +56,7 @@ async fn test_schema_verify_does_not_migrate() -> Result<()> {
 
 #[tokio::test]
 async fn test_schema_apply_migrates_to_current() -> Result<()> {
-    let raw = common::RawTestDatabase::new().await;
+    let raw = common::RawTestDatabase::new().await?;
     let db = Database::connect(&DatabaseConfig::with_url(&raw.url), Migrations::Apply).await?;
 
     let status = db.schema_status().await?;
@@ -69,7 +69,7 @@ async fn test_schema_apply_migrates_to_current() -> Result<()> {
 
 #[tokio::test]
 async fn test_schema_newer_database_is_reported() -> Result<()> {
-    let raw = common::RawTestDatabase::new().await;
+    let raw = common::RawTestDatabase::new().await?;
     let config = DatabaseConfig::with_url(&raw.url);
     Database::connect(&config, Migrations::Apply)
         .await?

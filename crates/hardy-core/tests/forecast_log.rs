@@ -35,7 +35,7 @@ fn entry(
 
 #[tokio::test]
 async fn test_forecast_accuracy_scores_against_readings() -> Result<()> {
-    let tdb = common::TestDatabase::new().await;
+    let tdb = common::TestDatabase::new().await?;
     let tz = chrono_tz::Europe::Berlin;
     let db = &tdb.db;
 
@@ -93,7 +93,7 @@ async fn test_forecast_accuracy_scores_against_readings() -> Result<()> {
 
 #[tokio::test]
 async fn test_forecast_accuracy_groups_by_gym_local_day() -> Result<()> {
-    let tdb = common::TestDatabase::new().await;
+    let tdb = common::TestDatabase::new().await?;
     let tz = chrono_tz::Europe::Berlin;
     // 22:30 UTC on the 17th is 00:30 on the 18th in Berlin.
     let late = utc(22, 30)?;

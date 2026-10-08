@@ -1,7 +1,6 @@
 //! wiremock-based tests for the ntfy client.
-#![allow(clippy::unwrap_used)]
-#![allow(clippy::expect_used)]
 
+use anyhow::{Context, Result};
 use chrono::{TimeZone, Utc};
 use hardy_core::{
     AppError, Notifier,
@@ -13,17 +12,17 @@ use wiremock::{
     matchers::{body_string, header, header_exists, method, path, query_param},
 };
 
-fn client(server: &MockServer, token: Option<&str>) -> NtfyClient {
+fn client(server: &MockServer, token: Option<&str>) -> Result<NtfyClient> {
     NtfyClient::new(
         &server.uri(),
         token.map(str::to_string),
         &NetworkConfig::default(),
     )
-    .unwrap()
+    .context("ntfy client should build")
 }
 
 #[tokio::test]
-async fn test_ntfy_publish_posts_title_and_body() {
+async fn test_ntfy_publish_posts_title_and_body() -> Result<()> {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/alerts"))
@@ -34,14 +33,15 @@ async fn test_ntfy_publish_posts_title_and_body() {
         .mount(&server)
         .await;
 
-    client(&server, None)
+    client(&server, None)?
         .publish("alerts", "Hardy", "Quiet now")
         .await
-        .expect("publish should succeed");
+        .context("publish should succeed")?;
+    Ok(())
 }
 
 #[tokio::test]
-async fn test_ntfy_sends_bearer_token_when_configured() {
+async fn test_ntfy_sends_bearer_token_when_configured() -> Result<()> {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/alerts"))
@@ -51,14 +51,15 @@ async fn test_ntfy_sends_bearer_token_when_configured() {
         .mount(&server)
         .await;
 
-    client(&server, Some("tk_secret"))
+    client(&server, Some("tk_secret"))?
         .publish("alerts", "t", "b")
         .await
-        .expect("authorized publish should succeed");
+        .context("authorized publish should succeed")?;
+    Ok(())
 }
 
 #[tokio::test]
-async fn test_ntfy_omits_auth_header_without_token() {
+async fn test_ntfy_omits_auth_header_without_token() -> Result<()> {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(header_exists("Authorization"))
@@ -70,21 +71,22 @@ async fn test_ntfy_omits_auth_header_without_token() {
         .mount(&server)
         .await;
 
-    client(&server, Some(""))
+    client(&server, Some(""))?
         .publish("alerts", "t", "b")
         .await
-        .expect("empty token is treated as no token");
+        .context("empty token is treated as no token")?;
+    Ok(())
 }
 
 #[tokio::test]
-async fn test_ntfy_publish_error_status_is_api_error() {
+async fn test_ntfy_publish_error_status_is_api_error() -> Result<()> {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .respond_with(ResponseTemplate::new(403))
         .mount(&server)
         .await;
 
-    let result = client(&server, None).publish("alerts", "t", "b").await;
+    let result = client(&server, None)?.publish("alerts", "t", "b").await;
     assert!(matches!(
         result,
         Err(AppError::Api {
@@ -92,10 +94,11 @@ async fn test_ntfy_publish_error_status_is_api_error() {
             ..
         })
     ));
+    Ok(())
 }
 
 #[tokio::test]
-async fn test_ntfy_poll_returns_messages_only() {
+async fn test_ntfy_poll_returns_messages_only() -> Result<()> {
     let server = MockServer::start().await;
     let body = concat!(
         r#"{"id":"open1","time":1718611200,"event":"open","topic":"ctl"}"#,
@@ -116,10 +119,10 @@ async fn test_ntfy_poll_returns_messages_only() {
         .mount(&server)
         .await;
 
-    let messages = client(&server, None)
+    let messages = client(&server, None)?
         .poll("ctl", &PollSince::Id("m0".to_string()))
         .await
-        .expect("poll should succeed");
+        .context("poll should succeed")?;
     assert_eq!(
         messages,
         vec![
@@ -135,10 +138,11 @@ async fn test_ntfy_poll_returns_messages_only() {
             },
         ]
     );
+    Ok(())
 }
 
 #[tokio::test]
-async fn test_ntfy_poll_since_time_uses_unix_seconds() {
+async fn test_ntfy_poll_since_time_uses_unix_seconds() -> Result<()> {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/ctl/json"))
@@ -148,27 +152,33 @@ async fn test_ntfy_poll_since_time_uses_unix_seconds() {
         .mount(&server)
         .await;
 
-    let since = PollSince::Time(Utc.with_ymd_and_hms(2024, 6, 17, 8, 0, 0).unwrap());
-    let messages = client(&server, None).poll("ctl", &since).await.unwrap();
+    let since = PollSince::Time(
+        Utc.with_ymd_and_hms(2024, 6, 17, 8, 0, 0)
+            .single()
+            .context("valid timestamp")?,
+    );
+    let messages = client(&server, None)?.poll("ctl", &since).await?;
     assert_eq!(messages, Vec::new());
+    Ok(())
 }
 
 #[tokio::test]
-async fn test_ntfy_poll_rejects_malformed_json() {
+async fn test_ntfy_poll_rejects_malformed_json() -> Result<()> {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .respond_with(ResponseTemplate::new(200).set_body_string("not json\n"))
         .mount(&server)
         .await;
 
-    let result = client(&server, None)
+    let result = client(&server, None)?
         .poll("ctl", &PollSince::Id("x".to_string()))
         .await;
     assert!(matches!(result, Err(AppError::Validation(_))));
+    Ok(())
 }
 
 #[tokio::test]
-async fn test_ntfy_notifier_publishes_to_its_topic() {
+async fn test_ntfy_notifier_publishes_to_its_topic() -> Result<()> {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/phone"))
@@ -179,9 +189,10 @@ async fn test_ntfy_notifier_publishes_to_its_topic() {
         .mount(&server)
         .await;
 
-    let notifier = NtfyNotifier::new(client(&server, None), "phone".to_string());
+    let notifier = NtfyNotifier::new(client(&server, None)?, "phone".to_string());
     notifier
         .notify("T", "B")
         .await
-        .expect("notify should succeed");
+        .context("notify should succeed")?;
+    Ok(())
 }

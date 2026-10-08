@@ -1,23 +1,24 @@
 //! Integration tests for schema migrations that rewrite existing data.
-#![allow(clippy::unwrap_used)]
-#![allow(clippy::expect_used)]
 #![allow(clippy::float_cmp)]
 
 mod common;
 
 use std::borrow::Cow;
 
+use anyhow::{Context, Result};
 use chrono::{DateTime, TimeZone, Utc};
 use sqlx::{PgPool, migrate::Migrator};
 
 const DATA_INTEGRITY_VERSION: i64 = 20_261_006_164_725;
 
-fn utc(s: &str) -> DateTime<Utc> {
-    DateTime::parse_from_rfc3339(s).unwrap().with_timezone(&Utc)
+fn utc(s: &str) -> Result<DateTime<Utc>> {
+    Ok(DateTime::parse_from_rfc3339(s)
+        .with_context(|| format!("parse {s}"))?
+        .with_timezone(&Utc))
 }
 
 /// Applies every migration older than `version`.
-async fn migrate_before(pool: &PgPool, version: i64) {
+async fn migrate_before(pool: &PgPool, version: i64) -> Result<()> {
     let mut migrator: Migrator = sqlx::migrate!("../../migrations");
     let older: Vec<_> = migrator
         .migrations
@@ -26,55 +27,60 @@ async fn migrate_before(pool: &PgPool, version: i64) {
         .cloned()
         .collect();
     migrator.migrations = Cow::Owned(older);
-    migrator.run(pool).await.expect("older migrations apply");
+    migrator.run(pool).await.context("older migrations apply")?;
+    Ok(())
 }
 
-async fn insert_raw(pool: &PgPool, ts: DateTime<Utc>, pct: f64) {
+async fn insert_raw(pool: &PgPool, ts: DateTime<Utc>, pct: f64) -> Result<()> {
     sqlx::query("INSERT INTO occupancy_logs (timestamp, percentage) VALUES ($1, $2)")
         .bind(ts)
         .bind(pct)
         .execute(pool)
         .await
-        .expect("raw insert");
+        .context("raw insert")?;
+    Ok(())
 }
 
 #[tokio::test]
-async fn test_data_integrity_migration_quarantines_and_normalizes() {
-    let raw = common::RawTestDatabase::new().await;
-    migrate_before(&raw.pool, DATA_INTEGRITY_VERSION).await;
+async fn test_data_integrity_migration_quarantines_and_normalizes() -> Result<()> {
+    let raw = common::RawTestDatabase::new().await?;
+    migrate_before(&raw.pool, DATA_INTEGRITY_VERSION).await?;
 
     // id 1: measured at 10:00:05 — kept, truncated to 10:00.
-    insert_raw(&raw.pool, utc("2024-06-15T10:00:05Z"), 40.0).await;
+    insert_raw(&raw.pool, utc("2024-06-15T10:00:05Z")?, 40.0).await?;
     // id 2: repair row in the same minute — duplicate.
-    insert_raw(&raw.pool, utc("2024-06-15T10:00:00Z"), 0.0).await;
+    insert_raw(&raw.pool, utc("2024-06-15T10:00:00Z")?, 0.0).await?;
     // id 3, 4: impossible values.
-    insert_raw(&raw.pool, utc("2024-06-15T10:01:30Z"), 120.0).await;
-    insert_raw(&raw.pool, utc("2024-06-15T10:02:00Z"), f64::NAN).await;
+    insert_raw(&raw.pool, utc("2024-06-15T10:01:30Z")?, 120.0).await?;
+    insert_raw(&raw.pool, utc("2024-06-15T10:02:00Z")?, f64::NAN).await?;
     // id 5: valid, sub-minute.
-    insert_raw(&raw.pool, utc("2024-06-15T10:03:12.5Z"), 55.0).await;
+    insert_raw(&raw.pool, utc("2024-06-15T10:03:12.5Z")?, 55.0).await?;
 
     sqlx::migrate!("../../migrations")
         .run(&raw.pool)
         .await
-        .expect("data_integrity migration applies to dirty data");
+        .context("data_integrity migration applies to dirty data")?;
 
     let kept: Vec<(i64, DateTime<Utc>, f64, String)> =
         sqlx::query_as("SELECT id, timestamp, percentage, source FROM occupancy_logs ORDER BY id")
             .fetch_all(&raw.pool)
-            .await
-            .unwrap();
+            .await?;
     assert_eq!(
         kept,
         vec![
             (
                 1,
-                Utc.with_ymd_and_hms(2024, 6, 15, 10, 0, 0).unwrap(),
+                Utc.with_ymd_and_hms(2024, 6, 15, 10, 0, 0)
+                    .single()
+                    .context("valid time")?,
                 40.0,
                 "measured".to_string()
             ),
             (
                 5,
-                Utc.with_ymd_and_hms(2024, 6, 15, 10, 3, 0).unwrap(),
+                Utc.with_ymd_and_hms(2024, 6, 15, 10, 3, 0)
+                    .single()
+                    .context("valid time")?,
                 55.0,
                 "measured".to_string()
             ),
@@ -84,8 +90,7 @@ async fn test_data_integrity_migration_quarantines_and_normalizes() {
     let quarantined: Vec<(i64, String)> =
         sqlx::query_as("SELECT id, reason FROM occupancy_logs_quarantine ORDER BY id")
             .fetch_all(&raw.pool)
-            .await
-            .unwrap();
+            .await?;
     assert_eq!(
         quarantined,
         vec![
@@ -96,17 +101,15 @@ async fn test_data_integrity_migration_quarantines_and_normalizes() {
     );
 
     raw.cleanup().await;
+    Ok(())
 }
 
 #[tokio::test]
-async fn test_data_integrity_constraints_reject_invalid_rows() {
-    let raw = common::RawTestDatabase::new().await;
-    sqlx::migrate!("../../migrations")
-        .run(&raw.pool)
-        .await
-        .unwrap();
+async fn test_data_integrity_constraints_reject_invalid_rows() -> Result<()> {
+    let raw = common::RawTestDatabase::new().await?;
+    sqlx::migrate!("../../migrations").run(&raw.pool).await?;
 
-    insert_raw(&raw.pool, utc("2024-06-15T10:00:00Z"), 40.0).await;
+    insert_raw(&raw.pool, utc("2024-06-15T10:00:00Z")?, 40.0).await?;
 
     for (ts, pct, why) in [
         ("2024-06-15T10:00:00Z", 41.0, "duplicate minute"),
@@ -116,7 +119,7 @@ async fn test_data_integrity_constraints_reject_invalid_rows() {
     ] {
         let result =
             sqlx::query("INSERT INTO occupancy_logs (timestamp, percentage) VALUES ($1, $2)")
-                .bind(utc(ts))
+                .bind(utc(ts)?)
                 .bind(pct)
                 .execute(&raw.pool)
                 .await;
@@ -126,52 +129,50 @@ async fn test_data_integrity_constraints_reject_invalid_rows() {
     let bad_source = sqlx::query(
         "INSERT INTO occupancy_logs (timestamp, percentage, source) VALUES ($1, 10, 'guessed')",
     )
-    .bind(utc("2024-06-15T10:04:00Z"))
+    .bind(utc("2024-06-15T10:04:00Z")?)
     .execute(&raw.pool)
     .await;
     assert!(bad_source.is_err(), "unknown source should be rejected");
 
     raw.cleanup().await;
+    Ok(())
 }
 
 #[tokio::test]
-async fn test_data_integrity_migration_reverts_and_restores_quarantine() {
-    let raw = common::RawTestDatabase::new().await;
-    migrate_before(&raw.pool, DATA_INTEGRITY_VERSION).await;
-    insert_raw(&raw.pool, utc("2024-06-15T10:00:05Z"), 40.0).await;
-    insert_raw(&raw.pool, utc("2024-06-15T10:00:00Z"), 0.0).await;
+async fn test_data_integrity_migration_reverts_and_restores_quarantine() -> Result<()> {
+    let raw = common::RawTestDatabase::new().await?;
+    migrate_before(&raw.pool, DATA_INTEGRITY_VERSION).await?;
+    insert_raw(&raw.pool, utc("2024-06-15T10:00:05Z")?, 40.0).await?;
+    insert_raw(&raw.pool, utc("2024-06-15T10:00:00Z")?, 0.0).await?;
 
     let migrator = sqlx::migrate!("../../migrations");
-    migrator.run(&raw.pool).await.unwrap();
+    migrator.run(&raw.pool).await?;
     migrator
         .undo(&raw.pool, DATA_INTEGRITY_VERSION - 1)
         .await
-        .expect("down migration applies");
+        .context("down migration applies")?;
 
     let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM occupancy_logs")
         .fetch_one(&raw.pool)
-        .await
-        .unwrap();
+        .await?;
     assert_eq!(count, 2, "quarantined row is restored on revert");
 
     raw.cleanup().await;
+    Ok(())
 }
 
 const ALERT_SETTINGS_VERSION: i64 = 20_261_006_175_013;
 
 #[tokio::test]
-async fn test_alert_settings_migration_seeds_single_disarmed_row() {
-    let raw = common::RawTestDatabase::new().await;
-    sqlx::migrate!("../../migrations")
-        .run(&raw.pool)
-        .await
-        .unwrap();
+async fn test_alert_settings_migration_seeds_single_disarmed_row() -> Result<()> {
+    let raw = common::RawTestDatabase::new().await?;
+    sqlx::migrate!("../../migrations").run(&raw.pool).await?;
 
     let row: (bool, f64, String) =
         sqlx::query_as("SELECT enabled, threshold_percent, updated_by FROM alert_settings")
             .fetch_one(&raw.pool)
             .await
-            .expect("exactly one seeded row");
+            .context("exactly one seeded row")?;
     assert_eq!(row, (false, 30.0, "migration".to_string()));
 
     let second = sqlx::query(
@@ -188,39 +189,39 @@ async fn test_alert_settings_migration_seeds_single_disarmed_row() {
     assert!(bad_threshold.is_err(), "threshold must stay within 0..=100");
 
     raw.cleanup().await;
+    Ok(())
 }
 
 #[tokio::test]
-async fn test_alert_settings_migration_reverts() {
-    let raw = common::RawTestDatabase::new().await;
+async fn test_alert_settings_migration_reverts() -> Result<()> {
+    let raw = common::RawTestDatabase::new().await?;
     let migrator = sqlx::migrate!("../../migrations");
-    migrator.run(&raw.pool).await.unwrap();
+    migrator.run(&raw.pool).await?;
     migrator
         .undo(&raw.pool, ALERT_SETTINGS_VERSION - 1)
         .await
-        .expect("down migration applies");
+        .context("down migration applies")?;
 
     let exists: bool = sqlx::query_scalar("SELECT to_regclass('alert_settings') IS NOT NULL")
         .fetch_one(&raw.pool)
-        .await
-        .unwrap();
+        .await?;
     assert!(!exists);
 
     raw.cleanup().await;
+    Ok(())
 }
 
 const ML_MODELS_VERSION: i64 = 20_261_006_191_435;
 
 #[tokio::test]
-async fn test_ml_models_migration_seeds_state_and_reverts() {
-    let raw = common::RawTestDatabase::new().await;
+async fn test_ml_models_migration_seeds_state_and_reverts() -> Result<()> {
+    let raw = common::RawTestDatabase::new().await?;
     let migrator = sqlx::migrate!("../../migrations");
-    migrator.run(&raw.pool).await.unwrap();
+    migrator.run(&raw.pool).await?;
 
     let rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM ml_state")
         .fetch_one(&raw.pool)
-        .await
-        .unwrap();
+        .await?;
     assert_eq!(rows, 1);
     let second = sqlx::query("INSERT INTO ml_state (id) VALUES (2)")
         .execute(&raw.pool)
@@ -230,31 +231,30 @@ async fn test_ml_models_migration_seeds_state_and_reverts() {
     migrator
         .undo(&raw.pool, ML_MODELS_VERSION - 1)
         .await
-        .expect("down migration applies");
+        .context("down migration applies")?;
     let exists: bool = sqlx::query_scalar(
         "SELECT to_regclass('ml_models') IS NOT NULL OR to_regclass('ml_state') IS NOT NULL",
     )
     .fetch_one(&raw.pool)
-    .await
-    .unwrap();
+    .await?;
     assert!(!exists);
 
     raw.cleanup().await;
+    Ok(())
 }
 
 const REPAIR_STATE_VERSION: i64 = 20_261_007_064_211;
 
 #[tokio::test]
-async fn test_repair_state_migration_seeds_single_row_and_reverts() {
-    let raw = common::RawTestDatabase::new().await;
+async fn test_repair_state_migration_seeds_single_row_and_reverts() -> Result<()> {
+    let raw = common::RawTestDatabase::new().await?;
     let migrator = sqlx::migrate!("../../migrations");
-    migrator.run(&raw.pool).await.unwrap();
+    migrator.run(&raw.pool).await?;
 
     let through: Option<chrono::NaiveDate> =
         sqlx::query_scalar("SELECT repaired_through FROM repair_state")
             .fetch_one(&raw.pool)
-            .await
-            .unwrap();
+            .await?;
     assert_eq!(through, None);
     let second = sqlx::query("INSERT INTO repair_state (id) VALUES (2)")
         .execute(&raw.pool)
@@ -264,31 +264,31 @@ async fn test_repair_state_migration_seeds_single_row_and_reverts() {
     migrator
         .undo(&raw.pool, REPAIR_STATE_VERSION - 1)
         .await
-        .expect("down migration applies");
+        .context("down migration applies")?;
     let exists: bool = sqlx::query_scalar("SELECT to_regclass('repair_state') IS NOT NULL")
         .fetch_one(&raw.pool)
-        .await
-        .unwrap();
+        .await?;
     assert!(!exists);
 
     raw.cleanup().await;
+    Ok(())
 }
 
 const FORECAST_LOG_VERSION: i64 = 20_261_007_072_032;
 
 #[tokio::test]
-async fn test_forecast_log_migration_reverts() {
-    let raw = common::RawTestDatabase::new().await;
+async fn test_forecast_log_migration_reverts() -> Result<()> {
+    let raw = common::RawTestDatabase::new().await?;
     let migrator = sqlx::migrate!("../../migrations");
-    migrator.run(&raw.pool).await.unwrap();
+    migrator.run(&raw.pool).await?;
     migrator
         .undo(&raw.pool, FORECAST_LOG_VERSION - 1)
         .await
-        .expect("down migration applies");
+        .context("down migration applies")?;
     let exists: bool = sqlx::query_scalar("SELECT to_regclass('forecast_log') IS NOT NULL")
         .fetch_one(&raw.pool)
-        .await
-        .unwrap();
+        .await?;
     assert!(!exists);
     raw.cleanup().await;
+    Ok(())
 }
