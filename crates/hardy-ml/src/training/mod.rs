@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 use tuning::grid_search;
 
 use crate::{
+    baseline::Baseline,
     error::MlError,
     evaluation,
     features::{FEATURE_VERSION, FeatureRow},
@@ -80,6 +81,35 @@ pub fn train(
     options: &TrainOptions,
     now: DateTime<Utc>,
 ) -> Result<ModelArtifact, MlError> {
+    train_inner(history, schedule, options, now, Gate::Enforce)
+}
+
+/// Like [`train`] but keeps a model even if the baseline is better, for
+/// tests that need an artifact of a given algorithm whatever its quality.
+#[cfg(test)]
+pub(crate) fn train_ungated(
+    history: &History,
+    schedule: &GymSchedule,
+    options: &TrainOptions,
+    now: DateTime<Utc>,
+) -> Result<ModelArtifact, MlError> {
+    train_inner(history, schedule, options, now, Gate::Skip)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Gate {
+    Enforce,
+    #[cfg_attr(not(test), allow(dead_code))]
+    Skip,
+}
+
+fn train_inner(
+    history: &History,
+    schedule: &GymSchedule,
+    options: &TrainOptions,
+    now: DateTime<Utc>,
+    gate: Gate,
+) -> Result<ModelArtifact, MlError> {
     let (Some(first), Some(last)) = (history.first_time(), history.last_time()) else {
         return Err(MlError::InsufficientData {
             found: 0,
@@ -140,14 +170,17 @@ pub fn train(
     let candidate = fit(options.algorithm, params, &train_samples)?;
     let predictions = candidate.predict_batch(&rows(&holdout))?;
     let actual: Vec<f64> = holdout.iter().map(|s| s.target).collect();
+    // Judged against the non-ML forecast, fitted on the same earlier data;
+    // `predict` reads only readings up to each anchor.
+    let earlier_baseline = Baseline::fit(&earlier, schedule, options.max_hours_ahead);
     let baseline: Vec<f64> = holdout
         .iter()
-        .map(|s| s.features.target_slot_mean())
+        .map(|s| earlier_baseline.predict(history, s.anchor, s.hours_ahead))
         .collect();
     let holdout_mae = evaluation::mae(&predictions, &actual).unwrap_or(f64::INFINITY);
     let baseline_mae = evaluation::mae(&baseline, &actual).unwrap_or(f64::INFINITY);
     tracing::info!(holdout_mae, baseline_mae, tuned, "holdout evaluation");
-    if !holdout_mae.is_finite() || holdout_mae >= baseline_mae {
+    if gate == Gate::Enforce && (!holdout_mae.is_finite() || holdout_mae >= baseline_mae) {
         return Err(MlError::QualityGate {
             model_mae: holdout_mae,
             baseline_mae,
@@ -156,20 +189,12 @@ pub fn train(
     let (intervals, mae_by_horizon) =
         horizon_statistics(&holdout, &predictions, options.max_hours_ahead);
 
-    // Final model: all data, profile from all data.
-    let profile = SlotProfile::from_history(history.view(), tz);
-    let all_samples = build_samples(
-        history,
-        &profile,
-        schedule,
-        SampleWindow {
-            anchors_from: first,
-            anchors_until: after_last,
-            targets_until: after_last,
-        },
-        options.max_hours_ahead,
-    );
-    let model = fit(options.algorithm, params, &all_samples)?;
+    let window = SampleWindow {
+        anchors_from: first,
+        anchors_until: after_last,
+        targets_until: after_last,
+    };
+    let (profile, model, training_samples) = fit_final(history, schedule, options, params, window)?;
 
     Ok(ModelArtifact {
         feature_version: FEATURE_VERSION,
@@ -185,9 +210,23 @@ pub fn train(
             baseline_mae,
             mae_by_horizon,
             holdout_samples: holdout.len(),
-            training_samples: all_samples.len(),
+            training_samples,
         },
     })
+}
+
+/// The final model: all data in `window`, profile from all data.
+fn fit_final(
+    history: &History,
+    schedule: &GymSchedule,
+    options: &TrainOptions,
+    params: RfParams,
+    window: SampleWindow,
+) -> Result<(SlotProfile, Model, usize), MlError> {
+    let profile = SlotProfile::from_history(history.view(), schedule.timezone());
+    let all_samples = build_samples(history, &profile, schedule, window, options.max_hours_ahead);
+    let model = fit(options.algorithm, params, &all_samples)?;
+    Ok((profile, model, all_samples.len()))
 }
 
 pub(super) fn rows(samples: &[Sample]) -> Vec<FeatureRow> {
@@ -219,10 +258,9 @@ pub(crate) mod tests {
             + TimeDelta::days(days)
     }
 
-    /// A learnable synthetic series: a daily curve whose level differs per
-    /// day and persists through the day, sampled every 5 minutes during
-    /// opening hours. The slot average cannot know a day's level; the
-    /// current reading can.
+    /// A learnable synthetic series: a daily curve plus a per-day deviation
+    /// that grows through the day, sampled every 5 minutes during opening
+    /// hours.
     pub(crate) fn learnable_history(days: i64) -> History {
         let schedule = GymSchedule::default();
         let mut points = Vec::new();
@@ -237,7 +275,11 @@ pub(crate) mod tests {
                 #[allow(clippy::cast_precision_loss)]
                 let hour = (step as f64) / 12.0;
                 let curve = 35.0 + 20.0 * ((hour - 6.0) / 17.0 * std::f64::consts::PI).sin();
-                points.push((t, (curve + level).clamp(0.0, 100.0)));
+                // The day's deviation grows through the day: the model learns
+                // that from the time of day and the recent trend; the
+                // baseline's carry-over (at most 1) cannot follow it.
+                let drift = level * (hour - 5.0) / 6.0;
+                points.push((t, (curve + drift).clamp(0.0, 100.0)));
             }
         }
         History::new(points)
@@ -303,6 +345,36 @@ pub(crate) mod tests {
             matches!(result, Err(MlError::QualityGate { .. })),
             "{result:?}"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn test_train_gate_judges_against_the_quarter_hour_baseline() -> Result<()> {
+        // Every day identical, quiet in the first half of each hour and busy
+        // in the second: hourly averages miss by 20 points, the baseline's
+        // quarter-hour slots are (almost) exact.
+        let schedule = GymSchedule::default();
+        let mut points = Vec::new();
+        for d in 0..21 {
+            for step in 0..(24 * 12) {
+                let t = local(d, 0, 0) + TimeDelta::minutes(step * 5);
+                if schedule.is_open(&t) {
+                    points.push((t, if step % 12 < 6 { 20.0 } else { 60.0 }));
+                }
+            }
+        }
+        let result = train(
+            &History::new(points),
+            &schedule,
+            &options(Tuning::Fixed(RfParams::new(20, 8, 10)?)),
+            local(21, 0, 0),
+        );
+        let baseline_mae = match result {
+            Ok(artifact) => artifact.metrics.baseline_mae,
+            Err(MlError::QualityGate { baseline_mae, .. }) => baseline_mae,
+            Err(e) => return Err(e.into()),
+        };
+        assert!(baseline_mae < 1.0, "baseline error {baseline_mae}");
         Ok(())
     }
 

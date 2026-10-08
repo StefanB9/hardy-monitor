@@ -1,5 +1,5 @@
-//! Live forecasts for the next hours, from a trained model or, without one,
-//! from the slot averages.
+//! Live forecasts for the next hours from a trained model (see
+//! [`crate::baseline`] for the forecast without one).
 
 use chrono::{DateTime, TimeDelta, Utc};
 use hardy_core::GymSchedule;
@@ -65,21 +65,8 @@ impl ModelArtifact {
     }
 }
 
-/// Slot-average forecasts when no model is available.
-pub fn baseline_forecast(
-    history: &History,
-    schedule: &GymSchedule,
-    now: DateTime<Utc>,
-    max_hours_ahead: u32,
-) -> Vec<PredictionWithConfidence> {
-    let profile = SlotProfile::from_history(history.view(), schedule.timezone());
-    (1..=max_hours_ahead)
-        .map(|h| now + TimeDelta::hours(i64::from(h)))
-        .filter(|target| schedule.is_open(target))
-        .map(|target| baseline_point(&profile, schedule, target))
-        .collect()
-}
-
+/// The stored profile's slot average for `target`: the model's fallback
+/// without a current reading, when no correction could apply anyway.
 fn baseline_point(
     profile: &SlotProfile,
     schedule: &GymSchedule,
@@ -158,14 +145,5 @@ mod tests {
                 .all(|f| f.method == PredictionMethod::HistoricalAverage)
         );
         Ok(())
-    }
-
-    #[test]
-    fn test_baseline_forecast_skips_closed_hours() {
-        let history = learnable_history(7);
-        let schedule = GymSchedule::default();
-        let forecasts = baseline_forecast(&history, &schedule, local(7, 21, 30), 6);
-        // 22:30 open; 23:30 onward closed.
-        assert_eq!(forecasts.len(), 1);
     }
 }

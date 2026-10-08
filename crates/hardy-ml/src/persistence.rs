@@ -159,14 +159,15 @@ mod tests {
         training::{
             Tuning,
             tests::{learnable_history, local, options},
-            train,
+            train_ungated,
         },
     };
 
+    /// An artifact to store and restore; its quality does not matter here.
     fn trained(algorithm: Algorithm, params: RfParams, days: i64) -> Result<ModelArtifact> {
         let mut opts = options(Tuning::Fixed(params));
         opts.algorithm = algorithm;
-        Ok(train(
+        Ok(train_ungated(
             &learnable_history(days),
             &GymSchedule::default(),
             &opts,
