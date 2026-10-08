@@ -5,12 +5,15 @@ use iced::{Task, window};
 use muda::MenuEvent;
 use tray_icon::TrayIconEvent;
 
-use super::{HardyMonitorApp, Message, ViewMode};
+use super::{HardyMonitorApp, Message, ViewMode, loads::ErrorSource};
 use crate::views::schema_notice::SchemaGate;
 
 impl HardyMonitorApp {
     /// Handles one message and returns the follow-up tasks.
     pub fn update(&mut self, message: Message) -> Task<Message> {
+        if message.finishes_load() {
+            self.ui.pending.finish();
+        }
         if self.schema != SchemaGate::Ready {
             return self.update_blocked(message);
         }
@@ -35,8 +38,7 @@ impl HardyMonitorApp {
                 Task::batch([self.poll(), self.load_alert_settings()])
             }
             Message::RefreshNow => {
-                self.start_loading();
-                self.error = None;
+                self.errors.clear_all();
                 Task::batch([
                     self.fetch_latest(),
                     self.load_chart_history(),
@@ -47,20 +49,21 @@ impl HardyMonitorApp {
                 ])
             }
             Message::FetchCompleted(result) => self.handle_fetch_completed(result),
-            Message::HistoryLoaded(result) => {
-                match result {
-                    Ok(logs) => {
-                        self.data.history = logs;
-                        self.ui.chart_cache.clear();
-                    }
-                    Err(e) => self.error = Some(e),
+            Message::HistoryLoaded(id, result) => {
+                // A newer load for another range is on its way.
+                if self.ui.chart_requests.is_current(id)
+                    && let Some(logs) = self.errors.record(ErrorSource::Chart, result)
+                {
+                    self.data.history = logs;
+                    self.ui.chart_cache.clear();
                 }
                 Task::none()
             }
-            Message::AnalyticsLoaded(result) => {
-                match result {
-                    Ok(data) => self.set_week_data(&data),
-                    Err(e) => self.error = Some(e),
+            Message::AnalyticsLoaded(id, result) => {
+                if self.ui.analytics_requests.is_current(id)
+                    && let Some(data) = self.errors.record(ErrorSource::Week, result)
+                {
+                    self.set_week_data(&data);
                 }
                 Task::none()
             }
@@ -93,9 +96,8 @@ impl HardyMonitorApp {
             | Message::StartRepairJob
             | Message::RepairCompleted(_) => self.update_maintenance(message),
             Message::AccuracyLoaded(result) => {
-                match result {
-                    Ok(rows) => self.data.accuracy = summarize(&rows),
-                    Err(e) => self.error = Some(e),
+                if let Some(rows) = self.errors.record(ErrorSource::Accuracy, result) {
+                    self.data.accuracy = summarize(&rows);
                 }
                 Task::none()
             }
@@ -131,12 +133,9 @@ impl HardyMonitorApp {
                 self.save_alert_settings(change)
             }
             Message::AlertSettingsLoaded(result) => {
-                match result {
-                    Ok(settings) => {
-                        self.alerts.set_settings(settings);
-                        self.ui.chart_cache.clear();
-                    }
-                    Err(e) => self.error = Some(e),
+                if let Some(settings) = self.errors.record(ErrorSource::AlertSettings, result) {
+                    self.alerts.set_settings(settings);
+                    self.ui.chart_cache.clear();
                 }
                 Task::none()
             }
@@ -185,12 +184,14 @@ impl HardyMonitorApp {
                     )
                     .is_some();
                 if valid {
+                    self.errors.clear(ErrorSource::ChartRangeInput);
                     self.ui.chart_cache.clear();
                     self.load_chart_history()
                 } else {
-                    self.error = Some(AppError::validation(
-                        "Enter dates as YYYY-MM-DD, start before end",
-                    ));
+                    self.errors.raise(
+                        ErrorSource::ChartRangeInput,
+                        AppError::validation("Enter dates as YYYY-MM-DD, start before end"),
+                    );
                     Task::none()
                 }
             }
@@ -206,41 +207,33 @@ impl HardyMonitorApp {
                 self.request_retrain()
             }
             Message::ForecastHistoryLoaded(result) => {
-                match result {
-                    Ok(logs) => {
-                        self.data.forecasting.add_history(&logs);
-                        self.refresh_forecasts();
-                    }
-                    Err(e) => self.error = Some(e),
+                if let Some(logs) = self.errors.record(ErrorSource::ForecastHistory, result) {
+                    self.data.forecasting.add_history(&logs);
+                    self.refresh_forecasts();
                 }
                 Task::none()
             }
-            Message::ModelStatusLoaded(result) => match result {
-                Ok((latest, state)) => {
-                    self.data.forecasting.set_state(state);
-                    match latest {
-                        Some(info) if self.data.forecasting.is_new_model(Some(&info)) => {
-                            self.load_model(info)
-                        }
-                        _ => Task::none(),
+            Message::ModelStatusLoaded(result) => {
+                let Some((latest, state)) = self.errors.record(ErrorSource::ModelStatus, result)
+                else {
+                    return Task::none();
+                };
+                self.data.forecasting.set_state(state);
+                match latest {
+                    Some(info) if self.data.forecasting.is_new_model(Some(&info)) => {
+                        self.load_model(info)
                     }
+                    _ => Task::none(),
                 }
-                Err(e) => {
-                    self.error = Some(e);
-                    Task::none()
-                }
-            },
+            }
             Message::ModelLoaded(result) => {
-                match result {
-                    Ok((info, artifact)) => {
-                        tracing::info!(id = info.id, trained_at = %info.trained_at, "loaded model");
-                        self.data.forecasting.set_model(&info, artifact);
-                        self.refresh_forecasts();
-                    }
-                    Err(e) => {
-                        tracing::warn!(error = %e, "could not load stored model");
-                        self.error = Some(e);
-                    }
+                if let Err(e) = &result {
+                    tracing::warn!(error = %e, "could not load stored model");
+                }
+                if let Some((info, artifact)) = self.errors.record(ErrorSource::Model, result) {
+                    tracing::info!(id = info.id, trained_at = %info.trained_at, "loaded model");
+                    self.data.forecasting.set_model(&info, artifact);
+                    self.refresh_forecasts();
                 }
                 Task::none()
             }

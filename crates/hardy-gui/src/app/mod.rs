@@ -1,6 +1,7 @@
 //! Application state, messages and the iced entry points.
 
 mod data;
+mod loads;
 mod maintenance;
 mod message;
 mod sidebar;
@@ -26,6 +27,8 @@ use hardy_core::{
     traits::{Clock, Notifier},
 };
 use iced::{Subscription, Task, Theme, widget::canvas::Cache, window};
+pub use loads::RequestId;
+use loads::{Errors, LatestOnly, PendingLoads};
 pub use message::{Message, RepairPreset, ViewMode};
 
 pub use crate::time_range::{AnalyticsRange, ChartRange};
@@ -67,11 +70,10 @@ struct MonitorState {
     accuracy: Option<AccuracySummary>,
 }
 
-const LOADING_DEBOUNCE_MS: u64 = 200;
-
 struct UiState {
-    is_loading: bool,
-    loading_started_at: Option<Instant>,
+    pending: PendingLoads,
+    chart_requests: LatestOnly,
+    analytics_requests: LatestOnly,
     is_poll_aligned: bool,
     chart_cache: Cache,
     gauge_cache: Cache,
@@ -93,7 +95,7 @@ pub struct HardyMonitorApp {
     clock: Arc<dyn Clock>,
     notifier: Arc<dyn Notifier>,
     tray: Option<Tray>,
-    error: Option<AppError>,
+    errors: Errors,
 
     data: MonitorState,
     ui: UiState,
@@ -131,7 +133,7 @@ impl HardyMonitorApp {
             clock,
             notifier,
             tray,
-            error: None,
+            errors: Errors::default(),
             data: MonitorState {
                 occupancy: None,
                 history: Vec::new(),
@@ -148,8 +150,9 @@ impl HardyMonitorApp {
                 accuracy: None,
             },
             ui: UiState {
-                is_loading: false,
-                loading_started_at: None,
+                pending: PendingLoads::default(),
+                chart_requests: LatestOnly::default(),
+                analytics_requests: LatestOnly::default(),
                 is_poll_aligned: false,
                 chart_cache: Cache::new(),
                 gauge_cache: Cache::new(),
@@ -216,7 +219,7 @@ impl HardyMonitorApp {
     }
 
     /// Everything loaded once the schema is known to match.
-    fn start(&self) -> Task<Message> {
+    fn start(&mut self) -> Task<Message> {
         Task::batch([
             self.load_alert_settings(),
             self.load_forecast_history(),
@@ -278,22 +281,8 @@ impl HardyMonitorApp {
         )
     }
 
-    fn start_loading(&mut self) {
-        if !self.ui.is_loading {
-            self.ui.is_loading = true;
-            self.ui.loading_started_at = Some(Instant::now());
-        }
-    }
-
-    fn stop_loading(&mut self) {
-        self.ui.is_loading = false;
-        self.ui.loading_started_at = None;
-    }
-
-    fn should_show_loading(&self) -> bool {
-        self.ui.is_loading
-            && self.ui.loading_started_at.is_none_or(|started| {
-                started.elapsed().as_millis() >= u128::from(LOADING_DEBOUNCE_MS)
-            })
+    /// Whether database loads have been pending long enough to say so.
+    fn is_updating(&self) -> bool {
+        self.ui.pending.is_visible(Instant::now())
     }
 }

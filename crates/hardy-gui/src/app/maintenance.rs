@@ -5,7 +5,7 @@ use std::time::Duration;
 use hardy_core::{error::AppError, repair::DataRepairer};
 use iced::Task;
 
-use super::{HardyMonitorApp, Message, RepairPreset};
+use super::{HardyMonitorApp, Message, RepairPreset, loads::ErrorSource};
 use crate::time_range::parse_date;
 
 impl HardyMonitorApp {
@@ -13,18 +13,13 @@ impl HardyMonitorApp {
     pub(super) fn update_maintenance(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::ExportCsv => {
-                self.start_loading();
                 self.export_status = Some("Exporting…".to_string());
                 self.export_csv()
             }
             Message::ExportCompleted(result) => {
-                self.stop_loading();
-                self.export_status = Some(match result {
-                    Ok(path) => format!("Saved to {path}"),
-                    Err(e) => {
-                        self.error = Some(e);
-                        "Export failed".to_string()
-                    }
+                self.export_status = Some(match self.errors.record(ErrorSource::Export, result) {
+                    Some(path) => format!("Saved to {path}"),
+                    None => "Export failed".to_string(),
                 });
                 Task::perform(
                     async { tokio::time::sleep(Duration::from_secs(5)).await },
@@ -80,20 +75,27 @@ impl HardyMonitorApp {
             parse_date(&self.repair.start_date),
             parse_date(&self.repair.end_date),
         ) else {
-            self.error = Some(AppError::validation("Enter dates as YYYY-MM-DD"));
+            self.errors.raise(
+                ErrorSource::RepairDatesInput,
+                AppError::validation("Enter dates as YYYY-MM-DD"),
+            );
             return Task::none();
         };
         if start > end {
-            self.error = Some(AppError::validation("Start date must be before end date"));
+            self.errors.raise(
+                ErrorSource::RepairDatesInput,
+                AppError::validation("Start date must be before end date"),
+            );
             return Task::none();
         }
 
         self.repair.is_running = true;
         self.repair.last_result = None;
-        self.error = None;
+        self.errors.clear(ErrorSource::RepairDatesInput);
 
         let repairer = DataRepairer::new(self.db.clone(), self.schedule.clone());
-        Task::perform(
+        // Failures show in the repair card, not the header.
+        self.load(
             async move { repairer.repair_date_range(start, end, None).await },
             |r| Message::RepairCompleted(r.map_err(|e| AppError::from_anyhow_db(e, "repair"))),
         )

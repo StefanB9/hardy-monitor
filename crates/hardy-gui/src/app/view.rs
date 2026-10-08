@@ -116,9 +116,9 @@ impl HardyMonitorApp {
             .format("%A, %-d %B")
             .to_string();
 
-        let (dot, status): (Color, String) = if self.should_show_loading() {
+        let (dot, status): (Color, String) = if self.is_updating() {
             (style::ACCENT, "Updating…".to_string())
-        } else if let Some(e) = &self.error {
+        } else if let Some(e) = self.errors.latest() {
             (style::DANGER, e.to_string())
         } else if let Some(warning) = self.freshness().warning(tz) {
             (style::WARNING, warning)

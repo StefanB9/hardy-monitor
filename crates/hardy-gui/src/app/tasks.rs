@@ -1,7 +1,7 @@
 //! Database loads and saves, each returning the message that delivers the
 //! result.
 
-use std::path::PathBuf;
+use std::{path::PathBuf, time::Instant};
 
 use hardy_core::{
     alert::AlertSettings,
@@ -11,7 +11,7 @@ use hardy_core::{
 use hardy_ml::{ModelArtifact, features::FEATURE_VERSION};
 use iced::Task;
 
-use super::{HardyMonitorApp, Message};
+use super::{HardyMonitorApp, Message, loads::ErrorSource};
 use crate::time_range::AnalyticsRange;
 
 /// Wraps a database error with the failing operation.
@@ -20,6 +20,17 @@ fn db_err(op: &'static str) -> impl Fn(anyhow::Error) -> AppError {
 }
 
 impl HardyMonitorApp {
+    /// Runs a database load, counted as pending until its result message
+    /// (see [`Message::finishes_load`]) arrives.
+    pub(super) fn load<T: Send + 'static>(
+        &mut self,
+        work: impl Future<Output = T> + Send + 'static,
+        done: impl FnOnce(T) -> Message + Send + 'static,
+    ) -> Task<Message> {
+        self.ui.pending.begin(Instant::now());
+        Task::perform(work, done)
+    }
+
     pub(super) fn check_schema(&self) -> Task<Message> {
         let db = self.db.clone();
         Task::perform(async move { db.schema_status().await }, |r| {
@@ -27,9 +38,9 @@ impl HardyMonitorApp {
         })
     }
 
-    pub(super) fn load_alert_settings(&self) -> Task<Message> {
+    pub(super) fn load_alert_settings(&mut self) -> Task<Message> {
         let db = self.db.clone();
-        Task::perform(async move { db.get_alert_settings().await }, |r| {
+        self.load(async move { db.get_alert_settings().await }, |r| {
             Message::AlertSettingsLoaded(r.map_err(db_err("get_alert_settings")))
         })
     }
@@ -43,12 +54,12 @@ impl HardyMonitorApp {
         match change {
             None => Task::none(),
             Some(Err(e)) => {
-                self.error = Some(e);
+                self.errors.raise(ErrorSource::AlertSettings, e);
                 Task::none()
             }
             Some(Ok(settings)) => {
                 let db = self.db.clone();
-                Task::perform(
+                self.load(
                     async move {
                         db.save_alert_settings(&settings).await?;
                         Ok(settings)
@@ -61,9 +72,9 @@ impl HardyMonitorApp {
         }
     }
 
-    pub(super) fn fetch_latest(&self) -> Task<Message> {
+    pub(super) fn fetch_latest(&mut self) -> Task<Message> {
         let db = self.db.clone();
-        Task::perform(
+        self.load(
             async move {
                 Ok(db
                     .get_latest_record()
@@ -77,47 +88,49 @@ impl HardyMonitorApp {
     }
 
     /// Readings for the selected chart range (up to now).
-    pub(super) fn load_chart_history(&self) -> Task<Message> {
+    pub(super) fn load_chart_history(&mut self) -> Task<Message> {
         let now = self.clock.now_utc();
         let Some((start, end)) = self.ui.chart_range.window(
             now,
             &self.schedule,
-            (&self.ui.custom_start, &self.ui.custom_end),
+            (&mut self.ui.custom_start, &self.ui.custom_end),
         ) else {
             return Task::none();
         };
         let db = self.db.clone();
         let end = end.min(now);
-        Task::perform(
+        let id = self.ui.chart_requests.issue();
+        self.load(
             async move { db.get_history_range(start, end).await },
-            |r: anyhow::Result<Vec<OccupancyLog>>| {
-                Message::HistoryLoaded(r.map_err(db_err("get_history_range")))
+            move |r: anyhow::Result<Vec<OccupancyLog>>| {
+                Message::HistoryLoaded(id, r.map_err(db_err("get_history_range")))
             },
         )
     }
 
     /// Hourly averages for the heatmap range.
-    pub(super) fn load_analytics(&self) -> Task<Message> {
+    pub(super) fn load_analytics(&mut self) -> Task<Message> {
         let now = self.clock.now_utc();
         let tz = self.schedule.timezone();
         let start = self.ui.analytics_range.start(now, tz);
         let db = self.db.clone();
-        Task::perform(
+        let id = self.ui.analytics_requests.issue();
+        self.load(
             async move { db.get_averages_range(start, now, tz).await },
-            |r: anyhow::Result<Vec<HourlyAverage>>| {
-                Message::AnalyticsLoaded(r.map_err(db_err("get_averages_range")))
+            move |r: anyhow::Result<Vec<HourlyAverage>>| {
+                Message::AnalyticsLoaded(id, r.map_err(db_err("get_averages_range")))
             },
         )
     }
 
     /// The last four weeks and the four before them, for insights.
-    pub(super) fn load_insights_data(&self) -> Task<Message> {
+    pub(super) fn load_insights_data(&mut self) -> Task<Message> {
         let now = self.clock.now_utc();
         let tz = self.schedule.timezone();
         let current_start = AnalyticsRange::Last4Weeks.start(now, tz);
         let baseline_start = current_start - chrono::TimeDelta::weeks(4);
         let db = self.db.clone();
-        Task::perform(
+        self.load(
             async move {
                 let current = db.get_averages_range(current_start, now, tz).await;
                 let baseline = db
@@ -133,14 +146,14 @@ impl HardyMonitorApp {
     }
 
     /// Scores of the daemon's logged forecasts over the last days.
-    pub(super) fn load_accuracy(&self) -> Task<Message> {
+    pub(super) fn load_accuracy(&mut self) -> Task<Message> {
         let now = self.clock.now_utc();
         let tz = self.schedule.timezone();
         let first_day = now.with_timezone(&tz).date_naive()
             - chrono::TimeDelta::days(crate::views::model_data::ACCURACY_DAYS - 1);
         let since = hardy_core::analytics::midnight_local_as_utc(first_day, tz);
         let db = self.db.clone();
-        Task::perform(
+        self.load(
             async move { db.forecast_accuracy(since, now, tz).await },
             |r: anyhow::Result<Vec<HorizonAccuracy>>| {
                 Message::AccuracyLoaded(r.map_err(db_err("forecast_accuracy")))
@@ -149,11 +162,11 @@ impl HardyMonitorApp {
     }
 
     /// Fetches readings newer than those already held for forecasting.
-    pub(super) fn load_forecast_history(&self) -> Task<Message> {
+    pub(super) fn load_forecast_history(&mut self) -> Task<Message> {
         let db = self.db.clone();
         let now = self.clock.now_utc();
         let start = self.data.forecasting.history_fetch_start(now);
-        Task::perform(
+        self.load(
             async move { db.get_history_range(start, now).await },
             |r: anyhow::Result<Vec<OccupancyLog>>| {
                 Message::ForecastHistoryLoaded(r.map_err(db_err("get_forecast_history")))
@@ -161,9 +174,9 @@ impl HardyMonitorApp {
         )
     }
 
-    pub(super) fn load_model_status(&self) -> Task<Message> {
+    pub(super) fn load_model_status(&mut self) -> Task<Message> {
         let db = self.db.clone();
-        Task::perform(
+        self.load(
             async move {
                 let latest = db.latest_model_info(FEATURE_VERSION).await?;
                 let state = db.get_ml_state().await?;
@@ -175,9 +188,9 @@ impl HardyMonitorApp {
         )
     }
 
-    pub(super) fn load_model(&self, info: ModelInfo) -> Task<Message> {
+    pub(super) fn load_model(&mut self, info: ModelInfo) -> Task<Message> {
         let db = self.db.clone();
-        Task::perform(
+        self.load(
             async move {
                 let bytes = db.load_model(info.id).await.map_err(db_err("load_model"))?;
                 let artifact = ModelArtifact::from_bytes(&bytes)
@@ -188,10 +201,10 @@ impl HardyMonitorApp {
         )
     }
 
-    pub(super) fn request_retrain(&self) -> Task<Message> {
+    pub(super) fn request_retrain(&mut self) -> Task<Message> {
         let db = self.db.clone();
         let now = self.clock.now_utc();
-        Task::perform(
+        self.load(
             async move {
                 db.request_retrain(now).await?;
                 Ok((None, db.get_ml_state().await?))
@@ -202,11 +215,11 @@ impl HardyMonitorApp {
         )
     }
 
-    pub(super) fn export_csv(&self) -> Task<Message> {
+    pub(super) fn export_csv(&mut self) -> Task<Message> {
         let db = self.db.clone();
         let clock = self.clock.clone();
         let output_dir = dirs::download_dir().unwrap_or_else(|| PathBuf::from("."));
-        Task::perform(
+        self.load(
             async move {
                 let path = db
                     .export_to_csv(&output_dir, &*clock)

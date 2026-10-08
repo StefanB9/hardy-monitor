@@ -12,19 +12,17 @@ use hardy_core::{
 };
 use iced::Task;
 
-use super::{HardyMonitorApp, Message};
+use super::{HardyMonitorApp, Message, loads::ErrorSource};
 use crate::{freshness::Freshness, widgets::heatmap::WeekGrid};
 
 impl HardyMonitorApp {
     /// Fetches the latest reading while open; clears it while closed.
     pub(super) fn poll(&mut self) -> Task<Message> {
         if self.schedule.is_open(&self.clock.now_utc()) {
-            self.start_loading();
             self.fetch_latest()
         } else {
             self.data.occupancy = None;
             self.ui.gauge_cache.clear();
-            self.stop_loading();
             self.update_tray();
             Task::none()
         }
@@ -34,24 +32,17 @@ impl HardyMonitorApp {
         &mut self,
         result: Result<Option<(DateTime<Utc>, f64)>, AppError>,
     ) -> Task<Message> {
-        self.stop_loading();
         let now = self.clock.now_utc();
-        let (taken_at, percentage) = match result {
-            Ok(Some(reading)) => reading,
-            Ok(None) => {
-                self.data.last_update = Some(now);
-                self.error = None;
-                return Task::none();
-            }
-            Err(e) => {
-                self.error = Some(e);
-                return Task::none();
-            }
+        let Some(reading) = self.errors.record(ErrorSource::LatestReading, result) else {
+            return Task::none();
+        };
+        let Some((taken_at, percentage)) = reading else {
+            self.data.last_update = Some(now);
+            return Task::none();
         };
         let is_new = self.data.latest_reading_at != Some(taken_at);
         self.data.latest_reading_at = Some(taken_at);
         self.data.last_update = Some(now);
-        self.error = None;
         self.ui.gauge_cache.clear();
 
         // An old value must not look live or trigger alerts.
@@ -101,12 +92,8 @@ impl HardyMonitorApp {
         current: Result<Vec<HourlyAverage>, AppError>,
         baseline: Result<Vec<HourlyAverage>, AppError>,
     ) {
-        let current = match current {
-            Ok(current) => current,
-            Err(e) => {
-                self.error = Some(e);
-                return;
-            }
+        let Some(current) = self.errors.record(ErrorSource::Insights, current) else {
+            return;
         };
         self.data.stats = calculate_stats(&current);
         self.data.peak_hours = find_peak_hours(&current, 5);
