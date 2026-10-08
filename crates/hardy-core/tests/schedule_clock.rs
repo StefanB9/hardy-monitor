@@ -1,9 +1,8 @@
 //! Integration tests for opening hours driven by `MockClock`.
-#![allow(clippy::unwrap_used)]
-#![allow(clippy::expect_used)]
 #![allow(clippy::float_cmp)]
 #![allow(clippy::manual_string_new)]
 
+use anyhow::{Context, Result};
 use chrono::{Duration as ChronoDuration, TimeZone, Utc};
 use hardy_core::{
     Clock, MockClock,
@@ -32,22 +31,32 @@ fn create_test_schedule(
 }
 
 #[test]
-fn test_schedule_with_mock_clock() {
+fn test_schedule_with_mock_clock() -> Result<()> {
     // 10:00 UTC on a Monday in June is 12:00 CEST in the gym.
-    let clock = MockClock::new(Utc.with_ymd_and_hms(2024, 6, 17, 10, 0, 0).unwrap());
+    let clock = MockClock::new(
+        Utc.with_ymd_and_hms(2024, 6, 17, 10, 0, 0)
+            .single()
+            .context("valid UTC timestamp")?,
+    );
     let schedule = create_test_schedule(6, 22, 8, 20);
 
     assert!(
         schedule.is_open(&clock.now_utc()),
         "Gym should be open at 12:00 local on Monday"
     );
+
+    Ok(())
 }
 
 #[test]
-fn test_schedule_open_close_transitions() {
+fn test_schedule_open_close_transitions() -> Result<()> {
     // 05:00 UTC = 07:00 CEST (open), 12:00 UTC = 14:00 (open),
     // 00:00 UTC = 02:00 (closed) — independent of the host timezone.
-    let clock = MockClock::new(Utc.with_ymd_and_hms(2024, 6, 17, 5, 0, 0).unwrap());
+    let clock = MockClock::new(
+        Utc.with_ymd_and_hms(2024, 6, 17, 5, 0, 0)
+            .single()
+            .context("valid UTC timestamp")?,
+    );
     let schedule = create_test_schedule(6, 22, 8, 20);
 
     assert!(
@@ -66,4 +75,6 @@ fn test_schedule_open_close_transitions() {
         !schedule.is_open(&clock.now_utc()),
         "Should be closed at 02:00"
     );
+
+    Ok(())
 }
