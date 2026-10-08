@@ -1,12 +1,11 @@
 //! Training against a real database: storage, state and the background tick.
-#![allow(clippy::unwrap_used)]
-#![allow(clippy::expect_used)]
 
 #[path = "../../hardy-core/tests/common/mod.rs"]
 mod common;
 
 use std::time::Duration;
 
+use anyhow::{Context, Result};
 use chrono::{DateTime, TimeDelta, TimeZone, Utc};
 use hardy_core::{GymSchedule, MlConfig, db::DataSource};
 use hardy_ml::{
@@ -17,24 +16,25 @@ use hardy_ml::{
 };
 
 /// 2024-06-03 (Monday) + `days`, `h:mi` CEST.
-fn local(days: i64, h: u32, mi: u32) -> DateTime<Utc> {
-    GymSchedule::default()
+fn local(days: i64, h: u32, mi: u32) -> Result<DateTime<Utc>> {
+    Ok(GymSchedule::default()
         .timezone()
         .with_ymd_and_hms(2024, 6, 3, h, mi, 0)
-        .unwrap()
+        .single()
+        .context("unambiguous local time")?
         .with_timezone(&Utc)
-        + TimeDelta::days(days)
+        + TimeDelta::days(days))
 }
 
 /// Daily curve with a per-day level, every 5 minutes while open.
-async fn insert_learnable_history(db: &hardy_core::Database, days: i64) {
+async fn insert_learnable_history(db: &hardy_core::Database, days: i64) -> Result<()> {
     let schedule = GymSchedule::default();
     let mut rows = Vec::new();
     for d in 0..days {
         #[allow(clippy::cast_precision_loss)]
         let level = ((d * 37) % 23) as f64 - 11.0;
         for step in 0..(24 * 12) {
-            let t = local(d, 0, 0) + TimeDelta::minutes(step * 5);
+            let t = local(d, 0, 0)? + TimeDelta::minutes(step * 5);
             if schedule.is_open(&t) {
                 #[allow(clippy::cast_precision_loss)]
                 let hour = step as f64 / 12.0;
@@ -43,7 +43,10 @@ async fn insert_learnable_history(db: &hardy_core::Database, days: i64) {
             }
         }
     }
-    db.batch_insert(&rows, DataSource::Measured).await.unwrap();
+    db.batch_insert(&rows, DataSource::Measured)
+        .await
+        .context("insert history")?;
+    Ok(())
 }
 
 fn config() -> MlConfig {
@@ -55,78 +58,78 @@ fn config() -> MlConfig {
 }
 
 #[tokio::test]
-async fn test_train_now_stores_model_and_clears_error() {
-    let tdb = common::TestDatabase::new().await;
-    insert_learnable_history(&tdb.db, 21).await;
+async fn test_train_now_stores_model_and_clears_error() -> Result<()> {
+    let tdb = common::TestDatabase::new().await?;
+    insert_learnable_history(&tdb.db, 21).await?;
 
     let mut maintenance = ModelMaintenance::new(config(), GymSchedule::default());
-    let now = local(21, 0, 30);
+    let now = local(21, 0, 30)?;
     let outcome = tokio::time::timeout(
         Duration::from_secs(300),
         maintenance.train_now(&tdb.db, RetrainReason::Requested, now),
     )
     .await
-    .expect("training finishes")
-    .expect("training succeeds");
+    .context("training finishes")?
+    .context("training succeeds")?;
     assert!(
         matches!(outcome, TrainingOutcome::Stored { .. }),
         "expected a stored model, got {outcome:?}"
     );
     let TrainingOutcome::Stored { id, artifact } = outcome else {
-        return;
+        return Ok(());
     };
     assert!(artifact.metrics.holdout_mae < artifact.metrics.baseline_mae);
 
     let info = tdb
         .db
         .latest_model_info(FEATURE_VERSION)
-        .await
-        .unwrap()
-        .unwrap();
+        .await?
+        .context("a model is stored")?;
     assert_eq!(info.id, id);
-    let restored = ModelArtifact::from_bytes(&tdb.db.load_model(id).await.unwrap()).unwrap();
+    let restored = ModelArtifact::from_bytes(&tdb.db.load_model(id).await?)?;
     assert_eq!(restored.metrics, artifact.metrics);
 
-    let state = tdb.db.get_ml_state().await.unwrap();
+    let state = tdb.db.get_ml_state().await?;
     assert_eq!(state.last_attempt_at, Some(now));
     assert_eq!(state.last_error, None);
 
     tdb.cleanup().await;
+    Ok(())
 }
 
 #[tokio::test]
-async fn test_train_now_records_rejection() {
-    let tdb = common::TestDatabase::new().await;
-    insert_learnable_history(&tdb.db, 2).await;
+async fn test_train_now_records_rejection() -> Result<()> {
+    let tdb = common::TestDatabase::new().await?;
+    insert_learnable_history(&tdb.db, 2).await?;
 
     let mut maintenance = ModelMaintenance::new(config(), GymSchedule::default());
     let outcome = maintenance
-        .train_now(&tdb.db, RetrainReason::Requested, local(2, 0, 30))
+        .train_now(&tdb.db, RetrainReason::Requested, local(2, 0, 30)?)
         .await
-        .expect("a rejection is not an error");
+        .context("a rejection is not an error")?;
     assert!(matches!(outcome, TrainingOutcome::Rejected(_)));
 
-    assert!(
-        tdb.db
-            .latest_model_info(FEATURE_VERSION)
-            .await
-            .unwrap()
-            .is_none()
-    );
-    let error = tdb.db.get_ml_state().await.unwrap().last_error.unwrap();
+    assert!(tdb.db.latest_model_info(FEATURE_VERSION).await?.is_none());
+    let error = tdb
+        .db
+        .get_ml_state()
+        .await?
+        .last_error
+        .context("rejection is recorded")?;
     assert!(error.contains("not enough data"), "{error}");
 
     tdb.cleanup().await;
+    Ok(())
 }
 
 #[tokio::test]
-async fn test_tick_trains_missing_model_in_background() {
-    let tdb = common::TestDatabase::new().await;
-    insert_learnable_history(&tdb.db, 21).await;
+async fn test_tick_trains_missing_model_in_background() -> Result<()> {
+    let tdb = common::TestDatabase::new().await?;
+    insert_learnable_history(&tdb.db, 21).await?;
 
     let mut maintenance = ModelMaintenance::new(config(), GymSchedule::default());
-    let now = local(21, 0, 30);
-    maintenance.tick(&tdb.db, now).await.unwrap();
+    let now = local(21, 0, 30)?;
+    maintenance.tick(&tdb.db, now).await?;
     assert!(
         maintenance.is_running(),
         "missing model should start training"
@@ -135,35 +138,36 @@ async fn test_tick_trains_missing_model_in_background() {
     tokio::time::timeout(Duration::from_secs(600), async {
         while maintenance.is_running() {
             tokio::time::sleep(Duration::from_millis(200)).await;
-            maintenance.tick(&tdb.db, now).await.unwrap();
+            maintenance.tick(&tdb.db, now).await?;
         }
+        Ok::<(), anyhow::Error>(())
     })
     .await
-    .expect("training finishes");
+    .context("training finishes")??;
 
-    let info = tdb.db.latest_model_info(FEATURE_VERSION).await.unwrap();
+    let info = tdb.db.latest_model_info(FEATURE_VERSION).await?;
     assert!(
         info.is_some_and(|m| m.tuned),
         "first model is grid-searched"
     );
     // Nothing further is due right after a fresh model.
-    maintenance.tick(&tdb.db, now).await.unwrap();
+    maintenance.tick(&tdb.db, now).await?;
     assert!(!maintenance.is_running());
 
     tdb.cleanup().await;
+    Ok(())
 }
 
 #[tokio::test]
-async fn test_current_model_after_training_and_restart() -> anyhow::Result<()> {
-    use anyhow::Context;
-    let tdb = common::TestDatabase::new().await;
-    insert_learnable_history(&tdb.db, 21).await;
+async fn test_current_model_after_training_and_restart() -> Result<()> {
+    let tdb = common::TestDatabase::new().await?;
+    insert_learnable_history(&tdb.db, 21).await?;
 
     let mut maintenance = ModelMaintenance::new(config(), GymSchedule::default());
     let before = maintenance.current_model().map(|(id, _)| id);
     let outcome = tokio::time::timeout(
         Duration::from_secs(300),
-        maintenance.train_now(&tdb.db, RetrainReason::Requested, local(21, 0, 30)),
+        maintenance.train_now(&tdb.db, RetrainReason::Requested, local(21, 0, 30)?),
     )
     .await
     .context("training finishes")??;

@@ -12,7 +12,7 @@ const QUERY_CANCELED: &str = "57014";
 
 #[tokio::test]
 async fn test_database_statement_timeout_cancels_slow_queries() -> Result<()> {
-    let raw = RawTestDatabase::new().await;
+    let raw = RawTestDatabase::new().await?;
     let config = DatabaseConfig {
         statement_timeout_secs: 1,
         ..DatabaseConfig::with_url(raw.url.clone())

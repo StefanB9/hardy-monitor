@@ -17,7 +17,7 @@
 //!
 //! ## Leftover databases
 //!
-//! If a test panics before [`TestDatabase::cleanup`] is called, the database
+//! If a test fails before [`TestDatabase::cleanup`] is called, the database
 //! is left behind. Remove orphans with:
 //!
 //! ```sql
@@ -26,10 +26,9 @@
 //! WHERE  datname LIKE 'hardy_test_%';
 //! ```
 
-#![allow(clippy::panic)]
-
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use anyhow::{Context, Result};
 use hardy_core::db::Database;
 use sqlx::{AssertSqlSafe, PgPool};
 
@@ -42,18 +41,18 @@ pub struct TestDatabase {
 
 #[allow(dead_code)]
 impl TestDatabase {
-    pub async fn new() -> Self {
-        let (db_name, admin_pool, test_url) = create_empty_database().await;
+    pub async fn new() -> Result<Self> {
+        let (db_name, admin_pool, test_url) = create_empty_database().await?;
 
-        let db = Database::new(&test_url).await.unwrap_or_else(|e| {
-            panic!("failed to connect to test database '{db_name}' or run migrations: {e}")
-        });
+        let db = Database::new(&test_url).await.with_context(|| {
+            format!("failed to connect to test database '{db_name}' or run migrations")
+        })?;
 
-        Self {
+        Ok(Self {
             db_name,
             admin_pool,
             db,
-        }
+        })
     }
 
     pub async fn cleanup(self) {
@@ -74,17 +73,17 @@ pub struct RawTestDatabase {
 
 #[allow(dead_code)]
 impl RawTestDatabase {
-    pub async fn new() -> Self {
-        let (db_name, admin_pool, test_url) = create_empty_database().await;
+    pub async fn new() -> Result<Self> {
+        let (db_name, admin_pool, test_url) = create_empty_database().await?;
         let pool = PgPool::connect(&test_url)
             .await
-            .unwrap_or_else(|e| panic!("failed to connect to test database '{db_name}': {e}"));
-        Self {
+            .with_context(|| format!("failed to connect to test database '{db_name}'"))?;
+        Ok(Self {
             db_name,
             admin_pool,
             pool,
             url: test_url,
-        }
+        })
     }
 
     pub async fn cleanup(self) {
@@ -95,34 +94,32 @@ impl RawTestDatabase {
 
 /// Creates a uniquely named empty database; returns its name, an admin pool
 /// and its connection URL.
-async fn create_empty_database() -> (String, PgPool, String) {
+async fn create_empty_database() -> Result<(String, PgPool, String)> {
     dotenvy::dotenv().ok();
 
     let database_url = std::env::var("DATABASE_URL")
-        .unwrap_or_else(|_| panic!("DATABASE_URL must be set to run database integration tests"));
+        .context("DATABASE_URL must be set to run database integration tests")?;
 
-    let admin_url = replace_db_name(&database_url, "postgres");
-    let db_name = unique_db_name();
+    let admin_url = replace_db_name(&database_url, "postgres")?;
+    let db_name = unique_db_name()?;
 
-    let admin_pool = PgPool::connect(&admin_url).await.unwrap_or_else(|e| {
-        panic!(
-            "failed to connect to `PostgreSQL` admin database for test setup — ensure \
-             DATABASE_URL is reachable and the user has CREATEDB privilege: {e}"
-        )
-    });
+    let admin_pool = PgPool::connect(&admin_url).await.context(
+        "failed to connect to `PostgreSQL` admin database for test setup — ensure DATABASE_URL is \
+         reachable and the user has CREATEDB privilege",
+    )?;
 
     let mut conn = admin_pool
         .acquire()
         .await
-        .unwrap_or_else(|e| panic!("failed to acquire admin connection for test setup: {e}"));
+        .context("failed to acquire admin connection for test setup")?;
     sqlx::raw_sql(AssertSqlSafe(format!(r#"CREATE DATABASE "{db_name}""#)))
         .execute(&mut *conn)
         .await
-        .unwrap_or_else(|e| panic!("failed to create test database '{db_name}': {e}"));
+        .with_context(|| format!("failed to create test database '{db_name}'"))?;
     drop(conn);
 
-    let test_url = replace_db_name(&database_url, &db_name);
-    (db_name, admin_pool, test_url)
+    let test_url = replace_db_name(&database_url, &db_name)?;
+    Ok((db_name, admin_pool, test_url))
 }
 
 async fn drop_database(admin_pool: &PgPool, db_name: &str) {
@@ -140,30 +137,29 @@ async fn drop_database(admin_pool: &PgPool, db_name: &str) {
     }
 }
 
-fn replace_db_name(url: &str, new_db: &str) -> String {
+fn replace_db_name(url: &str, new_db: &str) -> Result<String> {
     let (base, params) = url.split_once('?').unwrap_or((url, ""));
 
-    let last_slash = base.rfind('/').unwrap_or_else(|| {
-        panic!(
-            "DATABASE_URL does not look like a valid `PostgreSQL` URL (expected \
-             'postgres://host/dbname', got '{url}')"
-        )
-    });
+    // The URL carries the password, so it is not repeated in the error.
+    let last_slash = base.rfind('/').context(
+        "DATABASE_URL does not look like a valid `PostgreSQL` URL (expected \
+         'postgres://host/dbname')",
+    )?;
 
     let prefix = &base[..last_slash];
 
-    if params.is_empty() {
+    Ok(if params.is_empty() {
         format!("{prefix}/{new_db}")
     } else {
         format!("{prefix}/{new_db}?{params}")
-    }
+    })
 }
 
-fn unique_db_name() -> String {
+fn unique_db_name() -> Result<String> {
     let pid = std::process::id();
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .unwrap_or_else(|_| panic!("system clock is before the UNIX epoch"))
+        .context("system clock is before the UNIX epoch")?
         .as_nanos();
-    format!("hardy_test_{pid}_{nanos}")
+    Ok(format!("hardy_test_{pid}_{nanos}"))
 }
