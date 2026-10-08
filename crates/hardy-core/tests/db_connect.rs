@@ -5,7 +5,6 @@ mod common;
 use anyhow::{Context, Result};
 use common::RawTestDatabase;
 use hardy_core::{config::DatabaseConfig, db::Database};
-use sqlx::postgres::PgPoolOptions;
 
 /// PostgreSQL's SQLSTATE for a statement cancelled by `statement_timeout`.
 const QUERY_CANCELED: &str = "57014";
@@ -17,7 +16,7 @@ async fn test_database_statement_timeout_cancels_slow_queries() -> Result<()> {
         statement_timeout_secs: 1,
         ..DatabaseConfig::with_url(raw.url.clone())
     };
-    let pool = PgPoolOptions::new()
+    let pool = Database::pool_options(&config)
         .max_connections(1)
         .connect_with(Database::connect_options(&config)?)
         .await
