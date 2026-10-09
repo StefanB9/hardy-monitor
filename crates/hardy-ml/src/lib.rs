@@ -1,6 +1,7 @@
 //! Occupancy forecasting: feature extraction, model training, evaluation and
 //! persistence. Shared by the daemon (nightly training) and the GUI.
 
+pub mod baseline;
 pub mod confidence;
 pub mod config;
 pub mod error;
@@ -17,10 +18,10 @@ pub mod retrain;
 pub mod samples;
 pub mod training;
 
+pub use baseline::{BASELINE_HISTORY_DAYS, Baseline, baseline_forecast};
 pub use confidence::{PredictionMethod, PredictionWithConfidence};
 pub use config::{MlAlgorithm, MlConfig};
 pub use error::MlError;
-pub use forecast::baseline_forecast;
 pub use history::{History, HistoryView};
 pub use model::{Algorithm, RfParams};
 pub use profile::SlotProfile;

@@ -26,7 +26,8 @@ fn local(days: i64, h: u32, mi: u32) -> Result<DateTime<Utc>> {
         + TimeDelta::days(days))
 }
 
-/// Daily curve with a per-day level, every 5 minutes while open.
+/// Daily curve with a per-day deviation growing through the day, every 5
+/// minutes while open.
 async fn insert_learnable_history(db: &hardy_core::Database, days: i64) -> Result<()> {
     let schedule = GymSchedule::default();
     let mut rows = Vec::new();
@@ -39,7 +40,10 @@ async fn insert_learnable_history(db: &hardy_core::Database, days: i64) -> Resul
                 #[allow(clippy::cast_precision_loss)]
                 let hour = step as f64 / 12.0;
                 let curve = 35.0 + 20.0 * ((hour - 6.0) / 17.0 * std::f64::consts::PI).sin();
-                rows.push((t, (curve + level).clamp(0.0, 100.0)));
+                // As in the crate's own tests: a deviation that grows through
+                // the day, which the model learns and the baseline cannot.
+                let drift = level * (hour - 5.0) / 6.0;
+                rows.push((t, (curve + drift).clamp(0.0, 100.0)));
             }
         }
     }
@@ -60,10 +64,10 @@ fn config() -> MlConfig {
 #[tokio::test]
 async fn test_train_now_stores_model_and_clears_error() -> Result<()> {
     let tdb = common::TestDatabase::new().await?;
-    insert_learnable_history(&tdb.db, 21).await?;
+    insert_learnable_history(&tdb.db, 28).await?;
 
     let mut maintenance = ModelMaintenance::new(config(), GymSchedule::default());
-    let now = local(21, 0, 30)?;
+    let now = local(28, 0, 30)?;
     let outcome = tokio::time::timeout(
         Duration::from_secs(300),
         maintenance.train_now(&tdb.db, RetrainReason::Requested, now),
@@ -125,10 +129,10 @@ async fn test_train_now_records_rejection() -> Result<()> {
 #[tokio::test]
 async fn test_tick_trains_missing_model_in_background() -> Result<()> {
     let tdb = common::TestDatabase::new().await?;
-    insert_learnable_history(&tdb.db, 21).await?;
+    insert_learnable_history(&tdb.db, 28).await?;
 
     let mut maintenance = ModelMaintenance::new(config(), GymSchedule::default());
-    let now = local(21, 0, 30)?;
+    let now = local(28, 0, 30)?;
     maintenance.tick(&tdb.db, now).await?;
     assert!(
         maintenance.is_running(),
@@ -161,13 +165,13 @@ async fn test_tick_trains_missing_model_in_background() -> Result<()> {
 #[tokio::test]
 async fn test_current_model_after_training_and_restart() -> Result<()> {
     let tdb = common::TestDatabase::new().await?;
-    insert_learnable_history(&tdb.db, 21).await?;
+    insert_learnable_history(&tdb.db, 28).await?;
 
     let mut maintenance = ModelMaintenance::new(config(), GymSchedule::default());
     let before = maintenance.current_model().map(|(id, _)| id);
     let outcome = tokio::time::timeout(
         Duration::from_secs(300),
-        maintenance.train_now(&tdb.db, RetrainReason::Requested, local(21, 0, 30)?),
+        maintenance.train_now(&tdb.db, RetrainReason::Requested, local(28, 0, 30)?),
     )
     .await
     .context("training finishes")??;

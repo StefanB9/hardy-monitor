@@ -3,10 +3,14 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, TimeDelta, Timelike, Utc};
 use hardy_core::{Database, GymSchedule};
-use hardy_ml::{History, forecast_log::forecast_log_entries, maintenance::ModelMaintenance};
+use hardy_ml::{
+    BASELINE_HISTORY_DAYS, History, forecast_log::forecast_log_entries,
+    maintenance::ModelMaintenance,
+};
 
-/// History the model's features need ("same time last week").
-const HISTORY: TimeDelta = TimeDelta::days(8);
+/// History the baseline needs, which covers the model's features ("same
+/// time last week").
+const HISTORY: TimeDelta = TimeDelta::days(BASELINE_HISTORY_DAYS);
 /// Logged forecasts are kept this long.
 const RETENTION: TimeDelta = TimeDelta::days(90);
 

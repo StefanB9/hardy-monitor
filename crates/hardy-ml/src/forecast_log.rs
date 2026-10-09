@@ -3,11 +3,11 @@
 use chrono::{DateTime, Utc};
 use hardy_core::{GymSchedule, db::ForecastLogEntry};
 
-use crate::{forecast::baseline_forecast, history::History, training::ModelArtifact};
+use crate::{baseline::baseline_forecast, history::History, training::ModelArtifact};
 
 /// Entries for every open target `1..=max_hours_ahead` hours after `now`:
-/// the model's forecast where it produced one (else the plain averages,
-/// with no model id) alongside the plain averages.
+/// the model's forecast where it produced one (else the baseline, with no
+/// model id) alongside the baseline.
 pub fn forecast_log_entries(
     model: Option<(i64, &ModelArtifact)>,
     history: &History,
@@ -60,7 +60,7 @@ mod tests {
     };
 
     #[test]
-    fn test_forecast_log_without_model_logs_averages() {
+    fn test_forecast_log_without_model_logs_the_baseline() {
         let history = learnable_history(14);
         let schedule = GymSchedule::default();
         let now = local(14, 12, 0);
@@ -108,7 +108,7 @@ mod tests {
             [1, 2, 3, 4]
         );
 
-        // Without a recent reading the model falls back to averages.
+        // Without a recent reading the model falls back to slot averages.
         let stale = forecast_log_entries(
             Some((42, &artifact)),
             &history,

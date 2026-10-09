@@ -102,9 +102,7 @@ impl Database {
         ?migrations,
     ))]
     pub async fn connect(config: &DatabaseConfig, migrations: Migrations) -> Result<Self> {
-        let pool = PgPoolOptions::new()
-            .max_connections(config.max_connections)
-            .acquire_timeout(Duration::from_secs(config.acquire_timeout_secs))
+        let pool = Self::pool_options(config)
             .connect_with(Self::connect_options(config)?)
             .await
             .context("Failed to connect to PostgreSQL database")?;
@@ -128,18 +126,36 @@ impl Database {
         Ok(Self { pool })
     }
 
-    /// Per-connection settings: the URL plus the statement timeout, which
-    /// PostgreSQL enforces on every query.
+    /// Connection settings from the URL. Nothing else goes into the startup
+    /// message: connection poolers such as `PgBouncer` (Neon's pooled endpoint)
+    /// reject startup options.
     pub fn connect_options(config: &DatabaseConfig) -> Result<PgConnectOptions> {
-        let options: PgConnectOptions = config
+        config
             .url
             .expose()
             .parse()
-            .context("DATABASE_URL is not a valid PostgreSQL URL")?;
-        Ok(options.options([(
-            "statement_timeout",
-            format!("{}s", config.statement_timeout_secs),
-        )]))
+            .context("DATABASE_URL is not a valid PostgreSQL URL")
+    }
+
+    /// Pool limits, and the statement timeout set on each new connection.
+    ///
+    /// Through a transaction-mode pooler a session setting is not tied to
+    /// this client's queries, so there the timeout is best effort; set it on
+    /// the database role (`ALTER ROLE … SET statement_timeout`) to enforce it.
+    pub fn pool_options(config: &DatabaseConfig) -> PgPoolOptions {
+        let timeout = format!("{}s", config.statement_timeout_secs);
+        PgPoolOptions::new()
+            .max_connections(config.max_connections)
+            .acquire_timeout(Duration::from_secs(config.acquire_timeout_secs))
+            .after_connect(move |conn, _meta| {
+                let timeout = timeout.clone();
+                Box::pin(async move {
+                    sqlx::query!("SELECT set_config('statement_timeout', $1, false)", timeout)
+                        .fetch_one(conn)
+                        .await?;
+                    Ok(())
+                })
+            })
     }
 
     /// Closes the pool, waiting for open connections.
@@ -154,6 +170,17 @@ mod tests {
     use chrono::{Datelike, TimeZone, Timelike};
 
     use super::*;
+
+    #[test]
+    fn test_connect_options_send_no_startup_options() -> anyhow::Result<()> {
+        // Connection poolers such as PgBouncer (Neon's pooled endpoint)
+        // reject startup options, so settings must be applied after
+        // connecting.
+        let config = DatabaseConfig::with_url("postgres://hardy@db.example/hardy");
+        let options = Database::connect_options(&config)?;
+        assert_eq!(options.get_options(), None);
+        Ok(())
+    }
 
     fn make_log(timestamp: DateTime<Utc>) -> OccupancyLog {
         OccupancyLog {
