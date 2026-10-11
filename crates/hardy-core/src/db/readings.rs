@@ -45,7 +45,8 @@ impl Database {
         Ok(id)
     }
 
-    /// The newest stored row of any source.
+    /// The newest reading. Repair's zero anchors are not readings: a closing
+    /// anchor would otherwise pose as the newest value all day.
     #[tracing::instrument(skip_all, fields(db.operation = "get_latest"))]
     pub async fn get_latest_record(&self) -> Result<Option<OccupancyLog>> {
         let log = sqlx::query_as!(
@@ -57,9 +58,11 @@ impl Database {
                 percentage as "percentage!",
                 source as "source!: DataSource"
             FROM occupancy_logs
+            WHERE source <> $1
             ORDER BY timestamp DESC
             LIMIT 1
-            "#
+            "#,
+            DataSource::Boundary.as_str()
         )
         .fetch_optional(&self.pool)
         .await
