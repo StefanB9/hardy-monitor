@@ -5,12 +5,12 @@ edition = "2024"
 
 [dependencies]
 anyhow = { workspace = true }
-bincode = { workspace = true }
 chrono = { workspace = true }
 hardy-core = { version = "0.1.0", path = "../hardy-core" }
 linfa = { workspace = true }
 linfa-linear = { workspace = true }
 ndarray = { workspace = true }
+postcard = { workspace = true }
 rayon = { workspace = true }
 serde = { workspace = true }
 smartcore = { workspace = true }
