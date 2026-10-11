@@ -1,4 +1,4 @@
-//! Model artifacts as compact bytes (bincode + zstd) for database storage.
+//! Model artifacts as compact bytes (postcard + zstd) for database storage.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -12,7 +12,9 @@ use crate::{
 };
 
 /// Layout version of the stored bytes (independent of the feature version).
-const FORMAT_VERSION: u32 = 1;
+/// 1 was bincode; 2 is postcard. It leads the bytes in the same varint form
+/// in both, so it can be checked before decoding the rest.
+const FORMAT_VERSION: u32 = 2;
 /// Safety limit when decompressing; capped models are far smaller.
 pub const MAX_DECOMPRESSED_BYTES: usize = 64 * 1024 * 1024;
 const ZSTD_LEVEL: i32 = 3;
@@ -57,6 +59,10 @@ struct StoredRef<'a> {
 
 #[derive(Deserialize)]
 struct StoredOwned {
+    #[expect(
+        dead_code,
+        reason = "checked before decoding; kept so the layout matches StoredRef"
+    )]
     format_version: u32,
     feature_version: u32,
     trained_at: DateTime<Utc>,
@@ -97,8 +103,8 @@ impl ModelArtifact {
             intervals: &self.intervals,
             metrics: &self.metrics,
         };
-        let raw = bincode::serde::encode_to_vec(&stored, bincode::config::standard())
-            .map_err(|e| MlError::Serialization(e.to_string()))?;
+        let raw =
+            postcard::to_allocvec(&stored).map_err(|e| MlError::Serialization(e.to_string()))?;
         zstd::bulk::compress(&raw, ZSTD_LEVEL).map_err(|e| MlError::Serialization(e.to_string()))
     }
 
@@ -106,15 +112,15 @@ impl ModelArtifact {
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, MlError> {
         let raw = zstd::bulk::decompress(bytes, MAX_DECOMPRESSED_BYTES)
             .map_err(|e| MlError::Serialization(e.to_string()))?;
-        let (stored, _): (StoredOwned, usize) =
-            bincode::serde::decode_from_slice(&raw, bincode::config::standard())
-                .map_err(|e| MlError::Serialization(e.to_string()))?;
-        if stored.format_version != FORMAT_VERSION {
+        let (format_version, _) = postcard::take_from_bytes::<u32>(&raw)
+            .map_err(|e| MlError::Serialization(e.to_string()))?;
+        if format_version != FORMAT_VERSION {
             return Err(MlError::Serialization(format!(
-                "unsupported format version {}",
-                stored.format_version
+                "unsupported format version {format_version}"
             )));
         }
+        let stored: StoredOwned =
+            postcard::from_bytes(&raw).map_err(|e| MlError::Serialization(e.to_string()))?;
         if stored.feature_version != FEATURE_VERSION {
             return Err(MlError::IncompatibleVersion {
                 found: stored.feature_version,
@@ -150,7 +156,7 @@ impl ModelArtifact {
 
 #[cfg(test)]
 mod tests {
-    use anyhow::Result;
+    use anyhow::{Context, Result};
     use hardy_core::GymSchedule;
 
     use super::*;
@@ -205,6 +211,20 @@ mod tests {
             ModelArtifact::from_bytes(b"not a model"),
             Err(MlError::Serialization(_))
         ));
+        Ok(())
+    }
+
+    #[test]
+    fn test_artifact_from_the_previous_format_is_rejected_by_version() -> Result<()> {
+        // Models stored before the move to postcard start with format
+        // version 1 (one varint byte, the same in both encodings).
+        let mut raw = vec![1_u8];
+        raw.extend_from_slice(b"older layout follows");
+        let bytes = zstd::bulk::compress(&raw, ZSTD_LEVEL)?;
+        let error = ModelArtifact::from_bytes(&bytes)
+            .err()
+            .context("an old model must not load")?;
+        assert!(error.to_string().contains("format version 1"), "{error}");
         Ok(())
     }
 

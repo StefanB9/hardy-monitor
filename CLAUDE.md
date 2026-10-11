@@ -108,7 +108,7 @@ cargo build -p hardy-gui                      # Build GUI only
 
 **Always use `cargo nextest run` instead of `cargo test`.** Nextest is the project's test runner.
 
-**Headless GUI checks (Linux/CI-like environments):** the committed iced features target the desktop platform and do not build on a bare Linux box. For local verification only, temporarily add iced's `x11` + `tiny-skia` features, run the GUI under `xvfb-run` with `ICED_BACKEND=tiny-skia`, skip the tray (no tray host under Xvfb) and screenshot with ImageMagick `import`. Never commit those changes.
+**Headless GUI checks (Linux/CI-like environments):** the committed iced features target the desktop platform and do not build on a bare Linux box. For local verification only, temporarily add iced's `x11` + `tiny-skia` features, notify-rust's `z` and tray-icon's `ksni` (tray-icon has no default Linux backend and refuses to compile without one), run the GUI under `xvfb-run` with `ICED_BACKEND=tiny-skia`, skip the tray (no tray host under Xvfb) and screenshot with ImageMagick `import`. Never commit those changes.
 
 **`--all-targets` is mandatory** for `clippy` and `check`. Lints must pass in tests and examples — not just lib/bin targets. Test code follows the same quality standards as production code.
 
