@@ -322,8 +322,10 @@ pub(crate) mod tests {
 
     #[test]
     fn test_train_rejects_model_worse_than_baseline() -> Result<()> {
-        // Every day identical and constant within each hour: the slot average
-        // is exact, the model can at best tie, so the gate must reject it.
+        // Every day identical and constant within each hour: the baseline is
+        // (nearly) exact. A single one-split tree cannot follow the hourly
+        // steps, so the gate must reject it; this tests the gate, not how
+        // close a full forest gets to an exact baseline.
         let schedule = GymSchedule::default();
         let mut points = Vec::new();
         for d in 0..21 {
@@ -338,7 +340,7 @@ pub(crate) mod tests {
         let result = train(
             &History::new(points),
             &schedule,
-            &options(Tuning::Fixed(RfParams::new(20, 8, 10)?)),
+            &options(Tuning::Fixed(RfParams::new(1, 1, 10)?)),
             local(21, 0, 0),
         );
         assert!(

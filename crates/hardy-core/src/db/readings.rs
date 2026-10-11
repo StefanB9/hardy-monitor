@@ -45,7 +45,8 @@ impl Database {
         Ok(id)
     }
 
-    /// The newest stored row of any source.
+    /// The newest reading. Repair's zero anchors are not readings: a closing
+    /// anchor would otherwise pose as the newest value all day.
     #[tracing::instrument(skip_all, fields(db.operation = "get_latest"))]
     pub async fn get_latest_record(&self) -> Result<Option<OccupancyLog>> {
         let log = sqlx::query_as!(
@@ -57,15 +58,30 @@ impl Database {
                 percentage as "percentage!",
                 source as "source!: DataSource"
             FROM occupancy_logs
+            WHERE source <> $1
             ORDER BY timestamp DESC
             LIMIT 1
-            "#
+            "#,
+            DataSource::Boundary.as_str()
         )
         .fetch_optional(&self.pool)
         .await
         .context("Failed to fetch latest occupancy record")?;
 
         Ok(log)
+    }
+
+    /// Time of the oldest reading taken or derived from a reading; repair's
+    /// zero anchors do not count. `None` while there is none.
+    #[tracing::instrument(skip_all, fields(db.operation = "first_reading_time"))]
+    pub async fn first_reading_time(&self) -> Result<Option<DateTime<Utc>>> {
+        sqlx::query_scalar!(
+            "SELECT MIN(timestamp) FROM occupancy_logs WHERE source <> $1",
+            DataSource::Boundary.as_str()
+        )
+        .fetch_one(&self.pool)
+        .await
+        .context("Failed to fetch the oldest reading")
     }
 
     /// All rows with `start <= timestamp <= end`, oldest first.

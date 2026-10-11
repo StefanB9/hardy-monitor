@@ -1,6 +1,7 @@
 //! The chart's drawing layers: grid, readings, forecast, markers, hover.
 
 use chrono::{DateTime, TimeDelta, Utc};
+use hardy_ml::PredictionWithConfidence;
 use iced::{
     Point,
     alignment::{Horizontal, Vertical},
@@ -117,19 +118,20 @@ impl HistoryChart<'_> {
             return;
         };
 
+        let joined = last_reading.filter(|(t, _)| first.timestamp - *t <= FORECAST_JOIN);
+        let outline = band_outline(&points, joined);
         let band = Path::new(|b| {
-            b.move_to(plot.point(first.timestamp, first.confidence_high));
-            for p in &points {
-                b.line_to(plot.point(p.timestamp, p.confidence_high));
+            let mut vertices = outline.iter().map(|&(t, v)| plot.point(t, v));
+            if let Some(start) = vertices.next() {
+                b.move_to(start);
             }
-            for p in points.iter().rev() {
-                b.line_to(plot.point(p.timestamp, p.confidence_low));
+            for vertex in vertices {
+                b.line_to(vertex);
             }
             b.close();
         });
         frame.fill(&band, style::tint(style::FORECAST, 0.14));
 
-        let joined = last_reading.filter(|(t, _)| first.timestamp - *t <= FORECAST_JOIN);
         let line = Path::new(|b| {
             match joined {
                 Some((t, v)) => b.move_to(plot.point(t, v)),
@@ -250,5 +252,74 @@ impl HistoryChart<'_> {
             )),
             _ => None,
         }
+    }
+}
+
+/// The likely-range band as a closed outline: upper edge forwards, lower
+/// edge back. From a recent reading it starts there with zero width and
+/// fans out to the first forecast's range, as the line does.
+fn band_outline(
+    points: &[&PredictionWithConfidence],
+    start: Option<(DateTime<Utc>, f64)>,
+) -> Vec<(DateTime<Utc>, f64)> {
+    let mut outline = Vec::with_capacity(2 * points.len() + 1);
+    outline.extend(start);
+    outline.extend(points.iter().map(|p| (p.timestamp, p.confidence_high)));
+    outline.extend(points.iter().rev().map(|p| (p.timestamp, p.confidence_low)));
+    outline
+}
+
+#[cfg(test)]
+mod tests {
+    use anyhow::{Context, Result};
+    use chrono::TimeZone;
+    use hardy_ml::PredictionMethod;
+
+    use super::*;
+
+    fn at(hour: u32, minute: u32) -> Result<DateTime<Utc>> {
+        Utc.with_ymd_and_hms(2026, 10, 9, hour, minute, 0)
+            .single()
+            .context("valid time")
+    }
+
+    fn point(t: DateTime<Utc>, value: f64, low: f64, high: f64) -> PredictionWithConfidence {
+        PredictionWithConfidence::new(
+            t,
+            value,
+            low,
+            high,
+            0.5,
+            PredictionMethod::HistoricalAverage,
+        )
+    }
+
+    #[test]
+    fn test_band_outline_fans_out_from_the_last_reading() -> Result<()> {
+        let now = at(9, 18)?;
+        let points = [
+            point(at(10, 18)?, 24.0, 14.0, 33.0),
+            point(at(11, 18)?, 24.0, 15.0, 33.0),
+        ];
+        let outline = band_outline(&points.iter().collect::<Vec<_>>(), Some((now, 13.0)));
+        assert_eq!(
+            outline,
+            vec![
+                (now, 13.0),
+                (at(10, 18)?, 33.0),
+                (at(11, 18)?, 33.0),
+                (at(11, 18)?, 15.0),
+                (at(10, 18)?, 14.0),
+            ]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_band_outline_without_a_recent_reading_starts_at_the_forecast() -> Result<()> {
+        let points = [point(at(10, 18)?, 24.0, 14.0, 33.0)];
+        let outline = band_outline(&points.iter().collect::<Vec<_>>(), None);
+        assert_eq!(outline, vec![(at(10, 18)?, 33.0), (at(10, 18)?, 14.0)]);
+        Ok(())
     }
 }

@@ -501,3 +501,39 @@ async fn test_csv_export_with_mock_clock() -> Result<()> {
 
     Ok(())
 }
+
+#[tokio::test]
+async fn test_first_reading_time_ignores_repair_anchors() -> Result<()> {
+    let tdb = common::TestDatabase::new().await?;
+    let empty = tdb.db.first_reading_time().await?;
+    tdb.db
+        .insert_with_source(utc(2024, 6, 1, 4, 0)?, 0.0, DataSource::Boundary)
+        .await?;
+    tdb.db.insert_record(utc(2024, 6, 3, 8, 0)?, 20.0).await?;
+    tdb.db.insert_record(utc(2024, 6, 5, 8, 0)?, 30.0).await?;
+    let first = tdb.db.first_reading_time().await?;
+    tdb.cleanup().await;
+
+    assert_eq!(empty, None);
+    assert_eq!(first, Some(utc(2024, 6, 3, 8, 0)?));
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_latest_record_ignores_repair_anchors() -> Result<()> {
+    let tdb = common::TestDatabase::new().await?;
+    tdb.db
+        .insert_record(utc(2024, 6, 17, 18, 28)?, 22.0)
+        .await?;
+    // A closing anchor later the same day, as repair adds.
+    tdb.db
+        .insert_with_source(utc(2024, 6, 17, 19, 0)?, 0.0, DataSource::Boundary)
+        .await?;
+    let latest = tdb.db.get_latest_record().await?;
+    tdb.cleanup().await;
+
+    let latest = latest.context("a reading exists")?;
+    assert_eq!(latest.timestamp, utc(2024, 6, 17, 18, 28)?);
+    assert_eq!(latest.percentage, 22.0);
+    Ok(())
+}

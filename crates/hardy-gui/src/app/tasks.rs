@@ -93,7 +93,8 @@ impl HardyMonitorApp {
         let Some((start, end)) = self.ui.chart_range.window(
             now,
             &self.schedule,
-            (&mut self.ui.custom_start, &self.ui.custom_end),
+            (&self.ui.custom_start, &self.ui.custom_end),
+            self.ui.chart_offset,
         ) else {
             return Task::none();
         };
@@ -106,6 +107,14 @@ impl HardyMonitorApp {
                 Message::HistoryLoaded(id, r.map_err(db_err("get_history_range")))
             },
         )
+    }
+
+    /// The oldest reading, how far the chart may step back.
+    pub(super) fn load_first_reading(&mut self) -> Task<Message> {
+        let db = self.db.clone();
+        self.load(async move { db.first_reading_time().await }, |r| {
+            Message::FirstReadingLoaded(r.map_err(db_err("first_reading_time")))
+        })
     }
 
     /// Hourly averages for the heatmap range.

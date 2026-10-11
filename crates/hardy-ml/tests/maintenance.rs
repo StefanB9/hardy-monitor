@@ -190,3 +190,36 @@ async fn test_current_model_after_training_and_restart() -> Result<()> {
     assert_eq!(after_restart, Some(id));
     Ok(())
 }
+
+#[tokio::test]
+async fn test_tick_retrains_when_the_stored_model_is_unreadable() -> Result<()> {
+    let tdb = common::TestDatabase::new().await?;
+    insert_learnable_history(&tdb.db, 28).await?;
+    // A model stored in a format this build cannot read, trained moments
+    // ago: the nightly retrain is not due.
+    let now = local(28, 0, 30)?;
+    tdb.db
+        .save_model(
+            &hardy_core::db::NewModel {
+                trained_at: now,
+                feature_version: FEATURE_VERSION,
+                algorithm: "Random Forest",
+                training_samples: 1,
+                holdout_mae: 1.0,
+                baseline_mae: 2.0,
+                tuned: false,
+                bytes: b"stored in an older format",
+            },
+            5,
+        )
+        .await?;
+
+    let mut maintenance = ModelMaintenance::new(config(), GymSchedule::default());
+    maintenance.load_previous(&tdb.db).await?;
+    maintenance.tick(&tdb.db, now).await?;
+    let started = maintenance.is_running();
+    tdb.cleanup().await;
+
+    assert!(started, "an unreadable model counts as missing");
+    Ok(())
+}

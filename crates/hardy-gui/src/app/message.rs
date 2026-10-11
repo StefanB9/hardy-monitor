@@ -12,7 +12,7 @@ use hardy_core::{
 use hardy_ml::ModelArtifact;
 
 use super::loads::RequestId;
-use crate::time_range::{AnalyticsRange, ChartRange};
+use crate::time_range::{AnalyticsRange, ChartRange, Step};
 
 /// The four top-level views.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -94,6 +94,10 @@ pub enum Message {
     CustomStartChanged(String),
     CustomEndChanged(String),
     ApplyCustomRange,
+    /// Arrow button or key: show the previous or next period.
+    ChartStep(Step),
+    /// Oldest reading, the limit for stepping back.
+    FirstReadingLoaded(Result<Option<DateTime<Utc>>, AppError>),
 
     ExportCsv,
     ExportCompleted(Result<String, AppError>),
@@ -135,7 +139,8 @@ impl Message {
             | Message::ForecastHistoryLoaded(_)
             | Message::ModelStatusLoaded(_)
             | Message::ModelLoaded(_)
-            | Message::AccuracyLoaded(_) => true,
+            | Message::AccuracyLoaded(_)
+            | Message::FirstReadingLoaded(_) => true,
             Message::Tick
             | Message::FetchTick
             | Message::FetchAlignmentComplete
@@ -151,6 +156,7 @@ impl Message {
             | Message::CustomStartChanged(_)
             | Message::CustomEndChanged(_)
             | Message::ApplyCustomRange
+            | Message::ChartStep(_)
             | Message::ExportCsv
             | Message::ClearExportStatus
             | Message::TrayCheck
@@ -193,6 +199,7 @@ mod tests {
             Message::ModelStatusLoaded(failed()),
             Message::ModelLoaded(failed()),
             Message::AccuracyLoaded(failed()),
+            Message::FirstReadingLoaded(failed()),
         ];
         assert!(results.iter().all(Message::finishes_load));
 
@@ -200,6 +207,7 @@ mod tests {
             Message::Tick,
             Message::RefreshNow,
             Message::ApplyCustomRange,
+            Message::ChartStep(Step::Back),
             Message::SchemaChecked(failed()),
             Message::NotificationSent,
         ];

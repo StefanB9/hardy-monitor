@@ -38,6 +38,10 @@ pub struct NowProps<'a> {
     pub alert_status: String,
     pub history: &'a [OccupancyLog],
     pub chart_range: ChartRange,
+    /// Periods back from the current one (preset ranges).
+    pub chart_offset: u32,
+    /// Oldest reading; no stepping back past it.
+    pub first_reading: Option<DateTime<Utc>>,
     pub custom_start: &'a str,
     pub custom_end: &'a str,
     pub chart_cache: &'a Cache,

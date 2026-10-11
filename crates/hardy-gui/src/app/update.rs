@@ -6,7 +6,10 @@ use muda::MenuEvent;
 use tray_icon::TrayIconEvent;
 
 use super::{HardyMonitorApp, Message, ViewMode, loads::ErrorSource};
-use crate::views::schema_notice::SchemaGate;
+use crate::{
+    time_range::{ChartRange, Step, can_step_back, shift_custom},
+    views::schema_notice::SchemaGate,
+};
 
 impl HardyMonitorApp {
     /// Handles one message and returns the follow-up tasks.
@@ -46,7 +49,14 @@ impl HardyMonitorApp {
                     self.load_insights_data(),
                     self.load_model_status(),
                     self.load_forecast_history(),
+                    self.load_first_reading(),
                 ])
+            }
+            Message::FirstReadingLoaded(result) => {
+                if let Some(first) = self.errors.record(ErrorSource::FirstReading, result) {
+                    self.data.first_reading = first;
+                }
+                Task::none()
             }
             Message::FetchCompleted(result) => self.handle_fetch_completed(result),
             Message::HistoryLoaded(id, result) => {
@@ -86,7 +96,8 @@ impl HardyMonitorApp {
             | Message::ChartRangeSelected(_)
             | Message::CustomStartChanged(_)
             | Message::CustomEndChanged(_)
-            | Message::ApplyCustomRange => self.update_navigation(message),
+            | Message::ApplyCustomRange
+            | Message::ChartStep(_) => self.update_navigation(message),
             Message::ExportCsv
             | Message::ExportCompleted(_)
             | Message::ClearExportStatus
@@ -162,6 +173,7 @@ impl HardyMonitorApp {
             }
             Message::ChartRangeSelected(range) => {
                 self.ui.chart_range = range;
+                self.ui.chart_offset = 0;
                 self.ui.chart_cache.clear();
                 self.load_chart_history()
             }
@@ -181,6 +193,7 @@ impl HardyMonitorApp {
                         self.clock.now_utc(),
                         &self.schedule,
                         (&self.ui.custom_start, &self.ui.custom_end),
+                        0,
                     )
                     .is_some();
                 if valid {
@@ -195,8 +208,50 @@ impl HardyMonitorApp {
                     Task::none()
                 }
             }
+            Message::ChartStep(step) => self.step_chart(step),
             _ => Task::none(),
         }
+    }
+
+    /// Shows the previous or next period, within the data and up to now.
+    /// Arrow keys arrive from every view; only the Now view's chart moves.
+    fn step_chart(&mut self, step: Step) -> Task<Message> {
+        if self.ui.current_view != ViewMode::Now {
+            return Task::none();
+        }
+        let now = self.clock.now_utc();
+        let range = self.ui.chart_range;
+        let Some((start, end)) = range.window(
+            now,
+            &self.schedule,
+            (&self.ui.custom_start, &self.ui.custom_end),
+            self.ui.chart_offset,
+        ) else {
+            return Task::none();
+        };
+        let allowed = match step {
+            Step::Back => can_step_back(start, self.data.first_reading),
+            Step::Forward => range.can_step_forward(self.ui.chart_offset, end, now),
+        };
+        if !allowed {
+            return Task::none();
+        }
+        if range == ChartRange::Custom {
+            let Some((first, last)) =
+                shift_custom(&self.ui.custom_start, &self.ui.custom_end, step)
+            else {
+                return Task::none();
+            };
+            self.ui.custom_start = first.format("%Y-%m-%d").to_string();
+            self.ui.custom_end = last.format("%Y-%m-%d").to_string();
+        } else {
+            self.ui.chart_offset = match step {
+                Step::Back => self.ui.chart_offset.saturating_add(1),
+                Step::Forward => self.ui.chart_offset.saturating_sub(1),
+            };
+        }
+        self.ui.chart_cache.clear();
+        self.load_chart_history()
     }
 
     /// Forecast history, model status and retraining.
