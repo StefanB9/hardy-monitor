@@ -94,9 +94,10 @@ impl HardyMonitorApp {
         self.errors.clear(ErrorSource::RepairDatesInput);
 
         let repairer = DataRepairer::new(self.db.clone(), self.schedule.clone());
+        let now = self.clock.now_utc();
         // Failures show in the repair card, not the header.
         self.load(
-            async move { repairer.repair_date_range(start, end, None).await },
+            async move { repairer.repair_date_range(start, end, now, None).await },
             |r| Message::RepairCompleted(r.map_err(|e| AppError::from_anyhow_db(e, "repair"))),
         )
     }

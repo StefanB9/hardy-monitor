@@ -71,7 +71,7 @@ pub async fn run_nightly_repair(
     let run = repair_days(
         first,
         last,
-        |day| repairer.repair_date_range(day, day, None),
+        |day| repairer.repair_date_range(day, day, now, None),
         |day| db.record_repair_success(day, now),
     );
     let outcome = match tokio::time::timeout(budget, run).await {

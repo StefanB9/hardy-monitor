@@ -14,7 +14,7 @@ mod steps;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use chrono::{Duration, NaiveDate};
+use chrono::{DateTime, Duration, NaiveDate, Utc};
 use futures::{StreamExt, stream};
 pub use nightly::{AFTER_CLOSE, MAX_CATCH_UP_DAYS, RETRY_AFTER, repair_due, run_nightly_repair};
 use tokio::sync::mpsc;
@@ -66,16 +66,25 @@ impl DataRepairer {
 
     /// Repairs every gym-local day from `start` to `end` (inclusive), a
     /// few days concurrently; progress goes to `progress_tx` when given.
+    ///
+    /// Days whose closing time is after `now` are skipped: a closing anchor
+    /// would lie in the future and the day's data is still coming in.
     pub async fn repair_date_range(
         &self,
         start: NaiveDate,
         end: NaiveDate,
+        now: DateTime<Utc>,
         progress_tx: Option<mpsc::UnboundedSender<RepairProgress>>,
     ) -> Result<RepairSummary> {
+        let has_closed = |day: NaiveDate| {
+            self.schedule
+                .next_closing_after(self.schedule.opening_time_on(day))
+                <= now
+        };
         let dates: Vec<NaiveDate> = {
             let mut dates = Vec::new();
             let mut current = start;
-            while current <= end {
+            while current <= end && has_closed(current) {
                 dates.push(current);
                 current += Duration::days(1);
             }
