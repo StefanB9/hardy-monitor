@@ -68,6 +68,19 @@ impl Database {
         Ok(log)
     }
 
+    /// Time of the oldest reading taken or derived from a reading; repair's
+    /// zero anchors do not count. `None` while there is none.
+    #[tracing::instrument(skip_all, fields(db.operation = "first_reading_time"))]
+    pub async fn first_reading_time(&self) -> Result<Option<DateTime<Utc>>> {
+        sqlx::query_scalar!(
+            "SELECT MIN(timestamp) FROM occupancy_logs WHERE source <> $1",
+            DataSource::Boundary.as_str()
+        )
+        .fetch_one(&self.pool)
+        .await
+        .context("Failed to fetch the oldest reading")
+    }
+
     /// All rows with `start <= timestamp <= end`, oldest first.
     #[tracing::instrument(skip_all, fields(db.operation = "get_history_range", %start, %end))]
     pub async fn get_history_range(

@@ -19,7 +19,10 @@ use futures::{StreamExt, stream};
 pub use nightly::{AFTER_CLOSE, MAX_CATCH_UP_DAYS, RETRY_AFTER, repair_due, run_nightly_repair};
 use tokio::sync::mpsc;
 
-use crate::{db::Database, schedule::GymSchedule};
+use crate::{
+    db::{DataSource, Database},
+    schedule::GymSchedule,
+};
 
 const CONCURRENT_DAYS: usize = 4;
 
@@ -135,6 +138,25 @@ impl DataRepairer {
         result.records_deleted = deleted;
         if zeroed > 0 {
             result.records_smoothed += zeroed;
+        }
+
+        // A day the daemon never collected stays empty: zero anchors would
+        // look like a closed or deserted gym. Anchors an earlier repair left
+        // on such a day are removed.
+        let has_readings = records
+            .iter()
+            .any(|r| r.source != DataSource::Boundary && self.schedule.is_open(&r.timestamp));
+        if !has_readings {
+            let stale: Vec<i64> = records
+                .iter()
+                .filter(|r| r.source == DataSource::Boundary)
+                .map(|r| r.id)
+                .collect();
+            if !stale.is_empty() {
+                let removed = self.db.batch_delete(&stale).await?;
+                result.records_deleted += u32::try_from(removed).unwrap_or(u32::MAX);
+            }
+            return Ok(result);
         }
 
         if self

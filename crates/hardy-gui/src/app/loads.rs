@@ -75,6 +75,7 @@ pub(crate) enum ErrorSource {
     ModelStatus,
     Model,
     AlertSettings,
+    FirstReading,
     Export,
     /// An invalid custom chart range.
     ChartRangeInput,

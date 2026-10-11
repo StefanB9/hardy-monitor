@@ -175,3 +175,40 @@ async fn test_nightly_repair_out_of_budget_counts_as_failure() -> Result<()> {
     assert!(retried.is_none(), "the usual retry delay applies");
     Ok(())
 }
+
+#[tokio::test]
+async fn test_repair_leaves_a_day_without_readings_empty() -> Result<()> {
+    let tdb = common::TestDatabase::new().await?;
+    let repairer = DataRepairer::new(Arc::new(tdb.db.clone()), GymSchedule::default());
+    let day = NaiveDate::from_ymd_opt(2024, 6, 17).context("date")?;
+
+    let summary = repairer.repair_date_range(day, day, None).await?;
+    let rows = tdb.db.get_history_range(utc(0, 0)?, utc(23, 59)?).await?;
+    tdb.cleanup().await;
+
+    assert_eq!(summary.boundary_entries_added, 0);
+    assert!(rows.is_empty(), "no anchors on an empty day: {rows:?}");
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_repair_removes_anchors_left_on_a_day_without_readings() -> Result<()> {
+    let tdb = common::TestDatabase::new().await?;
+    // What an earlier repair left on a day the daemon never collected.
+    tdb.db
+        .insert_with_source(utc(4, 0)?, 0.0, DataSource::Boundary)
+        .await?;
+    tdb.db
+        .insert_with_source(utc(21, 0)?, 0.0, DataSource::Boundary)
+        .await?;
+    let repairer = DataRepairer::new(Arc::new(tdb.db.clone()), GymSchedule::default());
+    let day = NaiveDate::from_ymd_opt(2024, 6, 17).context("date")?;
+
+    let summary = repairer.repair_date_range(day, day, None).await?;
+    let rows = tdb.db.get_history_range(utc(0, 0)?, utc(23, 59)?).await?;
+    tdb.cleanup().await;
+
+    assert_eq!(summary.records_deleted, 2);
+    assert!(rows.is_empty(), "stale anchors removed: {rows:?}");
+    Ok(())
+}
