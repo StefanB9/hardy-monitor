@@ -100,10 +100,15 @@ impl ModelMaintenance {
             return Ok(());
         }
 
-        let latest = db.latest_model_info(FEATURE_VERSION).await?;
+        // The model this process holds, not merely the newest row: one stored
+        // in a format this build cannot read counts as missing, so its
+        // replacement is trained now rather than after the next closing.
+        let usable = self
+            .current
+            .as_ref()
+            .map(|(_, artifact)| artifact.trained_at);
         let state = db.get_ml_state().await?;
-        let Some(reason) = retrain_due(now, &self.schedule, latest.map(|m| m.trained_at), &state)
-        else {
+        let Some(reason) = retrain_due(now, &self.schedule, usable, &state) else {
             return Ok(());
         };
         tracing::info!(?reason, "starting model training");

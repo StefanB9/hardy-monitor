@@ -59,6 +59,10 @@ struct StoredRef<'a> {
 
 #[derive(Deserialize)]
 struct StoredOwned {
+    #[expect(
+        dead_code,
+        reason = "checked before decoding; kept so the layout matches StoredRef"
+    )]
     format_version: u32,
     feature_version: u32,
     trained_at: DateTime<Utc>,
