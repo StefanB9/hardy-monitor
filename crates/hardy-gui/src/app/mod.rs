@@ -37,6 +37,7 @@ use crate::{
     forecasting::Forecasting,
     freshness::{Freshness, freshness},
     style::{self, OccupancyLevel},
+    time_range::Step,
     tray::{Tray, TrayStatus, quiet_label, rgba8, tooltip_text},
     views::{opening::opening_status, schema_notice::SchemaGate},
     widgets::heatmap::WeekGrid,
@@ -68,6 +69,8 @@ struct MonitorState {
     forecasting: Forecasting,
     /// Live accuracy of the daemon's logged forecasts.
     accuracy: Option<AccuracySummary>,
+    /// Oldest reading; the chart does not step back past it.
+    first_reading: Option<DateTime<Utc>>,
 }
 
 struct UiState {
@@ -82,6 +85,8 @@ struct UiState {
     current_view: ViewMode,
     analytics_range: AnalyticsRange,
     chart_range: ChartRange,
+    /// Periods back from the current one (preset ranges).
+    chart_offset: u32,
     custom_start: String,
     custom_end: String,
     is_window_visible: bool,
@@ -148,6 +153,7 @@ impl HardyMonitorApp {
                 trend: None,
                 forecasting: Forecasting::new(horizon_hours, grace),
                 accuracy: None,
+                first_reading: None,
             },
             ui: UiState {
                 pending: PendingLoads::default(),
@@ -161,6 +167,7 @@ impl HardyMonitorApp {
                 current_view: ViewMode::default(),
                 analytics_range: AnalyticsRange::default(),
                 chart_range: ChartRange::default(),
+                chart_offset: 0,
                 custom_start: week_ago_str.clone(),
                 custom_end: today_str.clone(),
                 is_window_visible: true,
@@ -202,11 +209,23 @@ impl HardyMonitorApp {
             subs.push(iced::time::every(data_interval).map(|_| Message::FetchTick));
         }
         subs.push(iced::time::every(tray_interval).map(|_| Message::TrayCheck));
-        subs.push(iced::event::listen_with(|event, _status, _window_id| {
-            if let iced::Event::Window(window::Event::CloseRequested) = event {
-                Some(Message::WindowCloseRequested)
-            } else {
-                None
+        subs.push(iced::event::listen_with(|event, status, _window_id| {
+            use iced::keyboard::{self, key::Named};
+            match event {
+                iced::Event::Window(window::Event::CloseRequested) => {
+                    Some(Message::WindowCloseRequested)
+                }
+                // Keys a focused text field consumed (date inputs) are not
+                // steps.
+                iced::Event::Keyboard(keyboard::Event::KeyPressed {
+                    key: keyboard::Key::Named(named),
+                    ..
+                }) if status == iced::event::Status::Ignored => match named {
+                    Named::ArrowLeft => Some(Message::ChartStep(Step::Back)),
+                    Named::ArrowRight => Some(Message::ChartStep(Step::Forward)),
+                    _ => None,
+                },
+                _ => None,
             }
         }));
         Subscription::batch(subs)
@@ -228,6 +247,7 @@ impl HardyMonitorApp {
             self.load_analytics(),
             self.load_insights_data(),
             self.load_accuracy(),
+            self.load_first_reading(),
             self.fetch_latest(),
         ])
     }
