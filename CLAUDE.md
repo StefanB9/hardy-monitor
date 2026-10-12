@@ -49,7 +49,8 @@ hardy-monitor/                         (workspace root)
 │   │   ├── src/                       grid (15-minute slots), history, profile, features, samples, model,
 │   │   │                              baseline; suite/ (model interface + registry, baselines, profiles/,
 │   │   │                              statistical/ (smoothing, Theta, AR, Holt–Winters, Kalman; Nelder–Mead,
-│   │   │                              faer OLS), legacy wrappers, linalg, safety); benchmark/ (rolling-origin
+│   │   │                              faer OLS), packaged/ (anofox-forecast + stlrs models refitted per
+│   │   │                              origin, Fourier + ARIMA), legacy wrappers, linalg, safety); benchmark/ (rolling-origin
 │   │   │                              backtest, metrics + conformal intervals, ensembles, selection); nightly,
 │   │   │                              live, service, retrain, confidence
 │   │   └── tests/service.rs           Nightly run and live publishing against a real database
