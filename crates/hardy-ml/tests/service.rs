@@ -201,3 +201,55 @@ async fn test_models_added_by_an_update_run_at_once() -> Result<()> {
     assert!(running, "new models are fitted without waiting");
     Ok(())
 }
+
+#[tokio::test]
+async fn test_ensembles_are_stored_reloaded_and_published() -> Result<()> {
+    let tdb = common::TestDatabase::new().await?;
+    insert_days(&tdb.db, 8).await?;
+    let models = [
+        ModelId::Naive,
+        ModelId::DailySeasonalNaive,
+        ModelId::BestMemberEnsemble,
+        ModelId::StackedEnsemble,
+    ];
+    let make =
+        || ForecastService::with_models(&MlConfig::default(), GymSchedule::default(), &models);
+    let now = local(8, 0, 30)?;
+    tokio::time::timeout(Duration::from_secs(120), make().run_now(&tdb.db, now))
+        .await
+        .context("run finishes")??;
+    let records = tdb.db.model_records().await?;
+
+    // A restarted daemon reads the stored ensembles back: no new run is
+    // needed, and they are published from the members' forecasts.
+    let mut restarted = make();
+    restarted.load(&tdb.db).await?;
+    restarted
+        .tick(&tdb.db, now + TimeDelta::minutes(30))
+        .await?;
+    let running = restarted.is_running();
+    let later = local(8, 10, 0)?;
+    restarted.publish(&tdb.db, later).await?;
+    let keys = ["ensemble_best_member", "daily_seasonal_naive"].map(String::from);
+    let live = tdb.db.live_forecasts(&keys).await?;
+    tdb.cleanup().await;
+
+    let status = |key: &str| records.iter().find(|r| r.model == key).map(|r| r.status);
+    assert_eq!(status("ensemble_best_member"), Some(FitStatus::Fitted));
+    assert_eq!(status("ensemble_stacked"), Some(FitStatus::Fitted));
+    assert!(!running, "stored ensembles count as known");
+    let values = |key: &str| -> Vec<(DateTime<Utc>, f64)> {
+        live.iter()
+            .filter(|f| f.model == key)
+            .map(|f| (f.target, f.value))
+            .collect()
+    };
+    // Every day repeats exactly, so the daily seasonal naive is the best
+    // member in every bucket.
+    assert_ne!(values("ensemble_best_member"), Vec::new());
+    assert_eq!(
+        values("ensemble_best_member"),
+        values("daily_seasonal_naive")
+    );
+    Ok(())
+}

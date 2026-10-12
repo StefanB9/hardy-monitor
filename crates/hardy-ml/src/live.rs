@@ -2,7 +2,10 @@
 //! its conformal interval, and the default forecast stitched together from
 //! the model selected for each horizon bucket.
 
-use std::{collections::HashMap, hash::BuildHasher};
+use std::{
+    collections::{BTreeMap, HashMap},
+    hash::BuildHasher,
+};
 
 use chrono::{DateTime, TimeDelta, Utc};
 use hardy_core::{
@@ -11,7 +14,7 @@ use hardy_core::{
 };
 
 use crate::{
-    benchmark::{Bucket, Interval, Selection},
+    benchmark::{Bucket, Ensemble, Interval, Selection},
     error::MlError,
     grid::{Grid, HORIZON_STEPS, SLOT, floor_to_slot, is_open_slot},
     history::History,
@@ -74,9 +77,10 @@ pub struct LiveForecasts {
 
 /// Forecasts of every model in `fitted` from the newest slot boundary at or
 /// before `now`.
-pub fn forecast_all<S1: BuildHasher, S2: BuildHasher>(
+pub fn forecast_all<S1: BuildHasher, S2: BuildHasher, S3: BuildHasher>(
     fitted: &HashMap<ModelId, AnyModel, S1>,
-    intervals: &HashMap<ModelId, HorizonIntervals, S2>,
+    ensembles: &HashMap<ModelId, Ensemble<ModelId>, S2>,
+    intervals: &HashMap<ModelId, HorizonIntervals, S3>,
     selection: &Selection<ModelId>,
     history: &History,
     schedule: &GymSchedule,
@@ -114,6 +118,8 @@ pub fn forecast_all<S1: BuildHasher, S2: BuildHasher>(
             Err(e) => failures.push((*id, e)),
         }
     }
+    let combined = combine_ensembles(&models, ensembles, intervals);
+    models.extend(combined);
     let selected = stitch(&models, selection);
     LiveForecasts {
         origin,
@@ -121,6 +127,46 @@ pub fn forecast_all<S1: BuildHasher, S2: BuildHasher>(
         selected,
         failures,
     }
+}
+
+/// Each ensemble's forecast, combined step by step from the `members'`
+/// forecasts; ensembles without any member forecast are left out.
+fn combine_ensembles<S1: BuildHasher, S2: BuildHasher>(
+    members: &[(ModelId, Vec<Point>)],
+    ensembles: &HashMap<ModelId, Ensemble<ModelId>, S1>,
+    intervals: &HashMap<ModelId, HorizonIntervals, S2>,
+) -> Vec<(ModelId, Vec<Point>)> {
+    let mut steps: BTreeMap<usize, (DateTime<Utc>, HashMap<ModelId, f64>)> = BTreeMap::new();
+    for (id, points) in members {
+        for point in points {
+            steps
+                .entry(point.step)
+                .or_insert_with(|| (point.target, HashMap::new()))
+                .1
+                .insert(*id, point.value);
+        }
+    }
+    ModelId::ENSEMBLES
+        .iter()
+        .filter_map(|id| Some((*id, ensembles.get(id)?)))
+        .filter_map(|(id, ensemble)| {
+            let model_intervals = intervals.get(&id).copied().unwrap_or_default();
+            let points: Vec<Point> = steps
+                .iter()
+                .filter_map(|(step, (target, values))| {
+                    let value =
+                        ensemble.combine(Bucket::of_step(*step), |m| values.get(&m).copied())?;
+                    Some(Point {
+                        step: *step,
+                        target: *target,
+                        value,
+                        bounds: model_intervals.for_step(*step).map(|i| i.around(value)),
+                    })
+                })
+                .collect();
+            (!points.is_empty()).then_some((id, points))
+        })
+        .collect()
 }
 
 /// For each open step, the value of the model selected for its bucket (or
@@ -220,7 +266,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        benchmark::Settings,
+        benchmark::{Combination, Settings, ensemble::Rows},
         nightly::{FitResult, fit_all},
         test_support::{local, minutely},
     };
@@ -266,6 +312,7 @@ mod tests {
             HashMap::from([(ModelId::Naive, HorizonIntervals::new(|_| Some(interval)))]);
         let live = forecast_all(
             &models,
+            &HashMap::new(),
             &intervals,
             &selection,
             &history,
@@ -310,6 +357,7 @@ mod tests {
         let live = forecast_all(
             &models,
             &HashMap::new(),
+            &HashMap::new(),
             &vec![(Bucket::NextHour, ModelId::Naive)],
             &history,
             &GymSchedule::default(),
@@ -332,6 +380,62 @@ mod tests {
         assert_eq!(log[0].model.as_deref(), Some("naive"));
         assert_relative_eq!(log[0].predicted, 40.0);
         assert_relative_eq!(log[0].low, 40.0);
+    }
+
+    #[test]
+    fn test_ensembles_combine_the_members_live_forecasts() -> Result<()> {
+        let history = minutely(3, |t| if t < local(2, 9, 0) { 30.0 } else { 50.0 });
+        let members = [ModelId::Naive, ModelId::DailySeasonalNaive];
+        let models = fitted(&history, local(2, 0, 0), &members);
+        // Both members equally good: the mean weighs them equally.
+        let rows: [Rows; 3] = std::array::from_fn(|_| {
+            let mut rows = Rows::new(2);
+            for i in 0..20 {
+                rows.push(
+                    40.0,
+                    &[Some(41.0 + f64::from(i % 2)), Some(39.0 - f64::from(i % 2))],
+                );
+            }
+            rows
+        });
+        let mean = Ensemble::fit(Combination::Mean, &members, &rows).context("fitted")?;
+        let ensembles = HashMap::from([(ModelId::MeanEnsemble, mean)]);
+        let interval = Interval {
+            low: -1.0,
+            high: 1.0,
+        };
+        let intervals = HashMap::from([(
+            ModelId::MeanEnsemble,
+            HorizonIntervals::new(|_| Some(interval)),
+        )]);
+        let selection = vec![(Bucket::OneToThreeHours, ModelId::MeanEnsemble)];
+        let live = forecast_all(
+            &models,
+            &ensembles,
+            &intervals,
+            &selection,
+            &history,
+            &GymSchedule::default(),
+            local(2, 10, 0),
+        );
+
+        let (_, points) = live
+            .models
+            .iter()
+            .find(|(id, _)| *id == ModelId::MeanEnsemble)
+            .context("ensemble published")?;
+        let fifth = points.iter().find(|p| p.step == 5).context("step 5")?;
+        // Naive says 50, the daily seasonal naive 30.
+        assert_relative_eq!(fifth.value, 40.0);
+        assert_eq!(fifth.bounds, Some((39.0, 41.0)));
+        let (selected, source) = live
+            .selected
+            .iter()
+            .find(|(p, _)| p.step == 5)
+            .context("selected step 5")?;
+        assert_eq!(*source, ModelId::MeanEnsemble);
+        assert_relative_eq!(selected.value, 40.0);
+        Ok(())
     }
 
     #[test]

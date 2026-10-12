@@ -181,6 +181,31 @@ mod tests {
     }
 
     #[test]
+    fn test_nightly_run_fits_ensembles_but_not_as_models() {
+        let history = minutely(4, |_| 30.0);
+        let models = [
+            ModelId::Naive,
+            ModelId::MovingAverage,
+            ModelId::StackedEnsemble,
+        ];
+        let outcome = run(
+            &models,
+            &history,
+            &GymSchedule::default(),
+            local(4, 0, 0),
+            &Settings::default(),
+            &Vec::new(),
+        );
+        assert_eq!(outcome.fits.len(), 2);
+        assert_eq!(outcome.benchmark.reports.len(), 3);
+        assert_eq!(outcome.benchmark.reports[2].model, ModelId::StackedEnsemble);
+        assert!(matches!(
+            outcome.benchmark.ensembles.as_slice(),
+            [(ModelId::StackedEnsemble, Some(_))]
+        ));
+    }
+
+    #[test]
     fn test_models_without_enough_history_wait() {
         let history = minutely(2, |_| 30.0);
         let fits = fit_all(

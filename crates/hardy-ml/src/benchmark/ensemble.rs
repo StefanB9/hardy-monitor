@@ -118,7 +118,9 @@ impl<L: Copy> Ensemble<L> {
     pub fn combination(&self) -> Combination {
         self.combination
     }
+}
 
+impl<L: Clone> Ensemble<L> {
     /// The same ensemble with every member relabelled by `f`; `None` if `f`
     /// fails for any member.
     pub fn try_map<M>(&self, f: impl Fn(L) -> Option<M>) -> Option<Ensemble<M>> {
@@ -126,7 +128,7 @@ impl<L: Copy> Ensemble<L> {
         for (bucket, members) in buckets.iter_mut().zip(&self.buckets) {
             *bucket = members
                 .iter()
-                .map(|&(l, w)| f(l).map(|m| (m, w)))
+                .map(|(l, w)| f(l.clone()).map(|m| (m, *w)))
                 .collect::<Option<_>>()?;
         }
         Some(Ensemble {

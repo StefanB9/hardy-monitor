@@ -17,7 +17,7 @@ use hardy_core::GymSchedule;
 use serde::{Serialize, de::DeserializeOwned};
 
 use crate::{
-    benchmark::Combination,
+    benchmark::{Combination, Ensemble},
     error::MlError,
     grid::{Grid, GridView, HORIZON_STEPS, is_open_slot},
     history::History,
@@ -318,6 +318,25 @@ pub fn forecast(model: &dyn Forecaster, data: &Observed<'_>) -> Result<Vec<f64>,
         .collect()
 }
 
+impl Ensemble<ModelId> {
+    /// The ensemble as compressed bytes (members stored by key).
+    pub fn to_bytes(&self) -> Result<Vec<u8>, MlError> {
+        let keyed = self
+            .try_map(|id| Some(id.key()))
+            .ok_or_else(|| MlError::Serialization("unkeyed member".to_string()))?;
+        encode(&keyed)
+    }
+
+    /// An ensemble from [`Ensemble::to_bytes`]; fails if a member is no
+    /// longer known.
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, MlError> {
+        let keyed: Ensemble<String> = decode(bytes)?;
+        keyed
+            .try_map(|key| ModelId::from_key(&key))
+            .ok_or_else(|| MlError::Serialization("unknown ensemble member".to_string()))
+    }
+}
+
 pub(crate) fn encode<T: Serialize>(model: &T) -> Result<Vec<u8>, MlError> {
     let raw = postcard::to_allocvec(model).map_err(|e| MlError::Serialization(e.to_string()))?;
     zstd::bulk::compress(&raw, ZSTD_LEVEL).map_err(|e| MlError::Serialization(e.to_string()))
@@ -428,6 +447,28 @@ mod tests {
         let mut naive = AnyModel::new(ModelId::Naive).context("forecaster")?;
         assert!(can_fit(&naive, &data));
         fit(&mut naive, &data)?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_ensembles_round_trip_through_bytes() -> Result<()> {
+        use crate::benchmark::ensemble::Rows;
+
+        let members = [ModelId::Naive, ModelId::DailyPca];
+        let rows: [Rows; 3] = std::array::from_fn(|_| {
+            let mut rows = Rows::new(2);
+            for i in 0..10 {
+                rows.push(
+                    f64::from(i),
+                    &[Some(f64::from(i) + 1.0), Some(f64::from(i) - 3.0)],
+                );
+            }
+            rows
+        });
+        let ensemble = Ensemble::fit(Combination::InverseMae, &members, &rows).context("fitted")?;
+        let restored = Ensemble::from_bytes(&ensemble.to_bytes()?)?;
+        assert_eq!(restored, ensemble);
+        assert!(Ensemble::from_bytes(b"junk").is_err());
         Ok(())
     }
 

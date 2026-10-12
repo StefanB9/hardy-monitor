@@ -7,12 +7,14 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, TimeDelta, Utc};
 use hardy_core::{
     GymSchedule, MlConfig,
+    analytics::midnight_local_as_utc,
     db::{BenchmarkModel, BenchmarkRun, BenchmarkScore, Database, FitStatus, ModelUpdate},
 };
 use tokio::task::JoinHandle;
 
 use crate::{
-    benchmark::{Bucket, Interval, Selection, Settings},
+    benchmark::{Bucket, Ensemble, Interval, Selection, Settings},
+    error::MlError,
     history::History,
     live::{HorizonIntervals, LiveForecasts, forecast_all},
     nightly::{self, FitResult, NightlyOutcome},
@@ -39,6 +41,7 @@ pub struct ForecastService {
     models: Vec<ModelId>,
     settings: Settings,
     fitted: HashMap<ModelId, AnyModel>,
+    ensembles: HashMap<ModelId, Ensemble<ModelId>>,
     intervals: HashMap<ModelId, HorizonIntervals>,
     selection: Selection<ModelId>,
     /// When the last run finished.
@@ -71,6 +74,7 @@ impl ForecastService {
             schedule,
             models: models.to_vec(),
             fitted: HashMap::new(),
+            ensembles: HashMap::new(),
             intervals: HashMap::new(),
             selection: Vec::new(),
             last_run_at: None,
@@ -93,10 +97,17 @@ impl ForecastService {
             let Some(id) = ModelId::from_key(&key) else {
                 continue;
             };
-            match AnyModel::from_bytes(id, &bytes) {
-                Ok(model) => {
+            let loaded = if id.combination().is_some() {
+                Ensemble::from_bytes(&bytes).map(|e| {
+                    self.ensembles.insert(id, e);
+                })
+            } else {
+                AnyModel::from_bytes(id, &bytes).map(|model| {
                     self.fitted.insert(id, model);
-                }
+                })
+            };
+            match loaded {
+                Ok(()) => {}
                 Err(e) => {
                     // Refitted by the next run.
                     tracing::warn!(model = key, error = %e, "stored model unreadable");
@@ -227,57 +238,17 @@ impl ForecastService {
             }
         };
 
-        let artifacts: Vec<(ModelId, Option<Vec<u8>>)> = outcome
-            .fits
+        let states = stored_states(&outcome, &self.schedule);
+        let updates: Vec<ModelUpdate<'_>> = states
             .iter()
-            .map(|(id, fit)| match fit {
-                FitResult::Fitted { model, .. } => (*id, model.to_bytes().ok()),
-                _ => (*id, None),
-            })
-            .collect();
-        let messages: Vec<Option<String>> = outcome
-            .fits
-            .iter()
-            .map(|(_, fit)| match fit {
-                FitResult::Fitted { .. } => None,
-                FitResult::Waiting {
-                    have_hours,
-                    need_hours,
-                } => Some(waiting_message(*have_hours, *need_hours)),
-                FitResult::Failed(e) => Some(e.to_string()),
-            })
-            .collect();
-        let updates: Vec<ModelUpdate<'_>> = outcome
-            .fits
-            .iter()
-            .zip(&artifacts)
-            .zip(&messages)
-            .map(|(((id, fit), (_, bytes)), message)| {
-                let (status, fitted_at, from, until) = match fit {
-                    FitResult::Fitted {
-                        data_from,
-                        data_until,
-                        ..
-                    } if bytes.is_some() => (
-                        FitStatus::Fitted,
-                        Some(now),
-                        Some(*data_from),
-                        Some(*data_until),
-                    ),
-                    FitResult::Waiting { .. } => (FitStatus::Waiting, None, None, None),
-                    _ => (FitStatus::Failed, None, None, None),
-                };
-                ModelUpdate {
-                    model: id.key(),
-                    status,
-                    message: message
-                        .as_deref()
-                        .or_else(|| (status == FitStatus::Failed).then_some("could not be stored")),
-                    fitted_at,
-                    data_from: from,
-                    data_until: until,
-                    artifact: bytes.as_deref().map(|b| (ARTIFACT_VERSION, b)),
-                }
+            .map(|state| ModelUpdate {
+                model: state.id.key(),
+                status: state.status,
+                message: state.message.as_deref(),
+                fitted_at: (state.status == FitStatus::Fitted).then_some(now),
+                data_from: state.span.map(|(from, _)| from),
+                data_until: state.span.map(|(_, until)| until),
+                artifact: state.bytes.as_deref().map(|b| (ARTIFACT_VERSION, b)),
             })
             .collect();
         db.save_model_states(&updates, now).await?;
@@ -293,7 +264,18 @@ impl ForecastService {
 
         self.intervals = intervals_from_scores(&run.scores);
         self.selection = outcome.selection;
-        self.known = outcome.fits.iter().map(|(id, _)| *id).collect();
+        self.known = outcome
+            .fits
+            .iter()
+            .map(|(id, _)| *id)
+            .chain(outcome.benchmark.ensembles.iter().map(|(id, _)| *id))
+            .collect();
+        self.ensembles = outcome
+            .benchmark
+            .ensembles
+            .into_iter()
+            .filter_map(|(id, ensemble)| Some((id, ensemble?)))
+            .collect();
         self.fitted = outcome
             .fits
             .into_iter()
@@ -305,6 +287,7 @@ impl ForecastService {
         self.last_run_at = Some(now);
         tracing::info!(
             fitted = self.fitted.len(),
+            ensembles = self.ensembles.len(),
             selection = ?self.selection,
             "nightly forecast run stored"
         );
@@ -318,6 +301,7 @@ impl ForecastService {
         self.refresh_history(db, now).await?;
         let live = forecast_all(
             &self.fitted,
+            &self.ensembles,
             &self.intervals,
             &self.selection,
             &self.history,
@@ -359,6 +343,104 @@ impl ForecastService {
 }
 
 /// Why a model waits, in whole days: "needs 7 days of history, has 3".
+/// A model's state after a run, as stored.
+struct StoredState {
+    id: ModelId,
+    status: FitStatus,
+    message: Option<String>,
+    /// The data the fit used (fitted models only).
+    span: Option<(DateTime<Utc>, DateTime<Utc>)>,
+    bytes: Option<Vec<u8>>,
+}
+
+/// The state of every forecaster and ensemble after `outcome`; a fit that
+/// cannot be serialised counts as failed.
+fn stored_states(outcome: &NightlyOutcome, schedule: &GymSchedule) -> Vec<StoredState> {
+    let forecasters = outcome.fits.iter().map(|(id, fit)| match fit {
+        FitResult::Fitted {
+            model,
+            data_from,
+            data_until,
+        } => fitted_state(*id, model.to_bytes(), (*data_from, *data_until)),
+        FitResult::Waiting {
+            have_hours,
+            need_hours,
+        } => StoredState {
+            id: *id,
+            status: FitStatus::Waiting,
+            message: Some(waiting_message(*have_hours, *need_hours)),
+            span: None,
+            bytes: None,
+        },
+        FitResult::Failed(e) => StoredState {
+            id: *id,
+            status: FitStatus::Failed,
+            message: Some(e.to_string()),
+            span: None,
+            bytes: None,
+        },
+    });
+    let span = backtest_span(outcome, schedule);
+    let ensembles =
+        outcome
+            .benchmark
+            .ensembles
+            .iter()
+            .map(|(id, ensemble)| match (ensemble, span) {
+                (Some(ensemble), Some(span)) => fitted_state(*id, ensemble.to_bytes(), span),
+                _ => StoredState {
+                    id: *id,
+                    status: FitStatus::Waiting,
+                    message: Some(ENSEMBLE_WAITING.to_string()),
+                    span: None,
+                    bytes: None,
+                },
+            });
+    forecasters.chain(ensembles).collect()
+}
+
+/// A fitted model's state, or a failed one if it could not be serialised.
+fn fitted_state(
+    id: ModelId,
+    bytes: Result<Vec<u8>, MlError>,
+    span: (DateTime<Utc>, DateTime<Utc>),
+) -> StoredState {
+    match bytes {
+        Ok(bytes) => StoredState {
+            id,
+            status: FitStatus::Fitted,
+            message: None,
+            span: Some(span),
+            bytes: Some(bytes),
+        },
+        Err(e) => StoredState {
+            id,
+            status: FitStatus::Failed,
+            message: Some(format!("could not be stored: {e}")),
+            span: None,
+            bytes: None,
+        },
+    }
+}
+
+/// Why an ensemble without members waits.
+const ENSEMBLE_WAITING: &str = "waits for a backtest day of its members";
+
+/// From the first backtest day's midnight to the midnight after the last:
+/// the forecasts an ensemble's weights were fitted on.
+fn backtest_span(
+    outcome: &NightlyOutcome,
+    schedule: &GymSchedule,
+) -> Option<(DateTime<Utc>, DateTime<Utc>)> {
+    let tz = schedule.timezone();
+    let first = outcome.benchmark.days.first()?;
+    let last = outcome.benchmark.days.last()?.succ_opt()?;
+    Some((
+        midnight_local_as_utc(*first, tz),
+        midnight_local_as_utc(last, tz),
+    ))
+}
+
 fn waiting_message(have_hours: i64, need_hours: i64) -> String {
     let need = (need_hours + 23) / 24;
     let unit = if need == 1 { "day" } else { "days" };
