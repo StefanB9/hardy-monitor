@@ -6,7 +6,7 @@ use hardy_core::GymSchedule;
 use rayon::prelude::*;
 
 use crate::{
-    benchmark::{self, Benchmark, Selection, Settings},
+    benchmark::{self, Benchmark, Combination, Selection, Settings},
     error::MlError,
     grid::{Grid, SLOT},
     history::History,
@@ -36,8 +36,10 @@ pub struct NightlyOutcome {
     pub selection: Selection<ModelId>,
 }
 
-/// Runs the benchmark of `models`, fits each on the newest data and selects
-/// the default per horizon (keeping `previous` winners on ties).
+/// Runs the benchmark of `models` (forecasters and ensembles of them), fits
+/// each forecaster on the newest data and selects the default per horizon
+/// (keeping `previous` winners on ties). The ensembles' fits are in the
+/// benchmark.
 pub fn run(
     models: &[ModelId],
     history: &History,
@@ -46,7 +48,24 @@ pub fn run(
     settings: &Settings,
     previous: &Selection<ModelId>,
 ) -> NightlyOutcome {
-    let benchmark = benchmark::run(models, AnyModel::new, history, schedule, now, settings);
+    let forecasters: Vec<ModelId> = models
+        .iter()
+        .copied()
+        .filter(|id| id.combination().is_none())
+        .collect();
+    let ensembles: Vec<(ModelId, Combination)> = models
+        .iter()
+        .filter_map(|&id| id.combination().map(|c| (id, c)))
+        .collect();
+    let benchmark = benchmark::run(
+        &forecasters,
+        AnyModel::new,
+        &ensembles,
+        history,
+        schedule,
+        now,
+        settings,
+    );
     let selection = benchmark::select(&benchmark.reports, previous, settings);
     let fits = fit_all(models, history, schedule, now, settings);
     NightlyOutcome {
@@ -56,7 +75,8 @@ pub fn run(
     }
 }
 
-/// Fits every model on the readings in the training window before `now`.
+/// Fits every forecaster in `models` on the readings in the training window
+/// before `now` (ensembles are skipped).
 pub fn fit_all(
     models: &[ModelId],
     history: &History,
@@ -71,8 +91,8 @@ pub fn fit_all(
     let data = Observed::new(&grid, &window, schedule, now);
     models
         .par_iter()
-        .map(|&id| {
-            let mut model = AnyModel::new(id);
+        .filter_map(|&id| {
+            let mut model = AnyModel::new(id)?;
             let result = match guarded(|| suite::fit(&mut model, &data)) {
                 Ok(()) => match (window.first_time(), window.last_time()) {
                     (Some(data_from), Some(data_until)) => FitResult::Fitted {
@@ -94,7 +114,7 @@ pub fn fit_all(
                 },
                 Err(e) => FitResult::Failed(e),
             };
-            (id, result)
+            Some((id, result))
         })
         .collect()
 }

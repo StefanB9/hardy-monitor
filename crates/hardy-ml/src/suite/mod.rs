@@ -17,6 +17,7 @@ use hardy_core::GymSchedule;
 use serde::{Serialize, de::DeserializeOwned};
 
 use crate::{
+    benchmark::Combination,
     error::MlError,
     grid::{Grid, GridView, HORIZON_STEPS, is_open_slot},
     history::History,
@@ -104,6 +105,7 @@ pub enum Family {
     Baseline,
     Profile,
     MachineLearning,
+    Ensemble,
 }
 
 impl Family {
@@ -113,52 +115,84 @@ impl Family {
             Family::Baseline => "Baselines",
             Family::Profile => "Profile-based",
             Family::MachineLearning => "Regression and machine learning",
+            Family::Ensemble => "Ensembles",
         }
     }
 }
 
 macro_rules! registry {
-    ($( $variant:ident($ty:ty) = $key:literal, $name:literal, $family:ident; )*) => {
+    (
+        forecasters { $( $variant:ident($ty:ty) = $key:literal, $name:literal, $family:ident; )* }
+        ensembles { $( $evariant:ident = $ekey:literal, $ename:literal, $combination:ident; )* }
+    ) => {
         /// Identifies a model; stored by its [`ModelId::key`].
         #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-        pub enum ModelId { $( $variant, )* }
+        pub enum ModelId { $( $variant, )* $( $evariant, )* }
 
         impl ModelId {
             /// Every model, in display order.
-            pub const ALL: &'static [ModelId] = &[ $( ModelId::$variant, )* ];
+            pub const ALL: &'static [ModelId] =
+                &[ $( ModelId::$variant, )* $( ModelId::$evariant, )* ];
+            /// The models that forecast from data (every one but the
+            /// ensembles).
+            pub const FORECASTERS: &'static [ModelId] = &[ $( ModelId::$variant, )* ];
+            /// The ensembles, which combine the forecasters.
+            pub const ENSEMBLES: &'static [ModelId] = &[ $( ModelId::$evariant, )* ];
 
             /// Stable key used in the database.
             pub fn key(self) -> &'static str {
-                match self { $( ModelId::$variant => $key, )* }
+                match self {
+                    $( ModelId::$variant => $key, )*
+                    $( ModelId::$evariant => $ekey, )*
+                }
             }
 
             /// Display name.
             pub fn name(self) -> &'static str {
-                match self { $( ModelId::$variant => $name, )* }
+                match self {
+                    $( ModelId::$variant => $name, )*
+                    $( ModelId::$evariant => $ename, )*
+                }
             }
 
             /// Kind of model.
             pub fn family(self) -> Family {
-                match self { $( ModelId::$variant => Family::$family, )* }
+                match self {
+                    $( ModelId::$variant => Family::$family, )*
+                    $( ModelId::$evariant => Family::Ensemble, )*
+                }
+            }
+
+            /// How an ensemble combines the forecasters; `None` for a
+            /// forecaster.
+            pub fn combination(self) -> Option<Combination> {
+                match self {
+                    $( ModelId::$evariant => Some(Combination::$combination), )*
+                    _ => None,
+                }
             }
 
             /// The model with this key.
             pub fn from_key(key: &str) -> Option<Self> {
                 match key {
                     $( $key => Some(ModelId::$variant), )*
+                    $( $ekey => Some(ModelId::$evariant), )*
                     _ => None,
                 }
             }
         }
 
-        /// Any model of the suite.
+        /// Any forecaster of the suite.
         #[derive(Debug)]
         pub enum AnyModel { $( $variant($ty), )* }
 
         impl AnyModel {
-            /// An unfitted model.
-            pub fn new(id: ModelId) -> Self {
-                match id { $( ModelId::$variant => AnyModel::$variant(<$ty>::default()), )* }
+            /// An unfitted model; `None` for an ensemble.
+            pub fn new(id: ModelId) -> Option<Self> {
+                match id {
+                    $( ModelId::$variant => Some(AnyModel::$variant(<$ty>::default())), )*
+                    _ => None,
+                }
             }
 
             /// Which model this is.
@@ -181,36 +215,50 @@ macro_rules! registry {
 
             /// A fitted model from [`AnyModel::to_bytes`].
             pub fn from_bytes(id: ModelId, bytes: &[u8]) -> Result<Self, MlError> {
-                match id { $( ModelId::$variant => decode::<$ty>(bytes).map(AnyModel::$variant), )* }
+                match id {
+                    $( ModelId::$variant => decode::<$ty>(bytes).map(AnyModel::$variant), )*
+                    _ => Err(MlError::Serialization(format!("{} is an ensemble", id.key()))),
+                }
             }
         }
     };
 }
 
 registry! {
-    Naive(baselines::Naive) = "naive", "Persistence", Baseline;
-    MovingAverage(baselines::MovingAverage) = "moving_average", "Recent moving average", Baseline;
-    DampedTrend(baselines::DampedTrend) = "damped_trend", "Damped local trend", Baseline;
-    DailySeasonalNaive(baselines::DailySeasonalNaive) =
-        "daily_seasonal_naive", "Daily seasonal naive", Baseline;
-    WeeklySeasonalNaive(baselines::WeeklySeasonalNaive) =
-        "weekly_seasonal_naive", "Weekly seasonal naive", Baseline;
-    WeeklySeasonalMean(baselines::WeeklySeasonalMean) =
-        "weekly_seasonal_mean", "Weekly seasonal mean", Baseline;
-    WeeklySeasonalMedian(baselines::WeeklySeasonalMedian) =
-        "weekly_seasonal_median", "Weekly seasonal median", Baseline;
-    WeeklyRecencyMean(baselines::WeeklyRecencyMean) =
-        "weekly_recency_mean", "Recency-weighted weekly mean", Baseline;
-    ProfileCurrentOffset(profiles::ProfileCurrentOffset) =
-        "profile_current_offset", "Weekly profile + current offset", Profile;
-    ProfileDecayingOffset(legacy::ProfileDecayingOffset) =
-        "profile_decaying_offset", "Weekly profile + decaying offset", Profile;
-    ProfileResidualAr(profiles::ProfileResidualAr) =
-        "profile_residual_ar", "Weekly profile + residual autoregression", Profile;
-    SimilarDays(profiles::SimilarDays) = "similar_days", "Similar days", Profile;
-    DailyPca(profiles::DailyPca) = "daily_pca", "Daily-profile PCA + regression", Profile;
-    Ridge(legacy::Ridge) = "ridge", "Ridge regression", MachineLearning;
-    RandomForest(legacy::RandomForest) = "random_forest", "Random forest", MachineLearning;
+    forecasters {
+        Naive(baselines::Naive) = "naive", "Persistence", Baseline;
+        MovingAverage(baselines::MovingAverage) =
+            "moving_average", "Recent moving average", Baseline;
+        DampedTrend(baselines::DampedTrend) = "damped_trend", "Damped local trend", Baseline;
+        DailySeasonalNaive(baselines::DailySeasonalNaive) =
+            "daily_seasonal_naive", "Daily seasonal naive", Baseline;
+        WeeklySeasonalNaive(baselines::WeeklySeasonalNaive) =
+            "weekly_seasonal_naive", "Weekly seasonal naive", Baseline;
+        WeeklySeasonalMean(baselines::WeeklySeasonalMean) =
+            "weekly_seasonal_mean", "Weekly seasonal mean", Baseline;
+        WeeklySeasonalMedian(baselines::WeeklySeasonalMedian) =
+            "weekly_seasonal_median", "Weekly seasonal median", Baseline;
+        WeeklyRecencyMean(baselines::WeeklyRecencyMean) =
+            "weekly_recency_mean", "Recency-weighted weekly mean", Baseline;
+        ProfileCurrentOffset(profiles::ProfileCurrentOffset) =
+            "profile_current_offset", "Weekly profile + current offset", Profile;
+        ProfileDecayingOffset(legacy::ProfileDecayingOffset) =
+            "profile_decaying_offset", "Weekly profile + decaying offset", Profile;
+        ProfileResidualAr(profiles::ProfileResidualAr) =
+            "profile_residual_ar", "Weekly profile + residual autoregression", Profile;
+        SimilarDays(profiles::SimilarDays) = "similar_days", "Similar days", Profile;
+        DailyPca(profiles::DailyPca) = "daily_pca", "Daily-profile PCA + regression", Profile;
+        Ridge(legacy::Ridge) = "ridge", "Ridge regression", MachineLearning;
+        RandomForest(legacy::RandomForest) =
+            "random_forest", "Random forest", MachineLearning;
+    }
+    ensembles {
+        MeanEnsemble = "ensemble_mean", "Mean of the best five", Mean;
+        MedianEnsemble = "ensemble_median", "Median of the best five", Median;
+        WeightedEnsemble = "ensemble_inverse_mae", "Accuracy-weighted ensemble", InverseMae;
+        BestMemberEnsemble = "ensemble_best_member", "Best model per horizon", BestMember;
+        StackedEnsemble = "ensemble_stacked", "Stacked ensemble", Stacked;
+    }
 }
 
 impl Forecaster for AnyModel {
@@ -270,12 +318,12 @@ pub fn forecast(model: &dyn Forecaster, data: &Observed<'_>) -> Result<Vec<f64>,
         .collect()
 }
 
-fn encode<T: Serialize>(model: &T) -> Result<Vec<u8>, MlError> {
+pub(crate) fn encode<T: Serialize>(model: &T) -> Result<Vec<u8>, MlError> {
     let raw = postcard::to_allocvec(model).map_err(|e| MlError::Serialization(e.to_string()))?;
     zstd::bulk::compress(&raw, ZSTD_LEVEL).map_err(|e| MlError::Serialization(e.to_string()))
 }
 
-fn decode<T: DeserializeOwned>(bytes: &[u8]) -> Result<T, MlError> {
+pub(crate) fn decode<T: DeserializeOwned>(bytes: &[u8]) -> Result<T, MlError> {
     let raw = zstd::bulk::decompress(bytes, MAX_DECOMPRESSED_BYTES)
         .map_err(|e| MlError::Serialization(e.to_string()))?;
     postcard::from_bytes(&raw).map_err(|e| MlError::Serialization(e.to_string()))
@@ -313,9 +361,23 @@ mod tests {
         assert_eq!(keys.len(), ModelId::ALL.len());
         for id in ModelId::ALL {
             assert_eq!(ModelId::from_key(id.key()), Some(*id));
-            assert_eq!(AnyModel::new(*id).id(), *id);
             assert_ne!(id.name(), "");
         }
+        for id in ModelId::FORECASTERS {
+            assert_eq!(AnyModel::new(*id).map(|m| m.id()), Some(*id));
+            assert_eq!(id.combination(), None);
+            assert_ne!(id.family(), Family::Ensemble);
+        }
+        for id in ModelId::ENSEMBLES {
+            assert!(AnyModel::new(*id).is_none());
+            assert!(id.combination().is_some());
+            assert_eq!(id.family(), Family::Ensemble);
+            assert!(AnyModel::from_bytes(*id, &[]).is_err());
+        }
+        assert_eq!(
+            ModelId::FORECASTERS.len() + ModelId::ENSEMBLES.len(),
+            ModelId::ALL.len()
+        );
         assert_eq!(ModelId::from_key("no_such_model"), None);
     }
 
@@ -358,12 +420,12 @@ mod tests {
         let grid = Grid::build(&history, &schedule, local(0, 0, 0), local(2, 0, 0));
         let data = Observed::new(&grid, &history, &schedule, local(2, 0, 0));
 
-        let mut weekly = AnyModel::new(ModelId::WeeklySeasonalNaive);
+        let mut weekly = AnyModel::new(ModelId::WeeklySeasonalNaive).context("forecaster")?;
         assert!(!can_fit(&weekly, &data));
         let error = fit(&mut weekly, &data).err().context("fit should fail")?;
         assert!(matches!(error, MlError::NotEnoughHistory { .. }));
 
-        let mut naive = AnyModel::new(ModelId::Naive);
+        let mut naive = AnyModel::new(ModelId::Naive).context("forecaster")?;
         assert!(can_fit(&naive, &data));
         fit(&mut naive, &data)?;
         Ok(())
@@ -380,8 +442,8 @@ mod tests {
         let grid = Grid::build(&history, &schedule, local(0, 0, 0), local(15, 0, 0));
         let data = Observed::new(&grid, &history, &schedule, local(14, 12, 0));
 
-        for id in ModelId::ALL {
-            let mut model = AnyModel::new(*id);
+        for id in ModelId::FORECASTERS {
+            let mut model = AnyModel::new(*id).context("forecaster")?;
             fit(&mut model, &data).with_context(|| format!("fit {}", id.key()))?;
             let before = forecast(&model, &data)?;
             let restored = AnyModel::from_bytes(*id, &model.to_bytes()?)
