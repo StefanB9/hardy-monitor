@@ -23,6 +23,8 @@ missing_panics_doc = "allow"
 [workspace.dependencies]
 # --- Shared across multiple crates ---
 anyhow = { version = "1.0.104", default-features = false, features = ["std"] }
+argmin = { version = "0.11.0", default-features = false }
+argmin-math = { version = "0.5.1", default-features = false, features = ["vec"] }
 chrono-tz = { version = "0.10.4", default-features = false, features = ["serde"] }
 
 # --- GUI-only ---
@@ -34,6 +36,7 @@ config = { version = "0.15.27", default-features = false, features = ["toml"] }
 csv = { version = "1.4.0", default-features = false }
 dirs = { version = "7.0.0", default-features = false }
 dotenvy = { version = "0.15.7", default-features = false }
+faer = { version = "0.24.4", default-features = false, features = ["linalg", "std"] }
 futures = { version = "0.3.34", default-features = false }
 iced = { version = "0.14.0", default-features = false, features = ["advanced", "canvas", "crisp", "tokio", "wgpu"] }
 image = { version = "0.25.10", default-features = false, features = ["jpeg", "png"] }

@@ -5,7 +5,10 @@ edition = "2024"
 
 [dependencies]
 anyhow = { workspace = true }
+argmin = { workspace = true }
+argmin-math = { workspace = true }
 chrono = { workspace = true }
+faer = { workspace = true }
 hardy-core = { version = "0.1.0", path = "../hardy-core" }
 linfa = { workspace = true }
 linfa-linear = { workspace = true }
