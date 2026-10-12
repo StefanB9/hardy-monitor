@@ -273,7 +273,15 @@ rejected alternatives are in the session record of this plan's discussion.
    random forest (hourly, interpolated to slots) run as suite models until
    phases 2 and 6 replace them, and per-bucket selection drives the default
    forecast. `ml_state` stays (it coordinates the nightly run).
-2. The other profile models, GUI model picker and overlay.
+2. The other profile models, GUI model picker and overlay. As built: the
+   offset holds until the next closing; the residual AR(4) is shrunk to
+   Σ|φ| < 1 (stationary); similar days = the 3 nearest earlier days of the
+   same kind (weekday / weekend-or-holiday) by RMSE over today so far; the
+   PCA model keeps up to 3 components and updates the weekday-mean scores
+   with today's slots as a Bayesian ridge (prior variance = eigenvalue,
+   noise 9 pts²). The picker ("Best per horizon" or any published model)
+   also drives the quiet hour; up to five comparison lines, kept in memory
+   only.
 3. Ensembles.
 4. Hand-written statistical models.
 5. anofox + stlrs statistical models.

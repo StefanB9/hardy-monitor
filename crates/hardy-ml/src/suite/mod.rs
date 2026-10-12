@@ -8,6 +8,8 @@
 
 mod baselines;
 mod legacy;
+pub(crate) mod linalg;
+mod profiles;
 pub mod safety;
 
 use chrono::{DateTime, TimeDelta, Utc};
@@ -199,8 +201,14 @@ registry! {
         "weekly_seasonal_median", "Weekly seasonal median", Baseline;
     WeeklyRecencyMean(baselines::WeeklyRecencyMean) =
         "weekly_recency_mean", "Recency-weighted weekly mean", Baseline;
+    ProfileCurrentOffset(profiles::ProfileCurrentOffset) =
+        "profile_current_offset", "Weekly profile + current offset", Profile;
     ProfileDecayingOffset(legacy::ProfileDecayingOffset) =
         "profile_decaying_offset", "Weekly profile + decaying offset", Profile;
+    ProfileResidualAr(profiles::ProfileResidualAr) =
+        "profile_residual_ar", "Weekly profile + residual autoregression", Profile;
+    SimilarDays(profiles::SimilarDays) = "similar_days", "Similar days", Profile;
+    DailyPca(profiles::DailyPca) = "daily_pca", "Daily-profile PCA + regression", Profile;
     Ridge(legacy::Ridge) = "ridge", "Ridge regression", MachineLearning;
     RandomForest(legacy::RandomForest) = "random_forest", "Random forest", MachineLearning;
 }

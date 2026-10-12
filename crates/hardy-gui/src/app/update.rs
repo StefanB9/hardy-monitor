@@ -7,6 +7,7 @@ use tray_icon::TrayIconEvent;
 
 use super::{HardyMonitorApp, Message, ViewMode, loads::ErrorSource};
 use crate::{
+    forecasting::ModelOption,
     time_range::{ChartRange, Step, can_step_back, shift_custom},
     views::schema_notice::SchemaGate,
 };
@@ -107,16 +108,14 @@ impl HardyMonitorApp {
             | Message::RepairPresetSelected(_)
             | Message::StartRepairJob
             | Message::RepairCompleted(_) => self.update_maintenance(message),
-            Message::AccuracyLoaded(result) => {
-                if let Some(rows) = self.errors.record(ErrorSource::Accuracy, result) {
-                    self.data.accuracy = summarize(&rows);
-                }
-                Task::none()
-            }
-            Message::ForecastRunRequested
+            Message::AccuracyLoaded(_)
+            | Message::ForecastRunRequested
             | Message::ForecastHistoryLoaded(_)
             | Message::SuiteStatusLoaded(_)
-            | Message::PublishedForecastLoaded(_) => self.update_model(message),
+            | Message::PublishedForecastLoaded(_)
+            | Message::ForecastChoiceSelected(_)
+            | Message::OverlayAdded(_)
+            | Message::OverlayRemoved(_) => self.update_model(message),
         }
     }
 
@@ -255,10 +254,16 @@ impl HardyMonitorApp {
         self.load_chart_history()
     }
 
-    /// Forecast history, the published forecast, model status and run
-    /// requests.
+    /// Forecast history, the published forecasts, which of them is shown,
+    /// model status, accuracy and run requests.
     fn update_model(&mut self, message: Message) -> Task<Message> {
         match message {
+            Message::AccuracyLoaded(result) => {
+                if let Some(rows) = self.errors.record(ErrorSource::Accuracy, result) {
+                    self.data.accuracy = summarize(&rows);
+                }
+                Task::none()
+            }
             Message::ForecastRunRequested => {
                 tracing::info!("forecast run requested");
                 self.request_forecast_run()
@@ -281,6 +286,21 @@ impl HardyMonitorApp {
                     self.data.forecasting.set_published(forecast);
                     self.refresh_forecasts();
                 }
+                Task::none()
+            }
+            Message::ForecastChoiceSelected(choice) => {
+                self.data.forecasting.choose(choice);
+                self.refresh_forecasts();
+                Task::none()
+            }
+            Message::OverlayAdded(ModelOption(id)) => {
+                self.data.forecasting.add_overlay(id);
+                self.refresh_forecasts();
+                Task::none()
+            }
+            Message::OverlayRemoved(ModelOption(id)) => {
+                self.data.forecasting.remove_overlay(id);
+                self.refresh_forecasts();
                 Task::none()
             }
             _ => Task::none(),

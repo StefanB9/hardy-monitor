@@ -29,14 +29,62 @@ pub struct SuiteStatus {
     pub state: MlState,
 }
 
+/// A model's forecast as (slot end, value) points.
+pub type ForecastLine = (ModelId, Vec<(DateTime<Utc>, f64)>);
+
+/// Most models compared on the chart at once.
+pub(crate) const MAX_OVERLAYS: usize = 5;
+
+/// Which forecast the GUI shows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ForecastChoice {
+    /// The model selected for each horizon by the benchmark.
+    #[default]
+    Best,
+    Model(ModelId),
+}
+
+impl ForecastChoice {
+    /// Stored key of the forecast rows.
+    fn key(self) -> &'static str {
+        match self {
+            ForecastChoice::Best => hardy_ml::live::SELECTED,
+            ForecastChoice::Model(id) => id.key(),
+        }
+    }
+}
+
+impl std::fmt::Display for ForecastChoice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ForecastChoice::Best => f.write_str("Best per horizon"),
+            ForecastChoice::Model(id) => f.write_str(id.name()),
+        }
+    }
+}
+
+/// A model as a choice in a list.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ModelOption(pub ModelId);
+
+impl std::fmt::Display for ModelOption {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.0.name())
+    }
+}
+
 /// Forecasting state for the GUI.
 #[derive(Debug)]
 pub(crate) struct Forecasting {
     history: History,
     status: SuiteStatus,
     leaderboard: Leaderboard,
-    /// The published default forecast.
+    /// Every published forecast (all models and the default).
     published: Vec<LiveForecast>,
+    choice: ForecastChoice,
+    overlays: Vec<ModelId>,
+    /// Overlay forecasts within the chart's horizon.
+    overlay_lines: Vec<ForecastLine>,
     max_hours_ahead: u32,
     /// No quiet window is suggested this soon after opening.
     opening_grace: TimeDelta,
@@ -54,6 +102,9 @@ impl Forecasting {
             leaderboard: leaderboard::build(&SuiteStatus::default()),
             status: SuiteStatus::default(),
             published: Vec::new(),
+            choice: ForecastChoice::Best,
+            overlays: Vec::new(),
+            overlay_lines: Vec::new(),
             max_hours_ahead,
             opening_grace,
             upcoming: Vec::new(),
@@ -89,20 +140,85 @@ impl Forecasting {
 
     pub(crate) fn set_published(&mut self, forecast: Vec<LiveForecast>) {
         self.published = forecast;
+        if let ForecastChoice::Model(id) = self.choice
+            && !self.available_models().contains(&id)
+        {
+            self.choice = ForecastChoice::Best;
+        }
     }
 
-    /// Recomputes the upcoming forecast and the next quiet window.
+    /// Models with a published forecast, in registry order.
+    pub(crate) fn available_models(&self) -> Vec<ModelId> {
+        ModelId::ALL
+            .iter()
+            .copied()
+            .filter(|id| self.published.iter().any(|f| f.model == id.key()))
+            .collect()
+    }
+
+    pub(crate) fn choice(&self) -> ForecastChoice {
+        self.choice
+    }
+
+    /// Shows `choice` (call [`Forecasting::refresh`] afterwards).
+    pub(crate) fn choose(&mut self, choice: ForecastChoice) {
+        self.choice = choice;
+    }
+
+    /// Models drawn for comparison.
+    #[cfg(test)]
+    pub(crate) fn overlays(&self) -> &[ModelId] {
+        &self.overlays
+    }
+
+    /// Adds a comparison line, up to [`MAX_OVERLAYS`].
+    pub(crate) fn add_overlay(&mut self, id: ModelId) {
+        if !self.overlays.contains(&id) && self.overlays.len() < MAX_OVERLAYS {
+            self.overlays.push(id);
+        }
+    }
+
+    pub(crate) fn remove_overlay(&mut self, id: ModelId) {
+        self.overlays.retain(|o| *o != id);
+    }
+
+    /// The comparison forecasts within the chart's horizon, in overlay
+    /// order.
+    pub(crate) fn overlay_lines(&self) -> &[ForecastLine] {
+        &self.overlay_lines
+    }
+
+    /// Recomputes the upcoming forecast, the overlays and the next quiet
+    /// window.
     pub(crate) fn refresh(&mut self, schedule: &GymSchedule, now: DateTime<Utc>) {
+        let key = self.choice.key();
+        let horizon = now + TimeDelta::hours(i64::from(self.max_hours_ahead));
+        self.overlay_lines = self
+            .overlays
+            .iter()
+            .map(|id| {
+                let points = self
+                    .published
+                    .iter()
+                    .filter(|f| f.model == id.key() && f.target > now && f.target <= horizon)
+                    .map(|f| (f.target, f.value))
+                    .collect();
+                (*id, points)
+            })
+            .collect();
         self.upcoming = self
             .published
             .iter()
-            .filter(|f| f.target > now)
+            .filter(|f| f.model == key && f.target > now)
             .map(|f| {
-                let method = f
-                    .source
-                    .as_deref()
-                    .and_then(ModelId::from_key)
-                    .map_or(PredictionMethod::HistoricalAverage, PredictionMethod::Model);
+                let method = match self.choice {
+                    ForecastChoice::Model(id) => PredictionMethod::Model(id),
+                    ForecastChoice::Best => f
+                        .source
+                        .as_deref()
+                        .and_then(ModelId::from_key)
+                        .map_or(PredictionMethod::HistoricalAverage, PredictionMethod::Model),
+                };
                 PredictionWithConfidence::new(
                     f.target,
                     f.value,
@@ -113,7 +229,6 @@ impl Forecasting {
                 )
             })
             .collect();
-        let horizon = now + TimeDelta::hours(i64::from(self.max_hours_ahead));
         self.charted = self.upcoming.partition_point(|p| p.timestamp <= horizon);
         let profile = SlotProfile::from_history(self.history.view(), schedule.timezone());
         self.quiet_window =
@@ -250,6 +365,73 @@ mod tests {
         assert_eq!(f.forecasts()[0].confidence_high, 20.0, "no upper bound");
         assert_eq!(f.forecast_source(), Some("Persistence"));
         assert!(f.quiet_window().is_some());
+    }
+
+    fn row(model: &str, minute: i64, value: f64) -> LiveForecast {
+        LiveForecast {
+            model: model.to_string(),
+            source: None,
+            ..published(minute, value)
+        }
+    }
+
+    #[test]
+    fn test_choosing_a_model_shows_its_forecast() {
+        let mut f = Forecasting::new(6, TimeDelta::hours(1));
+        f.set_published(vec![
+            published(30, 20.0),
+            row("naive", 30, 25.0),
+            row("similar_days", 30, 35.0),
+        ]);
+        f.refresh(&GymSchedule::default(), at(0));
+        assert_eq!(f.choice(), ForecastChoice::Best);
+        assert_eq!(
+            f.available_models(),
+            vec![ModelId::Naive, ModelId::SimilarDays]
+        );
+
+        f.choose(ForecastChoice::Model(ModelId::SimilarDays));
+        f.refresh(&GymSchedule::default(), at(0));
+        assert_eq!(f.forecasts()[0].predicted_value, 35.0);
+        assert_eq!(f.forecast_source(), Some("Similar days"));
+    }
+
+    #[test]
+    fn test_a_model_without_a_forecast_falls_back_to_the_best() {
+        let mut f = Forecasting::new(6, TimeDelta::hours(1));
+        f.set_published(vec![published(30, 20.0), row("naive", 30, 25.0)]);
+        f.choose(ForecastChoice::Model(ModelId::Naive));
+        // The next publish has no forecast from it any more.
+        f.set_published(vec![published(30, 21.0)]);
+        f.refresh(&GymSchedule::default(), at(0));
+        assert_eq!(f.choice(), ForecastChoice::Best);
+        assert_eq!(f.forecasts()[0].predicted_value, 21.0);
+    }
+
+    #[test]
+    fn test_overlays_are_unique_capped_and_drawn_within_the_horizon() {
+        let mut f = Forecasting::new(1, TimeDelta::hours(1));
+        let mut rows = vec![published(30, 20.0)];
+        for id in ModelId::ALL {
+            rows.push(row(id.key(), 30, 40.0));
+            rows.push(row(id.key(), 120, 50.0));
+        }
+        f.set_published(rows);
+        for id in ModelId::ALL {
+            f.add_overlay(*id);
+        }
+        f.add_overlay(ModelId::Naive);
+        assert_eq!(f.overlays().len(), MAX_OVERLAYS);
+        assert_eq!(f.overlays()[0], ModelId::ALL[0]);
+
+        f.refresh(&GymSchedule::default(), at(0));
+        let lines = f.overlay_lines();
+        assert_eq!(lines.len(), MAX_OVERLAYS);
+        assert_eq!(lines[0].1, vec![(at(30), 40.0)], "beyond one hour is cut");
+
+        f.remove_overlay(ModelId::ALL[0]);
+        assert_eq!(f.overlays().len(), MAX_OVERLAYS - 1);
+        assert!(!f.overlays().contains(&ModelId::ALL[0]));
     }
 
     #[test]

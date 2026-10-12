@@ -45,8 +45,9 @@ pub struct ForecastService {
     last_run_at: Option<DateTime<Utc>>,
     /// Models with a stored state (fitted, waiting or failed).
     known: HashSet<ModelId>,
-    /// The last run started before this process and never finished.
-    interrupted: bool,
+    /// Why a run is due at once regardless of the schedule: the last one
+    /// was interrupted, or some models have never been run.
+    run_at_once: Option<RetrainReason>,
     running: Option<Running>,
     history: History,
 }
@@ -74,7 +75,7 @@ impl ForecastService {
             selection: Vec::new(),
             last_run_at: None,
             known: HashSet::new(),
-            interrupted: false,
+            run_at_once: None,
             running: None,
             history: History::default(),
         }
@@ -107,11 +108,19 @@ impl ForecastService {
             self.last_run_at = Some(run.finished_at);
             self.intervals = intervals_from_scores(&run.scores);
         }
-        self.interrupted = db
+        let interrupted = db
             .get_ml_state()
             .await?
             .last_attempt_at
             .is_some_and(|attempt| self.last_run_at.is_none_or(|run| attempt > run));
+        let new_models = self.models.iter().any(|id| !self.known.contains(id));
+        self.run_at_once = if interrupted {
+            Some(RetrainReason::Interrupted)
+        } else if new_models && self.last_run_at.is_some() {
+            Some(RetrainReason::NewModels)
+        } else {
+            None
+        };
         self.selection = db
             .forecast_selection()
             .await?
@@ -149,8 +158,8 @@ impl ForecastService {
 
         let complete = self.models.iter().all(|id| self.known.contains(id));
         let last_run = self.last_run_at.filter(|_| complete);
-        let reason = if self.interrupted {
-            Some(RetrainReason::Interrupted)
+        let reason = if let Some(reason) = self.run_at_once {
+            Some(reason)
         } else {
             let state = db.get_ml_state().await?;
             retrain_due(now, &self.schedule, last_run, &state)
@@ -158,7 +167,7 @@ impl ForecastService {
         let Some(reason) = reason else {
             return Ok(());
         };
-        self.interrupted = false;
+        self.run_at_once = None;
         tracing::info!(?reason, "starting the nightly forecast run");
         db.start_training_attempt(now).await?;
         self.running = Some(Running {

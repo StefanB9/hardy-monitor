@@ -47,8 +47,8 @@ hardy-monitor/                         (workspace root)
 │   │
 │   ├── hardy-ml/                      (library — forecasting, shared by daemon and GUI)
 │   │   ├── src/                       grid (15-minute slots), history, profile, features, samples, model,
-│   │   │                              baseline; suite/ (model interface + registry, baselines, legacy
-│   │   │                              wrappers, safety); benchmark/ (rolling-origin backtest, metrics +
+│   │   │                              baseline; suite/ (model interface + registry, baselines, profiles/,
+│   │   │                              legacy wrappers, linalg, safety); benchmark/ (rolling-origin backtest, metrics +
 │   │   │                              conformal intervals, selection); nightly, live, service, retrain,
 │   │   │                              confidence
 │   │   └── tests/service.rs           Nightly run and live publishing against a real database

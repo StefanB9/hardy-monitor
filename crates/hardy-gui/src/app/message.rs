@@ -10,7 +10,7 @@ use hardy_core::{
 
 use super::loads::RequestId;
 use crate::{
-    forecasting::SuiteStatus,
+    forecasting::{ForecastChoice, ModelOption, SuiteStatus},
     time_range::{AnalyticsRange, ChartRange, Step},
 };
 
@@ -115,9 +115,14 @@ pub enum Message {
     ForecastHistoryLoaded(Result<Vec<OccupancyLog>, AppError>),
     /// The forecast models' states, benchmark and selection.
     SuiteStatusLoaded(Result<SuiteStatus, AppError>),
-    /// The default forecast the daemon published.
+    /// Every forecast the daemon published.
     PublishedForecastLoaded(Result<Vec<LiveForecast>, AppError>),
     ForecastRunRequested,
+    /// Which forecast the chart and the quiet hour use.
+    ForecastChoiceSelected(ForecastChoice),
+    /// A model added to or removed from the chart's comparison lines.
+    OverlayAdded(ModelOption),
+    OverlayRemoved(ModelOption),
     AccuracyLoaded(Result<Vec<HorizonAccuracy>, AppError>),
 
     /// Result of comparing the database schema with this build.
@@ -167,6 +172,9 @@ impl Message {
             | Message::RepairPresetSelected(_)
             | Message::StartRepairJob
             | Message::ForecastRunRequested
+            | Message::ForecastChoiceSelected(_)
+            | Message::OverlayAdded(_)
+            | Message::OverlayRemoved(_)
             | Message::SchemaChecked(_)
             | Message::RetrySchemaCheck => false,
         }

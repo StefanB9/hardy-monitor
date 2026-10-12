@@ -37,6 +37,15 @@ pub const TEXT_TERTIARY: Color = rgb(0x6E, 0x77, 0x88);
 pub const ACCENT: Color = rgb(0x5B, 0x9D, 0xFF);
 /// Forecasts.
 pub const FORECAST: Color = rgb(0xA7, 0x8B, 0xFA);
+/// Comparison forecasts on the chart, in the order they are added: hues
+/// apart from the measured line, the forecast and the occupancy scale.
+pub const COMPARISON: [Color; 5] = [
+    rgb(0x2D, 0xD4, 0xBF),
+    rgb(0xF4, 0x72, 0xB6),
+    rgb(0xE2, 0xC0, 0x8D),
+    rgb(0x7D, 0xD3, 0xFC),
+    rgb(0xC0, 0x84, 0xFC),
+];
 /// Healthy or fresh state.
 pub const SUCCESS: Color = rgb(0x3D, 0xD6, 0x8C);
 /// Stale data and other degraded states.

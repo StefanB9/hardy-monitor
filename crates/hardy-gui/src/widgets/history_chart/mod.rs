@@ -16,7 +16,7 @@ use iced::{
 };
 use plot::Plot;
 
-use crate::style;
+use crate::{forecasting::ForecastLine, style};
 
 /// Readings further apart than this are drawn as separate segments.
 const MAX_GAP: TimeDelta = TimeDelta::minutes(20);
@@ -35,6 +35,9 @@ pub struct HistoryChart<'a> {
     /// Readings sorted by time; only those inside the range are drawn.
     pub history: &'a [OccupancyLog],
     pub forecast: &'a [PredictionWithConfidence],
+    /// Comparison forecasts, each drawn in its colour from
+    /// [`style::COMPARISON`] by position.
+    pub overlays: &'a [ForecastLine],
     pub range_start: DateTime<Utc>,
     pub range_end: DateTime<Utc>,
     pub now: DateTime<Utc>,
@@ -68,6 +71,11 @@ impl HistoryChart<'_> {
                 .iter()
                 .map(|l| l.percentage)
                 .chain(self.forecast_in_range().map(|p| p.confidence_high))
+                .chain(
+                    self.overlays
+                        .iter()
+                        .flat_map(|(_, points)| points.iter().map(|(_, v)| *v)),
+                )
                 .chain(self.threshold),
         );
         Plot::new(self, size, max)
@@ -104,6 +112,7 @@ impl<Message> canvas::Program<Message> for HistoryChart<'_> {
         let base = self.cache.draw(renderer, bounds.size(), |frame| {
             self.draw_grid(frame, &plot);
             let last = self.draw_history(frame, &plot);
+            self.draw_overlays(frame, &plot);
             self.draw_forecast(frame, &plot, last);
             self.draw_markers(frame, &plot);
         });
