@@ -8,12 +8,18 @@ use chrono::{DateTime, TimeDelta, Utc};
 use hardy_core::db::{DataSource, OccupancyLog};
 
 /// Measured occupancy readings, sorted by time, unique timestamps.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct History {
     times: Vec<DateTime<Utc>>,
     values: Vec<f64>,
     /// `prefix[i]` = sum of `values[..i]`.
     prefix: Vec<f64>,
+}
+
+impl Default for History {
+    fn default() -> Self {
+        Self::new(Vec::new())
+    }
 }
 
 impl History {
@@ -113,6 +119,32 @@ impl History {
             values: &self.values[..end],
             prefix: &self.prefix[..=end],
         }
+    }
+
+    /// A new history with only the readings at or before `t`: what a
+    /// forecast made at `t` may see.
+    #[must_use]
+    pub fn until(&self, t: DateTime<Utc>) -> History {
+        let end = self.times.partition_point(|x| *x <= t);
+        History {
+            times: self.times[..end].to_vec(),
+            values: self.values[..end].to_vec(),
+            prefix: self.prefix[..=end].to_vec(),
+        }
+    }
+
+    /// A new history with only the readings in `[from, until]`.
+    #[must_use]
+    pub fn range(&self, from: DateTime<Utc>, until: DateTime<Utc>) -> History {
+        let start = self.times.partition_point(|x| *x < from);
+        let end = self.times.partition_point(|x| *x <= until).max(start);
+        History::new(
+            self.times[start..end]
+                .iter()
+                .copied()
+                .zip(self.values[start..end].iter().copied())
+                .collect(),
+        )
     }
 
     /// A new history with only the readings strictly before `cutoff`.
@@ -302,6 +334,32 @@ mod tests {
         assert_relative_eq!(slope, 60.0, epsilon = 1e-9);
         assert_eq!(h.view().slope_per_hour(at(0), at(0)), None);
         Ok(())
+    }
+
+    #[test]
+    fn test_range_keeps_both_ends() {
+        let h = series(&[10.0, 20.0, 30.0, 40.0]);
+        let r = h.range(at(1), at(2));
+        assert_eq!(r.len(), 2);
+        assert_eq!(r.first_time(), Some(at(1)));
+        assert_eq!(r.last_time(), Some(at(2)));
+        assert!(h.range(at(3), at(1)).is_empty());
+    }
+
+    #[test]
+    fn test_empty_history_can_be_cut() {
+        let h = History::default();
+        assert!(h.until(at(0)).is_empty());
+        assert!(h.before(at(0)).is_empty());
+    }
+
+    #[test]
+    fn test_until_keeps_the_reading_at_the_cut() {
+        let h = series(&[10.0, 20.0, 30.0]);
+        let u = h.until(at(1));
+        assert_eq!(u.len(), 2);
+        assert_eq!(u.last_time(), Some(at(1)));
+        assert_relative_eq!(u.view().mean_between(at(0), at(2)).unwrap_or(0.0), 15.0);
     }
 
     #[test]

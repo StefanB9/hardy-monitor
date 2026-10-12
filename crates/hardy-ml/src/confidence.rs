@@ -2,25 +2,15 @@
 
 use chrono::{DateTime, Utc};
 
-/// How a forecast value was produced.
-#[derive(Debug, Clone, PartialEq)]
-pub enum PredictionMethod {
-    /// A trained model other than a random forest.
-    MachineLearning { confidence: f64 },
-    /// A trained random forest.
-    RandomForest { confidence: f64, n_trees: usize },
-    /// Plain slot averages (no usable model).
-    HistoricalAverage,
-}
+use crate::suite::ModelId;
 
-impl PredictionMethod {
-    /// Whether a trained model produced the value.
-    pub fn is_ml(&self) -> bool {
-        matches!(
-            self,
-            PredictionMethod::MachineLearning { .. } | PredictionMethod::RandomForest { .. }
-        )
-    }
+/// How a forecast value was produced.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PredictionMethod {
+    /// A model of the suite.
+    Model(ModelId),
+    /// Plain slot averages.
+    HistoricalAverage,
 }
 
 /// One forecast value: clamped to 0–100 % with an interval that contains it.
@@ -85,15 +75,6 @@ mod tests {
     }
 
     #[test]
-    fn test_prediction_method_is_ml() {
-        let ml = PredictionMethod::MachineLearning { confidence: 0.8 };
-        let avg = PredictionMethod::HistoricalAverage;
-
-        assert!(ml.is_ml());
-        assert!(!avg.is_ml());
-    }
-
-    #[test]
     fn test_prediction_with_confidence_creation() {
         let timestamp = Utc.with_ymd_and_hms(2024, 6, 17, 10, 0, 0).unwrap();
         let pred = PredictionWithConfidence::new(
@@ -102,7 +83,7 @@ mod tests {
             40.0,
             60.0,
             0.8,
-            PredictionMethod::MachineLearning { confidence: 0.8 },
+            PredictionMethod::Model(ModelId::Naive),
         );
 
         assert_relative_eq!(pred.predicted_value, 50.0);
@@ -151,15 +132,6 @@ mod tests {
     }
 
     #[test]
-    fn test_prediction_method_random_forest_is_ml() {
-        let rf = PredictionMethod::RandomForest {
-            confidence: 0.85,
-            n_trees: 100,
-        };
-        assert!(rf.is_ml());
-    }
-
-    #[test]
     fn test_new_expands_ci_to_contain_predicted_value() {
         let ts = Utc.with_ymd_and_hms(2024, 6, 17, 10, 0, 0).unwrap();
 
@@ -171,7 +143,7 @@ mod tests {
             55.0,
             70.0,
             0.8,
-            PredictionMethod::MachineLearning { confidence: 0.8 },
+            PredictionMethod::Model(ModelId::Naive),
         );
         assert!(
             is_valid(&pred),
@@ -191,7 +163,7 @@ mod tests {
             20.0,
             50.0,
             0.8,
-            PredictionMethod::MachineLearning { confidence: 0.8 },
+            PredictionMethod::Model(ModelId::Naive),
         );
         assert!(
             is_valid(&pred2),

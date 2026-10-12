@@ -47,7 +47,8 @@ impl HardyMonitorApp {
                     self.load_chart_history(),
                     self.load_analytics(),
                     self.load_insights_data(),
-                    self.load_model_status(),
+                    self.load_suite_status(),
+                    self.load_published_forecast(),
                     self.load_forecast_history(),
                     self.load_first_reading(),
                 ])
@@ -112,10 +113,10 @@ impl HardyMonitorApp {
                 }
                 Task::none()
             }
-            Message::TrainModelRequested
+            Message::ForecastRunRequested
             | Message::ForecastHistoryLoaded(_)
-            | Message::ModelStatusLoaded(_)
-            | Message::ModelLoaded(_) => self.update_model(message),
+            | Message::SuiteStatusLoaded(_)
+            | Message::PublishedForecastLoaded(_) => self.update_model(message),
         }
     }
 
@@ -254,12 +255,13 @@ impl HardyMonitorApp {
         self.load_chart_history()
     }
 
-    /// Forecast history, model status and retraining.
+    /// Forecast history, the published forecast, model status and run
+    /// requests.
     fn update_model(&mut self, message: Message) -> Task<Message> {
         match message {
-            Message::TrainModelRequested => {
-                tracing::info!("model retraining requested");
-                self.request_retrain()
+            Message::ForecastRunRequested => {
+                tracing::info!("forecast run requested");
+                self.request_forecast_run()
             }
             Message::ForecastHistoryLoaded(result) => {
                 if let Some(logs) = self.errors.record(ErrorSource::ForecastHistory, result) {
@@ -268,26 +270,15 @@ impl HardyMonitorApp {
                 }
                 Task::none()
             }
-            Message::ModelStatusLoaded(result) => {
-                let Some((latest, state)) = self.errors.record(ErrorSource::ModelStatus, result)
-                else {
-                    return Task::none();
-                };
-                self.data.forecasting.set_state(state);
-                match latest {
-                    Some(info) if self.data.forecasting.is_new_model(Some(&info)) => {
-                        self.load_model(info)
-                    }
-                    _ => Task::none(),
+            Message::SuiteStatusLoaded(result) => {
+                if let Some(status) = self.errors.record(ErrorSource::SuiteStatus, result) {
+                    self.data.forecasting.set_status(status);
                 }
+                Task::none()
             }
-            Message::ModelLoaded(result) => {
-                if let Err(e) = &result {
-                    tracing::warn!(error = %e, "could not load stored model");
-                }
-                if let Some((info, artifact)) = self.errors.record(ErrorSource::Model, result) {
-                    tracing::info!(id = info.id, trained_at = %info.trained_at, "loaded model");
-                    self.data.forecasting.set_model(&info, artifact);
+            Message::PublishedForecastLoaded(result) => {
+                if let Some(forecast) = self.errors.record(ErrorSource::PublishedForecast, result) {
+                    self.data.forecasting.set_published(forecast);
                     self.refresh_forecasts();
                 }
                 Task::none()

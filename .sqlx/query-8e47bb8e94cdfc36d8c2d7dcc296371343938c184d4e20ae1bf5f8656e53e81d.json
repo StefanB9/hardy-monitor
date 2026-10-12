@@ -1,0 +1,38 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT bucket, model FROM forecast_selection ORDER BY bucket",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "bucket",
+        "type_info": "Int2",
+        "origin": {
+          "Table": {
+            "table": "forecast_selection",
+            "name": "bucket"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "model",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "forecast_selection",
+            "name": "model"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "8e47bb8e94cdfc36d8c2d7dcc296371343938c184d4e20ae1bf5f8656e53e81d"
+}

@@ -242,7 +242,8 @@ impl HardyMonitorApp {
         Task::batch([
             self.load_alert_settings(),
             self.load_forecast_history(),
-            self.load_model_status(),
+            self.load_suite_status(),
+            self.load_published_forecast(),
             self.load_chart_history(),
             self.load_analytics(),
             self.load_insights_data(),

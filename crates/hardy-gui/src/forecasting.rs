@@ -1,63 +1,49 @@
-//! The GUI's forecasting state: recent history from the database, the newest
-//! model the daemon trained, and the forecasts derived from them.
-
-use std::sync::Arc;
+//! The GUI's forecasting state: recent history (for slot averages and the
+//! trend arrow), the default forecast the daemon publishes, and the state of
+//! its models and benchmark.
 
 use chrono::{DateTime, TimeDelta, Utc};
 use hardy_core::{
     GymSchedule,
-    db::{MlState, ModelInfo, OccupancyLog},
+    db::{BenchmarkRun, LiveForecast, MlState, ModelRecord, OccupancyLog},
 };
-use hardy_ml::{History, ModelArtifact, PredictionWithConfidence, SlotProfile, baseline_forecast};
+use hardy_ml::{History, PredictionMethod, PredictionWithConfidence, SlotProfile, suite::ModelId};
 
-use crate::quiet_window::{QuietWindow, next_quiet_window};
+use crate::{
+    leaderboard::{self, Leaderboard},
+    quiet_window::{QuietWindow, next_quiet_window},
+};
 
-/// History kept for the baseline, which needs the most (model features
-/// reach back one week).
-pub(crate) const HISTORY_DAYS: i64 = hardy_ml::BASELINE_HISTORY_DAYS;
+/// History kept for the slot averages the quiet window falls back to.
+pub(crate) const HISTORY_DAYS: i64 = 28;
 
-/// What the model view shows about the active model.
-#[derive(Debug, Clone, PartialEq)]
-pub struct ModelSummary {
-    pub algorithm: String,
-    pub trained_at: DateTime<Utc>,
-    pub training_samples: usize,
-    pub holdout_mae: f64,
-    pub baseline_mae: f64,
-    pub tuned: bool,
-    /// Holdout MAE per horizon (index `h - 1`).
-    pub mae_by_horizon: Vec<f64>,
-}
-
-impl ModelSummary {
-    /// Relative improvement over the slot-average baseline, e.g. 0.25 = 25%
-    /// lower error.
-    pub fn improvement(&self) -> f64 {
-        if self.baseline_mae > 0.0 {
-            1.0 - self.holdout_mae / self.baseline_mae
-        } else {
-            0.0
-        }
-    }
-}
-
-#[derive(Debug)]
-struct LoadedModel {
-    id: i64,
-    artifact: Arc<ModelArtifact>,
-    summary: ModelSummary,
+/// What the daemon reports about its forecasting models.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct SuiteStatus {
+    /// Each model's fit state.
+    pub records: Vec<ModelRecord>,
+    /// The newest benchmark.
+    pub benchmark: Option<BenchmarkRun>,
+    /// Model key selected per horizon bucket code.
+    pub selection: Vec<(i16, String)>,
+    pub state: MlState,
 }
 
 /// Forecasting state for the GUI.
 #[derive(Debug)]
 pub(crate) struct Forecasting {
     history: History,
-    model: Option<LoadedModel>,
-    state: MlState,
+    status: SuiteStatus,
+    leaderboard: Leaderboard,
+    /// The published default forecast.
+    published: Vec<LiveForecast>,
     max_hours_ahead: u32,
     /// No quiet window is suggested this soon after opening.
     opening_grace: TimeDelta,
-    forecasts: Vec<PredictionWithConfidence>,
+    /// Published points after now (up to 24 hours).
+    upcoming: Vec<PredictionWithConfidence>,
+    /// How many of `upcoming` lie within the chart's horizon.
+    charted: usize,
     quiet_window: Option<QuietWindow>,
 }
 
@@ -65,11 +51,13 @@ impl Forecasting {
     pub(crate) fn new(max_hours_ahead: u32, opening_grace: TimeDelta) -> Self {
         Self {
             history: History::default(),
-            model: None,
-            state: MlState::default(),
+            leaderboard: leaderboard::build(&SuiteStatus::default()),
+            status: SuiteStatus::default(),
+            published: Vec::new(),
             max_hours_ahead,
             opening_grace,
-            forecasts: Vec::new(),
+            upcoming: Vec::new(),
+            charted: 0,
             quiet_window: None,
         }
     }
@@ -84,7 +72,7 @@ impl Forecasting {
             })
     }
 
-    /// Adds newly fetched rows (only measured, only newer ones).
+    /// Adds newly fetched rows (only observed, only newer ones).
     pub(crate) fn add_history(&mut self, logs: &[OccupancyLog]) {
         if self.history.is_empty() {
             self.history = History::from_logs(logs);
@@ -94,46 +82,47 @@ impl Forecasting {
         }
     }
 
-    /// Whether `latest` is a different model from the one loaded.
-    pub(crate) fn is_new_model(&self, latest: Option<&ModelInfo>) -> bool {
-        latest.is_some_and(|info| self.model.as_ref().is_none_or(|m| m.id != info.id))
+    pub(crate) fn set_status(&mut self, status: SuiteStatus) {
+        self.leaderboard = leaderboard::build(&status);
+        self.status = status;
     }
 
-    pub(crate) fn set_model(&mut self, info: &ModelInfo, artifact: Arc<ModelArtifact>) {
-        let summary = ModelSummary {
-            algorithm: info.algorithm.clone(),
-            trained_at: info.trained_at,
-            training_samples: info.training_samples,
-            holdout_mae: info.holdout_mae,
-            baseline_mae: info.baseline_mae,
-            tuned: info.tuned,
-            mae_by_horizon: artifact.metrics.mae_by_horizon.clone(),
-        };
-        self.model = Some(LoadedModel {
-            id: info.id,
-            artifact,
-            summary,
-        });
+    pub(crate) fn set_published(&mut self, forecast: Vec<LiveForecast>) {
+        self.published = forecast;
     }
 
-    pub(crate) fn set_state(&mut self, state: MlState) {
-        self.state = state;
-    }
-
-    /// Recomputes forecasts (from the model if one is loaded, else from
-    /// slot averages) and the next quiet window.
+    /// Recomputes the upcoming forecast and the next quiet window.
     pub(crate) fn refresh(&mut self, schedule: &GymSchedule, now: DateTime<Utc>) {
-        self.forecasts = match &self.model {
-            Some(model) => model.artifact.forecast(&self.history, schedule, now),
-            None => baseline_forecast(&self.history, schedule, now, self.max_hours_ahead),
-        };
+        self.upcoming = self
+            .published
+            .iter()
+            .filter(|f| f.target > now)
+            .map(|f| {
+                let method = f
+                    .source
+                    .as_deref()
+                    .and_then(ModelId::from_key)
+                    .map_or(PredictionMethod::HistoricalAverage, PredictionMethod::Model);
+                PredictionWithConfidence::new(
+                    f.target,
+                    f.value,
+                    f.low.unwrap_or(f.value),
+                    f.high.unwrap_or(f.value),
+                    0.5,
+                    method,
+                )
+            })
+            .collect();
+        let horizon = now + TimeDelta::hours(i64::from(self.max_hours_ahead));
+        self.charted = self.upcoming.partition_point(|p| p.timestamp <= horizon);
         let profile = SlotProfile::from_history(self.history.view(), schedule.timezone());
         self.quiet_window =
-            next_quiet_window(now, schedule, &self.forecasts, &profile, self.opening_grace);
+            next_quiet_window(now, schedule, &self.upcoming, &profile, self.opening_grace);
     }
 
+    /// The forecast within the chart's horizon.
     pub(crate) fn forecasts(&self) -> &[PredictionWithConfidence] {
-        &self.forecasts
+        &self.upcoming[..self.charted]
     }
 
     pub(crate) fn quiet_window(&self) -> Option<&QuietWindow> {
@@ -145,24 +134,30 @@ impl Forecasting {
         self.history.view().value_near(t, TimeDelta::minutes(5))
     }
 
-    pub(crate) fn has_model(&self) -> bool {
-        self.model.is_some()
+    /// Name of the model behind the next forecast value.
+    pub(crate) fn forecast_source(&self) -> Option<&'static str> {
+        self.upcoming.first().and_then(|p| match p.method {
+            PredictionMethod::Model(id) => Some(id.name()),
+            PredictionMethod::HistoricalAverage => None,
+        })
     }
 
-    pub(crate) fn summary(&self) -> Option<&ModelSummary> {
-        self.model.as_ref().map(|m| &m.summary)
+    /// The models and their benchmark, best first.
+    pub(crate) fn leaderboard(&self) -> &Leaderboard {
+        &self.leaderboard
     }
 
-    /// A retrain was requested and the daemon has not started it yet.
-    pub(crate) fn retrain_pending(&self) -> bool {
-        self.state
-            .retrain_requested_at
-            .is_some_and(|requested| self.state.last_attempt_at.is_none_or(|a| a < requested))
-    }
-
-    /// Why the last training produced no model, if it failed.
+    /// Why the daemon's last run failed, if it did.
     pub(crate) fn last_error(&self) -> Option<&str> {
-        self.state.last_error.as_deref()
+        self.status.state.last_error.as_deref()
+    }
+
+    /// A run was requested and the daemon has not started it yet.
+    pub(crate) fn run_pending(&self) -> bool {
+        let state = &self.status.state;
+        state
+            .retrain_requested_at
+            .is_some_and(|requested| state.last_attempt_at.is_none_or(|a| a < requested))
     }
 }
 
@@ -189,16 +184,15 @@ mod tests {
         }
     }
 
-    fn info(id: i64) -> ModelInfo {
-        ModelInfo {
-            id,
-            trained_at: at(0),
-            feature_version: 2,
-            algorithm: "Random Forest".to_string(),
-            training_samples: 100,
-            holdout_mae: 4.0,
-            baseline_mae: 5.0,
-            tuned: false,
+    fn published(minute: i64, value: f64) -> LiveForecast {
+        LiveForecast {
+            model: "selected".to_string(),
+            target: at(minute),
+            made_at: at(0),
+            value,
+            low: Some(value - 4.0),
+            high: None,
+            source: Some("naive".to_string()),
         }
     }
 
@@ -223,57 +217,47 @@ mod tests {
     }
 
     #[test]
-    fn test_is_new_model() {
-        let f = Forecasting::new(6, TimeDelta::hours(1));
-        assert!(!f.is_new_model(None));
-        assert!(f.is_new_model(Some(&info(1))));
-    }
-
-    #[test]
-    fn test_retrain_pending_until_attempted() {
+    fn test_run_pending_until_attempted() {
         let mut f = Forecasting::new(6, TimeDelta::hours(1));
-        assert!(!f.retrain_pending());
-        f.set_state(MlState {
-            retrain_requested_at: Some(at(10)),
-            last_attempt_at: Some(at(5)),
-            last_error: None,
-        });
-        assert!(f.retrain_pending());
-        f.set_state(MlState {
-            retrain_requested_at: Some(at(10)),
-            last_attempt_at: Some(at(11)),
-            last_error: Some("not enough data".to_string()),
-        });
-        assert!(!f.retrain_pending());
-        assert_eq!(f.last_error(), Some("not enough data"));
-    }
-
-    #[test]
-    fn test_summary_improvement() {
-        let s = ModelSummary {
-            algorithm: "Random Forest".to_string(),
-            trained_at: at(0),
-            training_samples: 10,
-            holdout_mae: 3.0,
-            baseline_mae: 4.0,
-            tuned: true,
-            mae_by_horizon: vec![],
+        assert!(!f.run_pending());
+        let status = |requested, attempted| SuiteStatus {
+            state: MlState {
+                retrain_requested_at: Some(at(requested)),
+                last_attempt_at: Some(at(attempted)),
+                last_error: None,
+            },
+            ..SuiteStatus::default()
         };
-        assert!((s.improvement() - 0.25).abs() < 1e-12);
+        f.set_status(status(10, 5));
+        assert!(f.run_pending());
+        f.set_status(status(10, 11));
+        assert!(!f.run_pending());
     }
 
     #[test]
-    fn test_refresh_without_model_uses_baseline() {
-        let mut f = Forecasting::new(6, TimeDelta::hours(1));
-        f.add_history(&[log(1, 0, DataSource::Measured)]);
-        f.refresh(&GymSchedule::default(), at(0));
-        assert!(
-            f.forecasts()
-                .iter()
-                .all(|p| p.method == hardy_ml::PredictionMethod::HistoricalAverage)
-        );
-        assert!(!f.has_model());
+    fn test_refresh_keeps_future_points_and_caps_the_chart() {
+        let mut f = Forecasting::new(1, TimeDelta::hours(1));
+        f.set_published(vec![
+            published(0, 10.0),
+            published(30, 20.0),
+            published(60, 30.0),
+            published(90, 40.0),
+        ]);
+        f.refresh(&GymSchedule::default(), at(15));
+        let charted: Vec<f64> = f.forecasts().iter().map(|p| p.predicted_value).collect();
+        assert_eq!(charted, [20.0, 30.0], "within one hour of now");
+        assert_eq!(f.forecasts()[0].confidence_low, 16.0);
+        assert_eq!(f.forecasts()[0].confidence_high, 20.0, "no upper bound");
+        assert_eq!(f.forecast_source(), Some("Persistence"));
         assert!(f.quiet_window().is_some());
+    }
+
+    #[test]
+    fn test_nothing_published_means_no_forecast() {
+        let mut f = Forecasting::new(6, TimeDelta::hours(1));
+        f.refresh(&GymSchedule::default(), at(0));
+        assert_eq!(f.forecasts().len(), 0);
+        assert_eq!(f.forecast_source(), None);
     }
 
     #[test]

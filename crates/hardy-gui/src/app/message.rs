@@ -1,18 +1,18 @@
 //! What the app reacts to, and the views it can show.
 
-use std::sync::Arc;
-
 use chrono::{DateTime, Utc};
 use hardy_core::{
     alert::{AlertDuration, AlertSettings},
-    db::{HorizonAccuracy, HourlyAverage, MlState, ModelInfo, OccupancyLog, SchemaStatus},
+    db::{HorizonAccuracy, HourlyAverage, LiveForecast, OccupancyLog, SchemaStatus},
     error::AppError,
     repair::RepairSummary,
 };
-use hardy_ml::ModelArtifact;
 
 use super::loads::RequestId;
-use crate::time_range::{AnalyticsRange, ChartRange, Step};
+use crate::{
+    forecasting::SuiteStatus,
+    time_range::{AnalyticsRange, ChartRange, Step},
+};
 
 /// The four top-level views.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -113,10 +113,11 @@ pub enum Message {
 
     /// New rows for the forecasting history.
     ForecastHistoryLoaded(Result<Vec<OccupancyLog>, AppError>),
-    /// Newest stored model and training state.
-    ModelStatusLoaded(Result<(Option<ModelInfo>, MlState), AppError>),
-    ModelLoaded(Result<(ModelInfo, Arc<ModelArtifact>), AppError>),
-    TrainModelRequested,
+    /// The forecast models' states, benchmark and selection.
+    SuiteStatusLoaded(Result<SuiteStatus, AppError>),
+    /// The default forecast the daemon published.
+    PublishedForecastLoaded(Result<Vec<LiveForecast>, AppError>),
+    ForecastRunRequested,
     AccuracyLoaded(Result<Vec<HorizonAccuracy>, AppError>),
 
     /// Result of comparing the database schema with this build.
@@ -137,8 +138,8 @@ impl Message {
             | Message::ExportCompleted(_)
             | Message::RepairCompleted(_)
             | Message::ForecastHistoryLoaded(_)
-            | Message::ModelStatusLoaded(_)
-            | Message::ModelLoaded(_)
+            | Message::SuiteStatusLoaded(_)
+            | Message::PublishedForecastLoaded(_)
             | Message::AccuracyLoaded(_)
             | Message::FirstReadingLoaded(_) => true,
             Message::Tick
@@ -165,7 +166,7 @@ impl Message {
             | Message::RepairEndDateChanged(_)
             | Message::RepairPresetSelected(_)
             | Message::StartRepairJob
-            | Message::TrainModelRequested
+            | Message::ForecastRunRequested
             | Message::SchemaChecked(_)
             | Message::RetrySchemaCheck => false,
         }
@@ -196,8 +197,8 @@ mod tests {
             Message::ExportCompleted(failed()),
             Message::RepairCompleted(failed()),
             Message::ForecastHistoryLoaded(failed()),
-            Message::ModelStatusLoaded(failed()),
-            Message::ModelLoaded(failed()),
+            Message::SuiteStatusLoaded(failed()),
+            Message::PublishedForecastLoaded(failed()),
             Message::AccuracyLoaded(failed()),
             Message::FirstReadingLoaded(failed()),
         ];

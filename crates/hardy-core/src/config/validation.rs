@@ -79,16 +79,16 @@ impl AppConfig {
             ));
         }
 
-        if self.ml.holdout_days <= 0 {
+        if self.ml.training_window_days <= 0 {
             return Err(AppError::Config(format!(
-                "ml.holdout_days must be > 0, got {}",
-                self.ml.holdout_days
+                "ml.training_window_days must be > 0, got {}",
+                self.ml.training_window_days
             )));
         }
-        if self.ml.training_window_days <= self.ml.holdout_days {
+        if self.ml.benchmark_days <= 0 {
             return Err(AppError::Config(format!(
-                "ml.training_window_days ({}) must exceed ml.holdout_days ({})",
-                self.ml.training_window_days, self.ml.holdout_days
+                "ml.benchmark_days must be > 0, got {}",
+                self.ml.benchmark_days
             )));
         }
         if !(1..=24).contains(&self.ml.prediction_horizon_hours) {
@@ -227,12 +227,12 @@ mod tests {
     #[test]
     fn test_validate_rejects_bad_ml_config() {
         let mut config = valid_app_config();
-        config.ml.holdout_days = 0;
+        config.ml.training_window_days = 0;
         assert!(config.validate().is_err());
 
         let mut config = valid_app_config();
-        config.ml.training_window_days = 7;
-        assert!(config.validate().is_err(), "window must exceed holdout");
+        config.ml.benchmark_days = 0;
+        assert!(config.validate().is_err());
 
         let mut config = valid_app_config();
         config.ml.prediction_horizon_hours = 25;

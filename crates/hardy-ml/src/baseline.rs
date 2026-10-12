@@ -3,16 +3,12 @@
 
 use chrono::{DateTime, Datelike, DurationRound, TimeDelta, Timelike, Utc};
 use hardy_core::{GymSchedule, Tz};
+use serde::{Deserialize, Serialize};
 
 use crate::{
-    confidence::{PredictionMethod, PredictionWithConfidence},
     history::History,
     samples::{ANCHOR_STEP, TARGET_TOLERANCE},
 };
-
-/// Days of history the baseline should be fitted on: enough weeks for the
-/// recency weighting to matter.
-pub const BASELINE_HISTORY_DAYS: i64 = 28;
 
 /// A reading this old counts half as much as one from today.
 const HALF_LIFE_DAYS: f64 = 14.0;
@@ -51,7 +47,7 @@ impl Weighted {
 }
 
 /// Fitted baseline; see the module docs.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Baseline {
     tz: Tz,
     quarters: Vec<Option<(f64, f64)>>,
@@ -170,32 +166,28 @@ impl Baseline {
     }
 }
 
-/// Baseline forecasts for each open hour `now + 1h ..= now + max_hours_ahead`,
-/// fitted on `history` (ideally [`BASELINE_HISTORY_DAYS`] long).
-pub fn baseline_forecast(
-    history: &History,
-    schedule: &GymSchedule,
-    now: DateTime<Utc>,
-    max_hours_ahead: u32,
-) -> Vec<PredictionWithConfidence> {
-    let baseline = Baseline::fit(history, schedule, max_hours_ahead);
-    (1..=max_hours_ahead)
-        .filter_map(|h| {
-            let target = now + TimeDelta::hours(i64::from(h));
-            schedule.is_open(&target).then(|| {
-                let predicted = baseline.predict(history, now, h);
-                let (_, spread) = baseline.typical(target);
-                PredictionWithConfidence::new(
-                    target,
-                    predicted,
-                    predicted - spread,
-                    predicted + spread,
-                    0.5,
-                    PredictionMethod::HistoricalAverage,
-                )
-            })
-        })
-        .collect()
+impl Baseline {
+    /// Forecast for any `target` after `now`: the anomaly is carried by the
+    /// share fitted for the surrounding whole hours (all of it at `now`).
+    pub fn predict_at(&self, history: &History, now: DateTime<Utc>, target: DateTime<Utc>) -> f64 {
+        #[allow(clippy::cast_precision_loss)]
+        let hours = ((target - now).num_seconds() as f64 / 3600.0).max(0.0);
+        let share = |h: f64| {
+            if h <= 0.0 {
+                1.0
+            } else {
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                self.carry(h as u32)
+            }
+        };
+        let lower = hours.floor();
+        let fraction = hours - lower;
+        let carry = share(lower) * (1.0 - fraction) + share(lower + 1.0) * fraction;
+        let correction = self
+            .anomaly(history, now)
+            .map_or(0.0, |anomaly| carry * anomaly);
+        (self.typical(target).0 + correction).clamp(0.0, 100.0)
+    }
 }
 
 fn quarter_index(t: DateTime<Utc>, tz: Tz) -> usize {
@@ -293,6 +285,33 @@ mod tests {
     }
 
     #[test]
+    fn test_baseline_predict_at_matches_hours_and_interpolates_between() -> Result<()> {
+        let level = |d: u32| if d.is_multiple_of(2) { 40.0 } else { 20.0 };
+        let mut points = readings(3, 28, |d, _, _| level(d))?;
+        points.extend(
+            readings(30, 30, |_, _, _| 40.0)?
+                .into_iter()
+                .filter(|(t, _)| local(30, 12, 0).is_ok_and(|now| *t <= now)),
+        );
+        let history = History::new(points);
+        let baseline = Baseline::fit(&history, &GymSchedule::default(), 6);
+        let now = local(30, 12, 0)?;
+
+        for h in 1..=3 {
+            let at = baseline.predict_at(&history, now, now + TimeDelta::hours(i64::from(h)));
+            assert!((at - baseline.predict(&history, now, h)).abs() < 1e-9);
+        }
+        let one = baseline.predict(&history, now, 1);
+        let two = baseline.predict(&history, now, 2);
+        let between = baseline.predict_at(&history, now, now + TimeDelta::minutes(90));
+        assert!(between >= one.min(two) - 1e-9 && between <= one.max(two) + 1e-9);
+        // Right now the whole anomaly applies.
+        let current = baseline.predict_at(&history, now, now);
+        assert!((current - 40.0).abs() < 1e-9, "{current}");
+        Ok(())
+    }
+
+    #[test]
     fn test_baseline_without_a_current_reading_is_the_typical_value() -> Result<()> {
         let history = History::new(readings(3, 16, |d, _, _| f64::from(d))?);
         let baseline = Baseline::fit(&history, &GymSchedule::default(), 6);
@@ -313,18 +332,6 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn test_baseline_forecast_covers_open_hours_only() -> Result<()> {
-        let history = History::new(readings(3, 16, |_, _, _| 30.0)?);
-        let schedule = GymSchedule::default();
-        // 20:30 on a Monday: 21:30 and 22:30 are open, later hours are not.
-        let now = local(17, 20, 30)?;
-        let points = baseline_forecast(&history, &schedule, now, 6);
-        assert_eq!(points.len(), 2);
-        assert!(points.iter().all(|p| schedule.is_open(&p.timestamp)));
-        Ok(())
-    }
-
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(1000))]
 
@@ -342,6 +349,12 @@ mod tests {
             let now = start + TimeDelta::minutes(now_minute);
             let predicted = baseline.predict(&history, now, hours_ahead);
             prop_assert!((0.0..=100.0).contains(&predicted), "{predicted}");
+            let quarter = baseline.predict_at(
+                &history,
+                now,
+                now + TimeDelta::minutes(i64::from(hours_ahead) * 45),
+            );
+            prop_assert!((0.0..=100.0).contains(&quarter), "{quarter}");
             let carry = baseline.carry(hours_ahead);
             prop_assert!((0.0..=1.0).contains(&carry), "{carry}");
             let (mean, spread) = baseline.typical(now);

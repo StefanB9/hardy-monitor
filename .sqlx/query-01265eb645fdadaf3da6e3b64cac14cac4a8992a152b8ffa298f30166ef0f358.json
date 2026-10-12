@@ -1,0 +1,40 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT model, artifact AS \"artifact!\"\n            FROM forecast_models\n            WHERE artifact IS NOT NULL AND artifact_version = $1\n            ORDER BY model\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "model",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "forecast_models",
+            "name": "model"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "artifact!",
+        "type_info": "Bytea",
+        "origin": {
+          "Table": {
+            "table": "forecast_models",
+            "name": "artifact"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      true
+    ]
+  },
+  "hash": "01265eb645fdadaf3da6e3b64cac14cac4a8992a152b8ffa298f30166ef0f358"
+}

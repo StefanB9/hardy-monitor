@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            DELETE FROM benchmark_runs\n            WHERE id NOT IN (SELECT id FROM benchmark_runs ORDER BY id DESC LIMIT $1)\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "5ab1e1d3f85a7aa3a18087f32cf83619b286af1758be6f2389272bd49aae393c"
+}

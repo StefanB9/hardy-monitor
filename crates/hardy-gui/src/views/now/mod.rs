@@ -28,7 +28,8 @@ pub struct NowProps<'a> {
     pub high_threshold: f64,
     pub quiet_window: Option<&'a QuietWindow>,
     pub forecast: &'a [PredictionWithConfidence],
-    pub has_model: bool,
+    /// Name of the model behind the forecast, if one was published.
+    pub forecast_source: Option<&'static str>,
     /// Alerts armed and not expired.
     pub alert_active: bool,
     pub alert_threshold: f64,

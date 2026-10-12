@@ -49,15 +49,6 @@ impl Algorithm {
     }
 }
 
-impl From<&hardy_core::MlAlgorithm> for Algorithm {
-    fn from(algorithm: &hardy_core::MlAlgorithm) -> Self {
-        match algorithm {
-            hardy_core::MlAlgorithm::RandomForest => Algorithm::RandomForest,
-            hardy_core::MlAlgorithm::LinearRegression => Algorithm::Linear,
-        }
-    }
-}
-
 /// Random forest hyperparameters, validated against the size caps.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RfParams {
@@ -133,7 +124,7 @@ impl RfParams {
 }
 
 /// A fitted model.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Model {
     Linear {
         coefficients: Vec<f64>,

@@ -5,14 +5,13 @@ use std::{path::PathBuf, time::Instant};
 
 use hardy_core::{
     alert::AlertSettings,
-    db::{HorizonAccuracy, HourlyAverage, MlState, ModelInfo, OccupancyLog},
+    db::{HorizonAccuracy, HourlyAverage, LiveForecast, OccupancyLog},
     error::AppError,
 };
-use hardy_ml::{ModelArtifact, features::FEATURE_VERSION};
 use iced::Task;
 
 use super::{HardyMonitorApp, Message, loads::ErrorSource};
-use crate::time_range::AnalyticsRange;
+use crate::{forecasting::SuiteStatus, time_range::AnalyticsRange};
 
 /// Wraps a database error with the failing operation.
 fn db_err(op: &'static str) -> impl Fn(anyhow::Error) -> AppError {
@@ -183,43 +182,42 @@ impl HardyMonitorApp {
         )
     }
 
-    pub(super) fn load_model_status(&mut self) -> Task<Message> {
+    /// The forecast models' states, the newest benchmark and the selection.
+    pub(super) fn load_suite_status(&mut self) -> Task<Message> {
         let db = self.db.clone();
         self.load(
-            async move {
-                let latest = db.latest_model_info(FEATURE_VERSION).await?;
-                let state = db.get_ml_state().await?;
-                Ok((latest, state))
-            },
-            |r: anyhow::Result<(Option<ModelInfo>, MlState)>| {
-                Message::ModelStatusLoaded(r.map_err(db_err("load_model_status")))
+            async move { suite_status(&db).await },
+            |r: anyhow::Result<SuiteStatus>| {
+                Message::SuiteStatusLoaded(r.map_err(db_err("load_suite_status")))
             },
         )
     }
 
-    pub(super) fn load_model(&mut self, info: ModelInfo) -> Task<Message> {
+    /// The default forecast the daemon published last.
+    pub(super) fn load_published_forecast(&mut self) -> Task<Message> {
         let db = self.db.clone();
         self.load(
             async move {
-                let bytes = db.load_model(info.id).await.map_err(db_err("load_model"))?;
-                let artifact = ModelArtifact::from_bytes(&bytes)
-                    .map_err(|e| AppError::MlTraining(e.to_string()))?;
-                Ok((info, std::sync::Arc::new(artifact)))
+                db.live_forecasts(&[hardy_ml::live::SELECTED.to_string()])
+                    .await
             },
-            Message::ModelLoaded,
+            |r: anyhow::Result<Vec<LiveForecast>>| {
+                Message::PublishedForecastLoaded(r.map_err(db_err("live_forecasts")))
+            },
         )
     }
 
-    pub(super) fn request_retrain(&mut self) -> Task<Message> {
+    /// Asks the daemon for a forecast run now.
+    pub(super) fn request_forecast_run(&mut self) -> Task<Message> {
         let db = self.db.clone();
         let now = self.clock.now_utc();
         self.load(
             async move {
                 db.request_retrain(now).await?;
-                Ok((None, db.get_ml_state().await?))
+                suite_status(&db).await
             },
-            |r: anyhow::Result<(Option<ModelInfo>, MlState)>| {
-                Message::ModelStatusLoaded(r.map_err(db_err("request_retrain")))
+            |r: anyhow::Result<SuiteStatus>| {
+                Message::SuiteStatusLoaded(r.map_err(db_err("request_forecast_run")))
             },
         )
     }
@@ -239,4 +237,13 @@ impl HardyMonitorApp {
             Message::ExportCompleted,
         )
     }
+}
+
+async fn suite_status(db: &hardy_core::Database) -> anyhow::Result<SuiteStatus> {
+    Ok(SuiteStatus {
+        records: db.model_records().await?,
+        benchmark: db.latest_benchmark().await?,
+        selection: db.forecast_selection().await?,
+        state: db.get_ml_state().await?,
+    })
 }

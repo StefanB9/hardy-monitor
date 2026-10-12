@@ -25,7 +25,7 @@ fn entry(
         made_at,
         target: made_at + TimeDelta::hours(i64::from(hours)),
         horizon_hours: hours,
-        model_id: model.then_some(7),
+        model: model.then(|| "naive".to_string()),
         predicted,
         low: predicted - 5.0,
         high: predicted + 5.0,
