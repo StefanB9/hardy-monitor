@@ -304,7 +304,20 @@ rejected alternatives are in the session record of this plan's discussion.
    stores its state at the end of the fit and filters forward from there to
    the origin with fixed parameters. Fourier regression + ARIMA errors moved
    to phase 5, where AutoARIMA arrives.
-5. anofox + stlrs statistical models.
+5. anofox + stlrs statistical models. As built: anofox (exact pin, no
+   default features) cannot condition on new data, so every model runs its
+   full search and fit on the last 56 days up to each origin (fits measured
+   at ≤ 0.25 s on 8 weeks, AutoTBATS ≈ 1 s); `fit` only prepares the
+   weekly profile, and nothing of anofox is persisted. Seasonal models see
+   the full slot grid: closed slots 0, missing open slots filled with the
+   weekly profile. AutoARIMA and the residual ARIMA of the Fourier model run
+   on the open-slot deviation from the profile. Models: AutoETS (m = 672,
+   96 under two weeks), AutoARIMA, SARIMA(1,0,1)(1,1,1)[96],
+   STL[96] + AutoETS / AutoARIMA, MSTL[96, 672] + AutoETS / AutoARIMA
+   (stlrs, seasonal part repeated from the last period), AutoTBATS[96, 672],
+   MFLES[96, 672], AutoTheta[672], Fourier regression (faer) + AutoARIMA
+   errors. Exploding fits are caught by the output gate; golden tests pin
+   each model's output on a fixed series.
 6. Regression and ML models.
 7. Neural networks.
 
