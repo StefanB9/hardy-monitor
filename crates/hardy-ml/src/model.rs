@@ -133,7 +133,7 @@ impl RfParams {
 }
 
 /// A fitted model.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Model {
     Linear {
         coefficients: Vec<f64>,

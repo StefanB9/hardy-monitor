@@ -3,6 +3,7 @@
 
 use chrono::{DateTime, Datelike, DurationRound, TimeDelta, Timelike, Utc};
 use hardy_core::{GymSchedule, Tz};
+use serde::{Deserialize, Serialize};
 
 use crate::{
     confidence::{PredictionMethod, PredictionWithConfidence},
@@ -51,7 +52,7 @@ impl Weighted {
 }
 
 /// Fitted baseline; see the module docs.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Baseline {
     tz: Tz,
     quarters: Vec<Option<(f64, f64)>>,
@@ -166,6 +167,30 @@ impl Baseline {
         let correction = self
             .anomaly(history, now)
             .map_or(0.0, |anomaly| self.carry(hours_ahead) * anomaly);
+        (self.typical(target).0 + correction).clamp(0.0, 100.0)
+    }
+}
+
+impl Baseline {
+    /// Forecast for any `target` after `now`: the anomaly is carried by the
+    /// share fitted for the surrounding whole hours (all of it at `now`).
+    pub fn predict_at(&self, history: &History, now: DateTime<Utc>, target: DateTime<Utc>) -> f64 {
+        #[allow(clippy::cast_precision_loss)]
+        let hours = ((target - now).num_seconds() as f64 / 3600.0).max(0.0);
+        let share = |h: f64| {
+            if h <= 0.0 {
+                1.0
+            } else {
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                self.carry(h as u32)
+            }
+        };
+        let lower = hours.floor();
+        let fraction = hours - lower;
+        let carry = share(lower) * (1.0 - fraction) + share(lower + 1.0) * fraction;
+        let correction = self
+            .anomaly(history, now)
+            .map_or(0.0, |anomaly| carry * anomaly);
         (self.typical(target).0 + correction).clamp(0.0, 100.0)
     }
 }
@@ -289,6 +314,33 @@ mod tests {
             "{predicted} vs typical {typical}"
         );
         assert!((predicted - 40.0).abs() < 3.0, "{predicted}");
+        Ok(())
+    }
+
+    #[test]
+    fn test_baseline_predict_at_matches_hours_and_interpolates_between() -> Result<()> {
+        let level = |d: u32| if d.is_multiple_of(2) { 40.0 } else { 20.0 };
+        let mut points = readings(3, 28, |d, _, _| level(d))?;
+        points.extend(
+            readings(30, 30, |_, _, _| 40.0)?
+                .into_iter()
+                .filter(|(t, _)| local(30, 12, 0).is_ok_and(|now| *t <= now)),
+        );
+        let history = History::new(points);
+        let baseline = Baseline::fit(&history, &GymSchedule::default(), 6);
+        let now = local(30, 12, 0)?;
+
+        for h in 1..=3 {
+            let at = baseline.predict_at(&history, now, now + TimeDelta::hours(i64::from(h)));
+            assert!((at - baseline.predict(&history, now, h)).abs() < 1e-9);
+        }
+        let one = baseline.predict(&history, now, 1);
+        let two = baseline.predict(&history, now, 2);
+        let between = baseline.predict_at(&history, now, now + TimeDelta::minutes(90));
+        assert!(between >= one.min(two) - 1e-9 && between <= one.max(two) + 1e-9);
+        // Right now the whole anomaly applies.
+        let current = baseline.predict_at(&history, now, now);
+        assert!((current - 40.0).abs() < 1e-9, "{current}");
         Ok(())
     }
 

@@ -2,6 +2,7 @@
 //! persistence. Shared by the daemon (nightly training) and the GUI.
 
 pub mod baseline;
+pub mod benchmark;
 pub mod confidence;
 pub mod config;
 pub mod error;
@@ -9,6 +10,7 @@ pub mod evaluation;
 pub mod features;
 pub mod forecast;
 pub mod forecast_log;
+pub mod grid;
 pub mod history;
 pub mod maintenance;
 pub mod model;
@@ -16,6 +18,9 @@ pub mod persistence;
 pub mod profile;
 pub mod retrain;
 pub mod samples;
+pub mod suite;
+#[cfg(test)]
+mod test_support;
 pub mod training;
 
 pub use baseline::{BASELINE_HISTORY_DAYS, Baseline, baseline_forecast};
