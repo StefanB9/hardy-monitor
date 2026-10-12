@@ -318,7 +318,16 @@ rejected alternatives are in the session record of this plan's discussion.
    MFLES[96, 672], AutoTheta[672], Fourier regression (faer) + AutoARIMA
    errors. Exploding fits are caught by the output gate; golden tests pin
    each model's output on a fixed series.
-6. Regression and ML models.
+6. Regression and ML models. As built: every model learns the deviation
+   from the weekly profile at the target slot from slot-level features
+   (horizon, target calendar, profile value, recent deviations: last slot,
+   1 h, 3 h, trend, today so far, same time yesterday and last week). One
+   model per horizon bucket (≤ 1 h, 1–3 h, 3–24 h) with the horizon as a
+   feature; training rows from hourly origins, every 4th step beyond 3 h
+   (SVR on the newest 4 000). The new ridge and random forest take over the
+   `ridge` / `random_forest` ids; the old pipeline (features, samples,
+   model) and linfa go. Quantile regression fits the median only: its band
+   is conformal like every other model's.
 7. Neural networks.
 
 Each phase: fmt, `clippy --workspace --all-targets`, `check --workspace
