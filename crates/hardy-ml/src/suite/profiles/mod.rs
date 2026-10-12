@@ -37,12 +37,12 @@ pub(in crate::suite) fn slot_of_week(end: DateTime<Utc>, tz: Tz) -> usize {
 }
 
 /// The gym-local date the slot ending at `end` belongs to.
-pub(super) fn slot_date(end: DateTime<Utc>, tz: Tz) -> NaiveDate {
+pub(in crate::suite) fn slot_date(end: DateTime<Utc>, tz: Tz) -> NaiveDate {
     slot_time(end, tz).date_naive()
 }
 
 /// Weekend and public holidays follow the weekend opening hours.
-pub(super) fn is_weekend_like(date: NaiveDate) -> bool {
+pub(in crate::suite) fn is_weekend_like(date: NaiveDate) -> bool {
     date.weekday().number_from_monday() > 5 || is_bavarian_holiday(date)
 }
 

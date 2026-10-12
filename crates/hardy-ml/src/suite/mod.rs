@@ -13,6 +13,7 @@ mod packaged;
 mod profiles;
 pub mod safety;
 mod statistical;
+mod tabular;
 
 use chrono::{DateTime, TimeDelta, Utc};
 use hardy_core::GymSchedule;
@@ -277,9 +278,16 @@ registry! {
         AutoTheta(packaged::AutoTheta) = "auto_theta", "AutoTheta", Statistical;
         FourierArima(packaged::FourierArima) =
             "fourier_arima", "Fourier regression + ARIMA errors", Statistical;
-        Ridge(legacy::Ridge) = "ridge", "Ridge regression", MachineLearning;
-        RandomForest(legacy::RandomForest) =
-            "random_forest", "Random forest", MachineLearning;
+        Ridge(tabular::Ridge) = "ridge", "Ridge regression", MachineLearning;
+        ElasticNet(tabular::ElasticNet) = "elastic_net", "Elastic-net regression", MachineLearning;
+        SplineGam(tabular::SplineGam) = "spline_gam", "Spline regression (GAM)", MachineLearning;
+        MedianRegression(tabular::MedianRegression) =
+            "median_regression", "Median (quantile) regression", MachineLearning;
+        RandomForest(tabular::RandomForest) = "random_forest", "Random forest", MachineLearning;
+        BoostedTrees(tabular::BoostedTrees) =
+            "boosted_trees", "Gradient-boosted trees", MachineLearning;
+        SupportVectors(tabular::SupportVectors) =
+            "svr", "Support-vector regression", MachineLearning;
     }
     ensembles {
         MeanEnsemble = "ensemble_mean", "Mean of the best five", Mean;
