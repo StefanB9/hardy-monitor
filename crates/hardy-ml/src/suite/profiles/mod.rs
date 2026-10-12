@@ -24,14 +24,14 @@ fn slot_time(end: DateTime<Utc>, tz: Tz) -> chrono::DateTime<Tz> {
 }
 
 /// Index of the slot ending at `end` within its gym-local day (0–95).
-pub(super) fn slot_of_day(end: DateTime<Utc>, tz: Tz) -> usize {
+pub(in crate::suite) fn slot_of_day(end: DateTime<Utc>, tz: Tz) -> usize {
     let local = slot_time(end, tz);
     local.hour() as usize * 4 + local.minute() as usize / 15
 }
 
 /// Index of the slot ending at `end` within its gym-local week (0–671,
 /// Monday first).
-pub(super) fn slot_of_week(end: DateTime<Utc>, tz: Tz) -> usize {
+pub(in crate::suite) fn slot_of_week(end: DateTime<Utc>, tz: Tz) -> usize {
     let day = slot_time(end, tz).weekday().num_days_from_monday() as usize;
     day * SLOTS_PER_DAY + slot_of_day(end, tz)
 }
@@ -48,7 +48,7 @@ pub(super) fn is_weekend_like(date: NaiveDate) -> bool {
 
 /// `(end, value)` of every open slot with a reading in `grid` ending at or
 /// after `from`.
-pub(super) fn open_values<'a>(
+pub(in crate::suite) fn open_values<'a>(
     data: &'a Observed<'_>,
     grid: GridView<'a>,
     from: DateTime<Utc>,
@@ -66,14 +66,14 @@ pub(super) fn open_values<'a>(
 /// observed there. Missing slots fall back to the same time on other days
 /// of the same kind (weekday or weekend), then to the overall mean.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub(super) struct WeeklyProfile {
+pub(in crate::suite) struct WeeklyProfile {
     tz: Tz,
     week: Vec<f64>,
 }
 
 impl WeeklyProfile {
     /// The profile of the open slots in `data` from its first reading on.
-    pub(super) fn fit(data: &Observed<'_>) -> Self {
+    pub(in crate::suite) fn fit(data: &Observed<'_>) -> Self {
         let tz = data.schedule().timezone();
         let from = data.history().first_time().unwrap_or(data.origin());
         let mut sums = vec![(0.0_f64, 0_u32); SLOTS_PER_WEEK];
@@ -107,7 +107,7 @@ impl WeeklyProfile {
     }
 
     /// Typical value of the slot ending at `end`.
-    pub(super) fn at(&self, end: DateTime<Utc>) -> f64 {
+    pub(in crate::suite) fn at(&self, end: DateTime<Utc>) -> f64 {
         self.week[slot_of_week(end, self.tz)]
     }
 }

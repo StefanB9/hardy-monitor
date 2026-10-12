@@ -11,6 +11,7 @@ mod legacy;
 pub(crate) mod linalg;
 mod profiles;
 pub mod safety;
+mod statistical;
 
 use chrono::{DateTime, TimeDelta, Utc};
 use hardy_core::GymSchedule;
@@ -104,6 +105,7 @@ pub trait Forecaster {
 pub enum Family {
     Baseline,
     Profile,
+    Statistical,
     MachineLearning,
     Ensemble,
 }
@@ -114,6 +116,7 @@ impl Family {
         match self {
             Family::Baseline => "Baselines",
             Family::Profile => "Profile-based",
+            Family::Statistical => "Statistical",
             Family::MachineLearning => "Regression and machine learning",
             Family::Ensemble => "Ensembles",
         }
@@ -248,6 +251,19 @@ registry! {
             "profile_residual_ar", "Weekly profile + residual autoregression", Profile;
         SimilarDays(profiles::SimilarDays) = "similar_days", "Similar days", Profile;
         DailyPca(profiles::DailyPca) = "daily_pca", "Daily-profile PCA + regression", Profile;
+        SimpleSmoothing(statistical::SimpleSmoothing) =
+            "simple_smoothing", "Simple exponential smoothing", Statistical;
+        HoltSmoothing(statistical::HoltSmoothing) = "holt", "Holt's linear trend", Statistical;
+        DampedHolt(statistical::DampedHolt) = "damped_holt", "Damped Holt", Statistical;
+        Theta(statistical::Theta) = "theta", "Theta method", Statistical;
+        Autoregression(statistical::Autoregression) =
+            "autoregression", "Autoregression", Statistical;
+        HoltWintersDaily(statistical::HoltWintersDaily) =
+            "holt_winters_daily", "Holt–Winters (daily season)", Statistical;
+        HoltWintersWeekly(statistical::HoltWintersWeekly) =
+            "holt_winters_weekly", "Holt–Winters (weekly season)", Statistical;
+        StructuralModel(statistical::StructuralModel) =
+            "structural", "Structural model (Kalman filter)", Statistical;
         Ridge(legacy::Ridge) = "ridge", "Ridge regression", MachineLearning;
         RandomForest(legacy::RandomForest) =
             "random_forest", "Random forest", MachineLearning;
