@@ -6,14 +6,9 @@ use hardy_core::{GymSchedule, Tz};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    confidence::{PredictionMethod, PredictionWithConfidence},
     history::History,
     samples::{ANCHOR_STEP, TARGET_TOLERANCE},
 };
-
-/// Days of history the baseline should be fitted on: enough weeks for the
-/// recency weighting to matter.
-pub const BASELINE_HISTORY_DAYS: i64 = 28;
 
 /// A reading this old counts half as much as one from today.
 const HALF_LIFE_DAYS: f64 = 14.0;
@@ -195,34 +190,6 @@ impl Baseline {
     }
 }
 
-/// Baseline forecasts for each open hour `now + 1h ..= now + max_hours_ahead`,
-/// fitted on `history` (ideally [`BASELINE_HISTORY_DAYS`] long).
-pub fn baseline_forecast(
-    history: &History,
-    schedule: &GymSchedule,
-    now: DateTime<Utc>,
-    max_hours_ahead: u32,
-) -> Vec<PredictionWithConfidence> {
-    let baseline = Baseline::fit(history, schedule, max_hours_ahead);
-    (1..=max_hours_ahead)
-        .filter_map(|h| {
-            let target = now + TimeDelta::hours(i64::from(h));
-            schedule.is_open(&target).then(|| {
-                let predicted = baseline.predict(history, now, h);
-                let (_, spread) = baseline.typical(target);
-                PredictionWithConfidence::new(
-                    target,
-                    predicted,
-                    predicted - spread,
-                    predicted + spread,
-                    0.5,
-                    PredictionMethod::HistoricalAverage,
-                )
-            })
-        })
-        .collect()
-}
-
 fn quarter_index(t: DateTime<Utc>, tz: Tz) -> usize {
     let local = t.with_timezone(&tz);
     let weekday = local.weekday().num_days_from_monday() as usize;
@@ -365,18 +332,6 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn test_baseline_forecast_covers_open_hours_only() -> Result<()> {
-        let history = History::new(readings(3, 16, |_, _, _| 30.0)?);
-        let schedule = GymSchedule::default();
-        // 20:30 on a Monday: 21:30 and 22:30 are open, later hours are not.
-        let now = local(17, 20, 30)?;
-        let points = baseline_forecast(&history, &schedule, now, 6);
-        assert_eq!(points.len(), 2);
-        assert!(points.iter().all(|p| schedule.is_open(&p.timestamp)));
-        Ok(())
-    }
-
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(1000))]
 
@@ -394,6 +349,12 @@ mod tests {
             let now = start + TimeDelta::minutes(now_minute);
             let predicted = baseline.predict(&history, now, hours_ahead);
             prop_assert!((0.0..=100.0).contains(&predicted), "{predicted}");
+            let quarter = baseline.predict_at(
+                &history,
+                now,
+                now + TimeDelta::minutes(i64::from(hours_ahead) * 45),
+            );
+            prop_assert!((0.0..=100.0).contains(&quarter), "{quarter}");
             let carry = baseline.carry(hours_ahead);
             prop_assert!((0.0..=1.0).contains(&carry), "{carry}");
             let (mean, spread) = baseline.typical(now);

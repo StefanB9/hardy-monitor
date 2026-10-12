@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n            SELECT\n                (f.target AT TIME ZONE $3)::date AS \"day!\",\n                f.horizon_hours AS \"horizon_hours!\",\n                COUNT(*) AS \"scored!\",\n                COUNT(f.model_id) AS \"from_model!\",\n                AVG(ABS(f.predicted - o.percentage)) AS \"forecast_mae!\",\n                AVG(ABS(f.baseline - o.percentage)) AS \"baseline_mae!\"\n            FROM forecast_log f\n            JOIN occupancy_logs o\n              ON o.timestamp = f.target AND o.source IN ('measured', 'smoothed')\n            WHERE f.target >= $1 AND f.target < $2\n            GROUP BY 1, 2\n            ORDER BY 1, 2\n            ",
+  "query": "\n            SELECT\n                (f.target AT TIME ZONE $3)::date AS \"day!\",\n                f.horizon_hours AS \"horizon_hours!\",\n                COUNT(*) AS \"scored!\",\n                COUNT(f.model) AS \"from_model!\",\n                AVG(ABS(f.predicted - o.percentage)) AS \"forecast_mae!\",\n                AVG(ABS(f.baseline - o.percentage)) AS \"baseline_mae!\"\n            FROM forecast_log f\n            JOIN occupancy_logs o\n              ON o.timestamp = f.target AND o.source IN ('measured', 'smoothed')\n            WHERE f.target >= $1 AND f.target < $2\n            GROUP BY 1, 2\n            ORDER BY 1, 2\n            ",
   "describe": {
     "columns": [
       {
@@ -61,5 +61,5 @@
       null
     ]
   },
-  "hash": "a4a35c59c6e607abf290ec6dc49b92aa58d51dfe6590596312ed0634d9f54666"
+  "hash": "d55c8209de66bc9f3c275624b9639821f44f4ef3324bfd062afd27689203ab61"
 }

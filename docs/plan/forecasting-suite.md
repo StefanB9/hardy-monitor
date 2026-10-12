@@ -268,10 +268,13 @@ rejected alternatives are in the session record of this plan's discussion.
 1. Grid, interface, registry, benchmark, conformal intervals, safety,
    new tables, the 8 baselines, nightly run + live publishing in the daemon,
    GUI reading `live_forecasts` and a basic leaderboard; retire the old
-   pipeline.
-2. Profile models (the old baseline lives on here), GUI model picker and
-   overlay.
-3. Ensembles and per-bucket selection.
+   pipeline. Done in phase 1 as well, so nothing is lost meanwhile: the old
+   profile baseline ("weekly profile + decaying offset") and the old ridge /
+   random forest (hourly, interpolated to slots) run as suite models until
+   phases 2 and 6 replace them, and per-bucket selection drives the default
+   forecast. `ml_state` stays (it coordinates the nightly run).
+2. The other profile models, GUI model picker and overlay.
+3. Ensembles.
 4. Hand-written statistical models.
 5. anofox + stlrs statistical models.
 6. Regression and ML models.

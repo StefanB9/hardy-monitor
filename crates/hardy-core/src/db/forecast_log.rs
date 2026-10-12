@@ -12,12 +12,12 @@ pub struct ForecastLogEntry {
     pub made_at: DateTime<Utc>,
     pub target: DateTime<Utc>,
     pub horizon_hours: u32,
-    /// Model that produced `predicted`; `None` for plain averages.
-    pub model_id: Option<i64>,
+    /// Key of the model that produced `predicted`.
+    pub model: Option<String>,
     pub predicted: f64,
     pub low: f64,
     pub high: f64,
-    /// Plain slot-average forecast for the same target.
+    /// The profile baseline's forecast for the same target, for comparison.
     pub baseline: f64,
 }
 
@@ -29,7 +29,7 @@ pub struct HorizonAccuracy {
     pub horizon_hours: u32,
     /// Forecasts compared with a reading.
     pub scored: i64,
-    /// Of those, made by a model (the rest fell back to averages).
+    /// Of those, attributed to a model.
     pub from_model: i64,
     /// Mean absolute error of what was forecast.
     pub forecast_mae: f64,
@@ -59,7 +59,7 @@ impl Database {
             made.push(e.made_at);
             target.push(e.target);
             horizon.push(i16::try_from(e.horizon_hours).context("horizon out of range")?);
-            model.push(e.model_id);
+            model.push(e.model.clone());
             predicted.push(e.predicted);
             low.push(e.low);
             high.push(e.high);
@@ -68,9 +68,9 @@ impl Database {
         let result = sqlx::query!(
             r#"
             INSERT INTO forecast_log
-                (made_at, target, horizon_hours, model_id, predicted, low, high, baseline)
+                (made_at, target, horizon_hours, model, predicted, low, high, baseline)
             SELECT * FROM UNNEST(
-                $1::timestamptz[], $2::timestamptz[], $3::int2[], $4::int8[],
+                $1::timestamptz[], $2::timestamptz[], $3::int2[], $4::text[],
                 $5::float8[], $6::float8[], $7::float8[], $8::float8[]
             )
             ON CONFLICT (made_at, horizon_hours) DO NOTHING
@@ -78,7 +78,7 @@ impl Database {
             &made,
             &target,
             &horizon,
-            &model as &[Option<i64>],
+            &model as &[Option<String>],
             &predicted,
             &low,
             &high,
@@ -115,7 +115,7 @@ impl Database {
                 (f.target AT TIME ZONE $3)::date AS "day!",
                 f.horizon_hours AS "horizon_hours!",
                 COUNT(*) AS "scored!",
-                COUNT(f.model_id) AS "from_model!",
+                COUNT(f.model) AS "from_model!",
                 AVG(ABS(f.predicted - o.percentage)) AS "forecast_mae!",
                 AVG(ABS(f.baseline - o.percentage)) AS "baseline_mae!"
             FROM forecast_log f

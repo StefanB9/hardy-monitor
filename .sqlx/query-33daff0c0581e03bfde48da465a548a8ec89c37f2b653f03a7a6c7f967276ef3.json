@@ -1,0 +1,20 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO live_forecasts (model, target, made_at, value, low, high, source)\n            SELECT * FROM UNNEST(\n                $1::text[], $2::timestamptz[], $3::timestamptz[], $4::float8[],\n                $5::float8[], $6::float8[], $7::text[]\n            )\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "TextArray",
+        "TimestamptzArray",
+        "TimestamptzArray",
+        "Float8Array",
+        "Float8Array",
+        "Float8Array",
+        "TextArray"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "33daff0c0581e03bfde48da465a548a8ec89c37f2b653f03a7a6c7f967276ef3"
+}

@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM forecast_selection",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "6537fc96c853c1d597794b422edfafc4c7a13ac18b63abdb3c522a0402e36d70"
+}

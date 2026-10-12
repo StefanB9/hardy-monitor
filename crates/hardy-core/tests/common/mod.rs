@@ -37,6 +37,8 @@ pub struct TestDatabase {
     db_name: String,
     admin_pool: PgPool,
     pub db: Database,
+    /// Connection URL, for checks the `Database` API does not offer.
+    pub url: String,
 }
 
 #[allow(dead_code)]
@@ -52,6 +54,7 @@ impl TestDatabase {
             db_name,
             admin_pool,
             db,
+            url: test_url,
         })
     }
 

@@ -1,0 +1,98 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT id, started_at, finished_at, first_day, last_day, days, origins\n            FROM benchmark_runs\n            ORDER BY id DESC\n            LIMIT 1\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "benchmark_runs",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "started_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "benchmark_runs",
+            "name": "started_at"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "finished_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "benchmark_runs",
+            "name": "finished_at"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "first_day",
+        "type_info": "Date",
+        "origin": {
+          "Table": {
+            "table": "benchmark_runs",
+            "name": "first_day"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "last_day",
+        "type_info": "Date",
+        "origin": {
+          "Table": {
+            "table": "benchmark_runs",
+            "name": "last_day"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "days",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "benchmark_runs",
+            "name": "days"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "origins",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "benchmark_runs",
+            "name": "origins"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "2be494d5971634f58ee2cb98f0340af5722b3a4ab0bf73508afc19109a893546"
+}

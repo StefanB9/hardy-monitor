@@ -18,13 +18,14 @@ use crate::{
     error::MlError,
     grid::{Grid, GridView, HORIZON_STEPS, is_open_slot},
     history::History,
-    persistence::MAX_DECOMPRESSED_BYTES,
 };
 
 /// Version of the stored model bytes; a stored model with another version
 /// is refitted instead of loaded.
 pub const ARTIFACT_VERSION: u32 = 1;
 const ZSTD_LEVEL: i32 = 3;
+/// Safety limit when decompressing a stored model.
+const MAX_DECOMPRESSED_BYTES: usize = 64 * 1024 * 1024;
 /// Raw forecasts outside this range (before clipping to 0–100) mean the
 /// model has gone wrong (e.g. an exploding fit), not that it is a bit off.
 const SANE_RANGE: std::ops::RangeInclusive<f64> = -50.0..=150.0;

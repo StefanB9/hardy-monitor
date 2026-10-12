@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM live_forecasts",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "c247396994ce160756f628f1ccb6cfbc233eaf09dd314c4098acb0dfc251dc43"
+}
