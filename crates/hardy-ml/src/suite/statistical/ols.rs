@@ -5,7 +5,7 @@ use faer::{Mat, prelude::SolveLstsq};
 /// Coefficients minimising `‖X b − y‖²`, with `x` row-major (`y.len()` rows
 /// of `cols` columns). `None` with fewer rows than columns or a
 /// rank-deficient `X`.
-pub(super) fn least_squares(x: &[f64], y: &[f64], cols: usize) -> Option<Vec<f64>> {
+pub(in crate::suite) fn least_squares(x: &[f64], y: &[f64], cols: usize) -> Option<Vec<f64>> {
     let rows = y.len();
     if cols == 0 || rows < cols || x.len() != rows * cols {
         return None;
