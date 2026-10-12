@@ -149,7 +149,6 @@ Simple mean, median, validation-weighted, horizon-dependent, stacking.
 | Holt–Winters (additive, m = 96 and m = 672) | hand-written, argmin | 2 seasons |
 | Autoregression | OLS on lags (faer) | 1 day |
 | Theta | hand-written (Assimakopoulos & Nikolopoulos 2000) on the deseasonalised series | 2 days |
-| Fourier regression + ARIMA errors | Fourier OLS (faer) + AutoARIMA on residuals (phase 5 crate) | 7 days |
 | Structural state-space / Kalman | hand-written local linear trend + trigonometric seasonal states, MLE via argmin (Durbin & Koopman 2012) | 2 days |
 
 ### Phase 5 — statistical, anofox-forecast + stlrs
@@ -164,6 +163,7 @@ Simple mean, median, validation-weighted, horizon-dependent, stacking.
 | TBATS / AutoTBATS | anofox | 2 days |
 | MFLES | anofox | 2 days |
 | AutoTheta | anofox | 2 days |
+| Fourier regression + ARIMA errors (moved from phase 4) | Fourier OLS (faer) + AutoARIMA on residuals | 7 days |
 
 Persisted: the selected inner model (the `Auto*` search objects and the MSTL
 forecaster do not serialise), plus the stlrs seasonal components.
@@ -294,7 +294,16 @@ rejected alternatives are in the session record of this plan's discussion.
    final weights (fitted on every backtest day) are stored as their
    artifact in `forecast_models`, so no migration; the daemon combines the
    members' live forecasts with them.
-4. Hand-written statistical models.
+4. Hand-written statistical models. As built: simple exponential smoothing,
+   Holt, damped Holt, autoregression and Theta run on the deviation from the
+   weekly profile (forecast = profile + model), Holt–Winters (m = 96 and
+   672) and the structural Kalman model on occupancy itself. Closed slots
+   are skipped (missing: time advances, nothing is updated). Smoothing
+   parameters and state-space variances by Nelder–Mead (argmin) on the
+   one-step errors; the AR order by AIC with OLS through faer. Each model
+   stores its state at the end of the fit and filters forward from there to
+   the origin with fixed parameters. Fourier regression + ARIMA errors moved
+   to phase 5, where AutoARIMA arrives.
 5. anofox + stlrs statistical models.
 6. Regression and ML models.
 7. Neural networks.
