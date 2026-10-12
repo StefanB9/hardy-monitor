@@ -10,13 +10,12 @@ argmin = { workspace = true }
 argmin-math = { workspace = true }
 chrono = { workspace = true }
 faer = { workspace = true }
+forust-ml = { workspace = true }
 hardy-core = { version = "0.1.0", path = "../hardy-core" }
-linfa = { workspace = true }
-linfa-linear = { workspace = true }
-ndarray = { workspace = true }
 postcard = { workspace = true }
 rayon = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
 smartcore = { workspace = true }
 stlrs = { workspace = true }
 thiserror = { workspace = true }

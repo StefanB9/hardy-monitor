@@ -210,6 +210,25 @@ impl<'a> GridView<'a> {
         Some((self.first_end + SLOT * steps, *value))
     }
 
+    /// The same view cut back to an earlier `origin` (a later one is
+    /// clamped to this view's own).
+    #[must_use]
+    pub fn until(&self, origin: DateTime<Utc>) -> GridView<'a> {
+        let origin = floor_to_slot(origin).min(self.origin);
+        let available = if origin < self.first_end {
+            0
+        } else {
+            usize::try_from((origin - self.first_end).num_minutes() / SLOT.num_minutes())
+                .map_or(0, |i| i + 1)
+                .min(self.values.len())
+        };
+        GridView {
+            first_end: self.first_end,
+            values: &self.values[..available],
+            origin,
+        }
+    }
+
     /// End of the `step`-th slot after the origin (`step` ≥ 1).
     pub fn step_end(&self, step: usize) -> DateTime<Utc> {
         let steps = i32::try_from(step).unwrap_or(i32::MAX);
@@ -292,6 +311,22 @@ mod tests {
         assert_eq!(view.last_known(), Some((local(0, 10, 0), 40.0)));
         assert_eq!(view.step_end(1), local(0, 10, 15));
         assert_eq!(grid.view_until(local(0, 0, 0)).values().len(), 0);
+    }
+
+    #[test]
+    fn test_view_until_an_earlier_origin_hides_later_slots() {
+        let history = minutely(1, |_| 30.0);
+        let schedule = GymSchedule::default();
+        let grid = Grid::build(&history, &schedule, local(0, 0, 0), local(1, 0, 0));
+        let view = grid.view_until(local(0, 18, 0));
+        let earlier = view.until(local(0, 12, 7));
+        assert_eq!(earlier.origin(), local(0, 12, 0));
+        assert_eq!(earlier.value_at(local(0, 12, 0)), Some(30.0));
+        assert_eq!(earlier.value_at(local(0, 12, 15)), None);
+        // A later origin cannot reach past the view.
+        let later = view.until(local(0, 20, 0));
+        assert_eq!(later.origin(), local(0, 18, 0));
+        assert_eq!(later.value_at(local(0, 18, 15)), None);
     }
 
     #[test]

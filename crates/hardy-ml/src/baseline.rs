@@ -5,10 +5,13 @@ use chrono::{DateTime, Datelike, DurationRound, TimeDelta, Timelike, Utc};
 use hardy_core::{GymSchedule, Tz};
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    history::History,
-    samples::{ANCHOR_STEP, TARGET_TOLERANCE},
-};
+use crate::history::History;
+
+/// Spacing of the anchors the decay is fitted from.
+const ANCHOR_STEP: TimeDelta = TimeDelta::minutes(15);
+/// How far a reading may be from an anchor's target time to count as its
+/// outcome.
+const TARGET_TOLERANCE: TimeDelta = TimeDelta::minutes(5);
 
 /// A reading this old counts half as much as one from today.
 const HALF_LIFE_DAYS: f64 = 14.0;
