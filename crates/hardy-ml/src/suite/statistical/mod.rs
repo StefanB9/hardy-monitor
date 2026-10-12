@@ -9,9 +9,9 @@
 
 mod autoregression;
 mod holt_winters;
-mod ols;
+pub(super) mod ols;
 mod optimize;
-mod series;
+pub(super) mod series;
 mod smoothing;
 mod structural;
 

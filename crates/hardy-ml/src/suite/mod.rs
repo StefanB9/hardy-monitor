@@ -9,6 +9,7 @@
 mod baselines;
 mod legacy;
 pub(crate) mod linalg;
+mod packaged;
 mod profiles;
 pub mod safety;
 mod statistical;
@@ -264,6 +265,18 @@ registry! {
             "holt_winters_weekly", "Holt–Winters (weekly season)", Statistical;
         StructuralModel(statistical::StructuralModel) =
             "structural", "Structural model (Kalman filter)", Statistical;
+        AutoEts(packaged::AutoEts) = "auto_ets", "AutoETS", Statistical;
+        AutoArima(packaged::AutoArima) = "auto_arima", "AutoARIMA", Statistical;
+        Sarima(packaged::Sarima) = "sarima", "SARIMA (daily season)", Statistical;
+        StlEts(packaged::StlEts) = "stl_ets", "STL + ETS", Statistical;
+        StlArima(packaged::StlArima) = "stl_arima", "STL + ARIMA", Statistical;
+        MstlEts(packaged::MstlEts) = "mstl_ets", "MSTL + ETS", Statistical;
+        MstlArima(packaged::MstlArima) = "mstl_arima", "MSTL + ARIMA", Statistical;
+        AutoTbats(packaged::AutoTbats) = "auto_tbats", "AutoTBATS", Statistical;
+        Mfles(packaged::Mfles) = "mfles", "MFLES", Statistical;
+        AutoTheta(packaged::AutoTheta) = "auto_theta", "AutoTheta", Statistical;
+        FourierArima(packaged::FourierArima) =
+            "fourier_arima", "Fourier regression + ARIMA errors", Statistical;
         Ridge(legacy::Ridge) = "ridge", "Ridge regression", MachineLearning;
         RandomForest(legacy::RandomForest) =
             "random_forest", "Random forest", MachineLearning;

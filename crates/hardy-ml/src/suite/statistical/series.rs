@@ -9,7 +9,7 @@ use crate::{
 
 /// What a model sees of one slot.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub(super) enum Slot {
+pub(in crate::suite) enum Slot {
     /// The gym is closed: nothing to learn, nothing to forecast.
     Closed,
     /// Open, but without a reading.
@@ -30,7 +30,7 @@ impl Slot {
 
 /// The slots of `data` that end after `after` (up to its origin), oldest
 /// first, with their end.
-pub(super) fn slots_after<'a>(
+pub(in crate::suite) fn slots_after<'a>(
     data: &'a Observed<'_>,
     after: DateTime<Utc>,
 ) -> impl Iterator<Item = (DateTime<Utc>, Slot)> + 'a {
