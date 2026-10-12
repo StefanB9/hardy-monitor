@@ -7,11 +7,17 @@
 //! per horizon bucket. Intervals are conformal: a model's interval on a day
 //! comes from its own errors on the days before, so coverage is measured
 //! honestly; the interval for live forecasts comes from all its errors.
+//!
+//! Ensembles are scored the same way: on each day they combine the
+//! members' forecasts with weights fitted on the days before only.
 
+pub mod ensemble;
 mod metrics;
 mod selection;
 
 use chrono::{DateTime, NaiveDate, TimeDelta, TimeZone, Utc};
+use ensemble::Rows;
+pub use ensemble::{Combination, Ensemble};
 use hardy_core::{GymSchedule, analytics::midnight_local_as_utc};
 use metrics::Accumulator;
 pub use metrics::{INTERVAL_TAIL, Interval, MIN_INTERVAL_ERRORS, Score};
@@ -163,35 +169,51 @@ pub struct Benchmark<L> {
     pub days: Vec<NaiveDate>,
     /// Origins forecast from (by any model).
     pub origins: usize,
+    /// The models' reports, then the ensembles'.
     pub reports: Vec<ModelReport<L>>,
+    /// Each ensemble fitted on every backtest day (`None` without members).
+    pub ensembles: Vec<(L, Option<Ensemble<L>>)>,
 }
 
 /// One model on one backtest day.
-#[derive(Default)]
+#[derive(Debug, Default, Clone, PartialEq)]
 struct ModelDay {
     fitted: bool,
     failure: Option<MlError>,
     origins: usize,
-    /// (bucket, actual, forecast) of every scored step.
-    scored: Vec<(Bucket, f64, f64)>,
+    /// The model's forecast for each of the day's scored steps.
+    values: Vec<Option<f64>>,
+}
+
+/// A scored step of a backtest day.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Step {
+    /// Index of its origin within the day.
+    origin: usize,
+    bucket: Bucket,
+    actual: f64,
 }
 
 /// Every model on one backtest day.
+#[derive(Debug, Clone, PartialEq)]
 struct DayResult {
     /// Origins forecast from by any model.
     origins: usize,
+    steps: Vec<Step>,
     models: Vec<ModelDay>,
 }
 
-/// Runs the benchmark of the models `labels` (built by `make`) on `history`
-/// as of `now`.
+/// Runs the benchmark of the models `labels` (built by `make`; `None`
+/// counts as never fitted) and of the `ensembles` of them, on `history` as
+/// of `now`.
 ///
 /// Days are backtested in parallel, each with fresh models; scoring then
-/// walks the days in order, so each day's intervals come from earlier days'
-/// errors only.
+/// walks the days in order, so each day's intervals and ensemble weights
+/// come from earlier days only.
 pub fn run<L, M>(
     labels: &[L],
-    make: impl Fn(L) -> M + Sync,
+    make: impl Fn(L) -> Option<M> + Sync,
+    ensembles: &[(L, Combination)],
     history: &History,
     schedule: &GymSchedule,
     now: DateTime<Utc>,
@@ -206,13 +228,20 @@ where
         Grid::build(history, schedule, first - SLOT, now)
     });
     let scale = naive_scale(&grid, schedule, history);
-    let results: Vec<DayResult> = days
+    let mut results: Vec<DayResult> = days
         .par_iter()
         .map(|&day| backtest_day(day, labels, &make, history, &grid, schedule, now, settings))
         .collect();
+    let combinations: Vec<Combination> = ensembles.iter().map(|&(_, c)| c).collect();
+    let fitted = add_ensembles(&mut results, labels.len(), &combinations);
 
+    let all_labels: Vec<L> = labels
+        .iter()
+        .copied()
+        .chain(ensembles.iter().map(|&(l, _)| l))
+        .collect();
     let mut origins_total = 0;
-    let mut reports: Vec<ModelReport<L>> = labels
+    let mut reports: Vec<ModelReport<L>> = all_labels
         .iter()
         .map(|&model| ModelReport {
             model,
@@ -223,8 +252,8 @@ where
             intervals: [None; 4],
         })
         .collect();
-    let mut accumulators = vec![[Accumulator::default(); 4]; labels.len()];
-    let mut errors: Vec<[Vec<f64>; 4]> = labels
+    let mut accumulators = vec![[Accumulator::default(); 4]; all_labels.len()];
+    let mut errors: Vec<[Vec<f64>; 4]> = all_labels
         .iter()
         .map(|_| std::array::from_fn(|_| Vec::new()))
         .collect();
@@ -239,13 +268,19 @@ where
             }
             let intervals: [Option<Interval>; 4] =
                 std::array::from_fn(|b| Interval::from_errors(&errors[i][b]));
-            for &(bucket, actual, forecast) in &model_day.scored {
+            let scored = || {
+                day.steps
+                    .iter()
+                    .zip(&model_day.values)
+                    .filter_map(|(step, value)| value.map(|v| (step.bucket, step.actual, v)))
+            };
+            for (bucket, actual, forecast) in scored() {
                 let interval = intervals[bucket.index()];
                 for b in [bucket, Bucket::Overall] {
                     accumulators[i][b.index()].add(actual, forecast, interval);
                 }
             }
-            for (bucket, actual, forecast) in model_day.scored {
+            for (bucket, actual, forecast) in scored() {
                 errors[i][bucket.index()].push(actual - forecast);
             }
         }
@@ -258,11 +293,76 @@ where
                 .flatten()
         });
     }
+    let ensembles = ensembles
+        .iter()
+        .zip(fitted)
+        .map(|(&(label, _), ensemble)| {
+            (
+                label,
+                ensemble.and_then(|e| e.try_map(|m| labels.get(m).copied())),
+            )
+        })
+        .collect();
     Benchmark {
         days,
         origins: origins_total,
         reports,
+        ensembles,
     }
+}
+
+/// Appends each ensemble's forecasts to every day of `results` (whose first
+/// `members` models are the members), each day combined with weights
+/// fitted on the days before it; returns each ensemble fitted on all days.
+fn add_ensembles(
+    results: &mut [DayResult],
+    members: usize,
+    combinations: &[Combination],
+) -> Vec<Option<Ensemble<usize>>> {
+    let indices: Vec<usize> = (0..members).collect();
+    let mut rows: [Rows; 3] = std::array::from_fn(|_| Rows::new(members));
+    let fit_all = |rows: &[Rows; 3]| -> Vec<Option<Ensemble<usize>>> {
+        combinations
+            .iter()
+            .map(|&c| Ensemble::fit(c, &indices, rows))
+            .collect()
+    };
+    let mut member_values = vec![None; members];
+    for day in results.iter_mut() {
+        let fitted = fit_all(&rows);
+        for ensemble in &fitted {
+            let mut model_day = ModelDay {
+                fitted: ensemble.is_some(),
+                values: Vec::with_capacity(day.steps.len()),
+                ..ModelDay::default()
+            };
+            let mut last_origin = None;
+            for (s, step) in day.steps.iter().enumerate() {
+                let value = ensemble.as_ref().and_then(|e| {
+                    e.combine(step.bucket, |m| {
+                        day.models
+                            .get(m)
+                            .and_then(|d| d.values.get(s).copied().flatten())
+                    })
+                });
+                if value.is_some() && last_origin != Some(step.origin) {
+                    model_day.origins += 1;
+                    last_origin = Some(step.origin);
+                }
+                model_day.values.push(value);
+            }
+            day.models.push(model_day);
+        }
+        for (s, step) in day.steps.iter().enumerate() {
+            for (slot, model) in member_values.iter_mut().zip(&day.models) {
+                *slot = model.values.get(s).copied().flatten();
+            }
+            if let Some(i) = Bucket::HORIZONS.iter().position(|&b| b == step.bucket) {
+                rows[i].push(step.actual, &member_values);
+            }
+        }
+    }
+    fit_all(&rows)
 }
 
 /// Fits fresh models on the data before `day` and forecasts from each of
@@ -271,7 +371,7 @@ where
 fn backtest_day<L, M>(
     day: NaiveDate,
     labels: &[L],
-    make: &(impl Fn(L) -> M + Sync),
+    make: &(impl Fn(L) -> Option<M> + Sync),
     history: &History,
     grid: &Grid,
     schedule: &GymSchedule,
@@ -285,23 +385,27 @@ where
     let cut = midnight_local_as_utc(day, schedule.timezone());
     let fit_history = history.range(cut - settings.training_window, cut);
     let fit_data = Observed::new(grid, &fit_history, schedule, cut);
-    let mut models: Vec<M> = labels.iter().map(|&l| make(l)).collect();
+    let mut models: Vec<Option<M>> = labels.iter().map(|&l| make(l)).collect();
     let mut days: Vec<ModelDay> = models
         .par_iter_mut()
-        .map(|model| match guarded(|| suite::fit(model, &fit_data)) {
-            Ok(()) => ModelDay {
-                fitted: true,
-                ..ModelDay::default()
-            },
-            Err(MlError::NotEnoughHistory { .. }) => ModelDay::default(),
-            Err(e) => ModelDay {
-                failure: Some(e),
-                ..ModelDay::default()
+        .map(|model| match model {
+            None => ModelDay::default(),
+            Some(model) => match guarded(|| suite::fit(model, &fit_data)) {
+                Ok(()) => ModelDay {
+                    fitted: true,
+                    ..ModelDay::default()
+                },
+                Err(MlError::NotEnoughHistory { .. }) => ModelDay::default(),
+                Err(e) => ModelDay {
+                    failure: Some(e),
+                    ..ModelDay::default()
+                },
             },
         })
         .collect();
 
     let mut origins = 0;
+    let mut steps = Vec::new();
     for origin in day_origins(day, schedule) {
         if origin >= now {
             break;
@@ -311,47 +415,65 @@ where
         let forecasts: Vec<Option<Result<Vec<f64>, MlError>>> = models
             .par_iter()
             .zip(&days)
-            .map(|(model, d)| d.fitted.then(|| guarded(|| suite::forecast(model, &data))))
+            .map(|(model, d)| {
+                model
+                    .as_ref()
+                    .filter(|_| d.fitted)
+                    .map(|m| guarded(|| suite::forecast(m, &data)))
+            })
             .collect();
-        let mut any = false;
+        if !forecasts.iter().any(|f| matches!(f, Some(Ok(_)))) {
+            for (model_day, forecast) in days.iter_mut().zip(forecasts) {
+                if let Some(Err(e)) = forecast {
+                    model_day.failure = Some(e);
+                }
+            }
+            continue;
+        }
+        let targets: Vec<(usize, f64)> = scored_steps(&data, grid, now).collect();
+        steps.extend(targets.iter().map(|&(step, actual)| Step {
+            origin: origins,
+            bucket: Bucket::of_step(step),
+            actual,
+        }));
+        origins += 1;
         for (model_day, forecast) in days.iter_mut().zip(forecasts) {
             match forecast {
                 Some(Ok(values)) => {
-                    any = true;
                     model_day.origins += 1;
-                    model_day.scored.extend(
-                        scored_steps(&values, &data, grid, now)
-                            .map(|(step, value, actual)| (Bucket::of_step(step), actual, value)),
+                    model_day.values.extend(
+                        targets
+                            .iter()
+                            .map(|&(step, _)| values.get(step - 1).copied()),
                     );
                 }
-                Some(Err(e)) => model_day.failure = Some(e),
-                None => {}
+                Some(Err(e)) => {
+                    model_day.failure = Some(e);
+                    model_day.values.extend(targets.iter().map(|_| None));
+                }
+                None => model_day.values.extend(targets.iter().map(|_| None)),
             }
         }
-        origins += usize::from(any);
     }
     DayResult {
         origins,
+        steps,
         models: days,
     }
 }
 
-/// (step, forecast, actual) for each step of a forecast from `data`'s
-/// origin whose slot is open, over by `now` and has a reading.
+/// (step, actual) for each step after `data`'s origin whose slot is open,
+/// over by `now` and has a reading.
 fn scored_steps<'a>(
-    values: &'a [f64],
     data: &'a Observed<'_>,
     grid: &'a Grid,
     now: DateTime<Utc>,
-) -> impl Iterator<Item = (usize, f64, f64)> + 'a {
+) -> impl Iterator<Item = (usize, f64)> + 'a {
     (1..=HORIZON_STEPS)
-        .zip(values.iter().copied())
-        .map(move |(step, value)| (step, value, data.grid().step_end(step)))
-        .take_while(move |&(_, _, end)| end <= now)
-        .filter(move |&(_, _, end)| is_open_slot(data.schedule(), end))
-        .filter_map(move |(step, value, end)| {
-            grid.value_at(end).map(|actual| (step, value, actual))
-        })
+        .map(move |step| (step, data.grid().step_end(step)))
+        .take_while(move |&(_, end)| end <= now)
+        .filter(move |&(_, end)| is_open_slot(data.schedule(), end))
+        .filter_map(move |(step, end)| grid.value_at(end).map(|actual| (step, actual)))
 }
 
 /// The newest `count` complete gym-local days that have readings, oldest
@@ -429,6 +551,7 @@ mod tests {
     use anyhow::{Context, Result};
     use approx::assert_relative_eq;
     use chrono::{Datelike, Timelike};
+    use proptest::prelude::*;
 
     use super::*;
     use crate::{
@@ -564,7 +687,8 @@ mod tests {
         });
         let result = run(
             &["spy"],
-            |_| Spy(Arc::clone(&seen)),
+            |_| Some(Spy(Arc::clone(&seen))),
+            &[],
             &history,
             &schedule,
             local(6, 0, 0),
@@ -584,6 +708,7 @@ mod tests {
         let result = run(
             &[ModelId::WeeklySeasonalNaive, ModelId::Naive],
             AnyModel::new,
+            &[],
             &history,
             &schedule,
             local(22, 0, 0),
@@ -610,7 +735,8 @@ mod tests {
         let schedule = GymSchedule::default();
         let result = run(
             &[0],
-            |_| Crashing,
+            |_| Some(Crashing),
+            &[],
             &history,
             &schedule,
             local(3, 0, 0),
@@ -628,6 +754,7 @@ mod tests {
         let result = run(
             &[ModelId::Naive],
             AnyModel::new,
+            &[],
             &history,
             &schedule,
             local(10, 0, 0),
@@ -641,5 +768,149 @@ mod tests {
         assert!((0.0..=1.0).contains(&coverage));
         assert!(score.mase.is_some());
         Ok(())
+    }
+
+    #[test]
+    fn test_benchmark_scores_ensembles_from_earlier_days() -> Result<()> {
+        // Every week repeats exactly, and the weekly model can be fitted on
+        // every backtest day: the best-member ensemble picks it.
+        let history = minutely(30, weekly_pattern);
+        let settings = Settings {
+            days: 21,
+            ..Settings::default()
+        };
+        let models = [ModelId::WeeklySeasonalNaive, ModelId::Naive];
+        let ensembles = [
+            (ModelId::BestMemberEnsemble, Combination::BestMember),
+            (ModelId::MeanEnsemble, Combination::Mean),
+        ];
+        let result = run(
+            &models,
+            AnyModel::new,
+            &ensembles,
+            &history,
+            &GymSchedule::default(),
+            local(30, 0, 0),
+            &settings,
+        );
+        assert_eq!(result.reports.len(), 4);
+        let best = &result.reports[2];
+        assert_eq!(best.model, ModelId::BestMemberEnsemble);
+        // The first day has no earlier days to fit weights on.
+        assert_eq!(best.fitted_days, result.days.len() - 1);
+        assert!(best.origins < result.reports[0].origins);
+        let mae = best.score(Bucket::Overall).context("scored")?.mae;
+        assert_relative_eq!(mae, 0.0, epsilon = 1e-9);
+        assert!(best.interval(Bucket::NextHour).is_some());
+
+        let (label, fitted) = &result.ensembles[0];
+        assert_eq!(*label, ModelId::BestMemberEnsemble);
+        let fitted = fitted.as_ref().context("best member fitted")?;
+        for bucket in Bucket::HORIZONS {
+            assert_eq!(
+                fitted.members(bucket),
+                &[(ModelId::WeeklySeasonalNaive, 1.0)]
+            );
+        }
+        let mean = result.ensembles[1].1.as_ref().context("mean fitted")?;
+        assert_eq!(mean.members(Bucket::NextHour).len(), 2);
+        Ok(())
+    }
+
+    #[test]
+    fn test_ensembles_without_members_are_not_fitted() {
+        let history = minutely(3, |_| 30.0);
+        let result = run(
+            &[0],
+            |_| Some(Crashing),
+            &[(1, Combination::Mean)],
+            &history,
+            &GymSchedule::default(),
+            local(3, 0, 0),
+            &Settings::default(),
+        );
+        assert_eq!(result.reports[1].fitted_days, 0);
+        assert_eq!(result.reports[1].origins, 0);
+        assert_eq!(result.ensembles, vec![(1, None)]);
+    }
+
+    /// Backtest days with `members` members forecasting `actual + noise`.
+    fn synthetic_days(seeds: &[Vec<(f64, [f64; 3])>]) -> Vec<DayResult> {
+        seeds
+            .iter()
+            .map(|day| {
+                let steps: Vec<Step> = day
+                    .iter()
+                    .enumerate()
+                    .map(|(i, &(actual, _))| Step {
+                        origin: i / 4,
+                        bucket: Bucket::of_step(1 + (i * 7) % HORIZON_STEPS),
+                        actual,
+                    })
+                    .collect();
+                let models = (0..3)
+                    .map(|m| ModelDay {
+                        fitted: true,
+                        origins: steps.last().map_or(0, |s| s.origin + 1),
+                        values: day
+                            .iter()
+                            .map(|&(actual, noise)| Some(actual + noise[m]))
+                            .collect(),
+                        ..ModelDay::default()
+                    })
+                    .collect();
+                DayResult {
+                    origins: steps.last().map_or(0, |s| s.origin + 1),
+                    steps,
+                    models,
+                }
+            })
+            .collect()
+    }
+
+    const ALL_COMBINATIONS: [Combination; 5] = [
+        Combination::Mean,
+        Combination::Median,
+        Combination::InverseMae,
+        Combination::BestMember,
+        Combination::Stacked,
+    ];
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(1000))]
+
+        /// An ensemble's forecasts on a day never depend on what happened
+        /// on that day or later: changing the last day's actual values
+        /// changes no ensemble forecast.
+        #[test]
+        fn test_ensemble_weights_never_see_the_day_they_forecast(
+            seeds in prop::collection::vec(
+                prop::collection::vec((0.0_f64..100.0, prop::array::uniform3(-10.0_f64..10.0)), 1..24),
+                2..5,
+            ),
+            shift in 1.0_f64..30.0,
+        ) {
+            let mut days = synthetic_days(&seeds);
+            let mut changed = days.clone();
+            if let Some(last) = changed.last_mut() {
+                for step in &mut last.steps {
+                    step.actual += shift;
+                }
+            }
+            add_ensembles(&mut days, 3, &ALL_COMBINATIONS);
+            add_ensembles(&mut changed, 3, &ALL_COMBINATIONS);
+            for (a, b) in days.iter().zip(&changed) {
+                prop_assert_eq!(&a.models[3..], &b.models[3..]);
+            }
+            // The first day has nothing to fit on.
+            prop_assert!(days[0].models[3..].iter().all(|m| !m.fitted && m.origins == 0));
+            prop_assert!(days[0].models[3..].iter().all(|m| m.values.iter().all(Option::is_none)));
+            for day in &days {
+                prop_assert_eq!(day.models.len(), 3 + ALL_COMBINATIONS.len());
+                for model in &day.models {
+                    prop_assert_eq!(model.values.len(), day.steps.len());
+                }
+            }
+        }
     }
 }

@@ -1,6 +1,7 @@
-//! Small dense linear algebra for model fits: a linear solve and the top
-//! eigenvectors of a symmetric matrix. Matrices are row-major `Vec<f64>`;
-//! the sizes involved (a few dozen) do not justify a library.
+//! Small dense linear algebra for model fits: a linear solve, the top
+//! eigenvectors of a symmetric matrix and least squares on the simplex.
+//! Matrices are row-major `Vec<f64>`; the sizes involved (a few dozen) do not
+//! justify a library.
 
 use crate::error::MlError;
 
@@ -97,6 +98,77 @@ fn multiply(a: &[f64], v: &[f64], n: usize) -> Vec<f64> {
         .collect()
 }
 
+/// Weights `w ≥ 0` with `Σ w = 1` minimising `‖X w − y‖²`, given the Gram
+/// matrix `gram = XᵀX` (`n × n`, row-major) and `cross = Xᵀy`.
+///
+/// Accelerated projected gradient (FISTA): the problem is convex, so it
+/// converges to the optimum; members' forecasts are highly correlated, which
+/// slows plain gradient descent but not the answer.
+pub fn simplex_least_squares(gram: &[f64], cross: &[f64]) -> Vec<f64> {
+    const MAX_ITERATIONS: usize = 20_000;
+    const TOLERANCE: f64 = 1e-13;
+    let n = cross.len();
+    if n == 0 || gram.len() != n * n {
+        return Vec::new();
+    }
+    // Lipschitz constant of the gradient 2(Gw − c): twice the largest
+    // eigenvalue; the trace bounds it if power iteration finds none.
+    let largest = top_eigenvectors(gram, n, 1).first().map_or_else(
+        || (0..n).map(|i| gram[i * n + i]).sum(),
+        |(value, _)| *value,
+    );
+    #[allow(clippy::cast_precision_loss)]
+    let uniform = 1.0 / n as f64;
+    let mut w = vec![uniform; n];
+    if largest <= 0.0 {
+        return w;
+    }
+    let step = 1.0 / (2.0 * largest);
+    let mut momentum_point = w.clone();
+    let mut t = 1.0_f64;
+    let mut next = vec![0.0; n];
+    for _ in 0..MAX_ITERATIONS {
+        let product = multiply(gram, &momentum_point, n);
+        for i in 0..n {
+            next[i] = momentum_point[i] - step * 2.0 * (product[i] - cross[i]);
+        }
+        project_onto_simplex(&mut next);
+        let t_next = f64::midpoint(1.0, (1.0 + 4.0 * t * t).sqrt());
+        let blend = (t - 1.0) / t_next;
+        let mut change = 0.0_f64;
+        for i in 0..n {
+            change = change.max((next[i] - w[i]).abs());
+            momentum_point[i] = next[i] + blend * (next[i] - w[i]);
+        }
+        w.copy_from_slice(&next);
+        t = t_next;
+        if change < TOLERANCE {
+            break;
+        }
+    }
+    w
+}
+
+/// Replaces `v` by its Euclidean projection onto the simplex
+/// `{w ≥ 0, Σ w = 1}` (sort-based, Duchi et al. 2008).
+fn project_onto_simplex(v: &mut [f64]) {
+    let mut sorted = v.to_vec();
+    sorted.sort_by(|a, b| b.total_cmp(a));
+    let mut sum = 0.0;
+    let mut shift = 0.0;
+    for (k, &x) in sorted.iter().enumerate() {
+        sum += x;
+        #[allow(clippy::cast_precision_loss)]
+        let candidate = (sum - 1.0) / (k + 1) as f64;
+        if x - candidate > 0.0 {
+            shift = candidate;
+        }
+    }
+    for x in v.iter_mut() {
+        *x = (*x - shift).max(0.0);
+    }
+}
+
 /// Dot product.
 pub fn dot(a: &[f64], b: &[f64]) -> f64 {
     a.iter().zip(b).map(|(x, y)| x * y).sum()
@@ -160,6 +232,92 @@ mod tests {
         let vectors = top_eigenvectors(&[1.0, 1.0, 1.0, 1.0], 2, 2);
         assert_eq!(vectors.len(), 1);
         assert_relative_eq!(vectors[0].0, 2.0, epsilon = 1e-6);
+    }
+
+    #[test]
+    fn test_simplex_least_squares_recovers_a_convex_mix() {
+        // y = 0.3 a + 0.7 b exactly, with a third column that does not help.
+        let (gram, cross) = normal_equations(&mix_columns(), &[0.3, 0.7, 0.0]);
+        let w = simplex_least_squares(&gram, &cross);
+        assert_relative_eq!(w[0], 0.3, epsilon = 1e-6);
+        assert_relative_eq!(w[1], 0.7, epsilon = 1e-6);
+        assert_relative_eq!(w[2], 0.0, epsilon = 1e-6);
+    }
+
+    #[test]
+    fn test_simplex_least_squares_puts_all_weight_on_an_exact_column() {
+        // y is twice column b: the best convex mix is b alone.
+        let columns = mix_columns();
+        let y: Vec<f64> = columns.iter().map(|row| 2.0 * row[1]).collect();
+        let (gram, cross) = normal_equations_for(&columns, &y);
+        let w = simplex_least_squares(&gram, &cross);
+        assert_relative_eq!(w[1], 1.0, epsilon = 1e-6);
+    }
+
+    #[test]
+    fn test_simplex_least_squares_without_columns_is_empty() {
+        assert_eq!(simplex_least_squares(&[], &[]), Vec::<f64>::new());
+    }
+
+    /// Rows of three member forecasts.
+    fn mix_columns() -> Vec<[f64; 3]> {
+        (0..40)
+            .map(|i| {
+                let t = f64::from(i);
+                [10.0 + t, 50.0 - t * 0.5, 30.0 + (t * 0.7).sin() * 5.0]
+            })
+            .collect()
+    }
+
+    fn normal_equations(columns: &[[f64; 3]], weights: &[f64; 3]) -> (Vec<f64>, Vec<f64>) {
+        let y: Vec<f64> = columns.iter().map(|row| dot(row, weights)).collect();
+        normal_equations_for(columns, &y)
+    }
+
+    fn normal_equations_for(columns: &[[f64; 3]], y: &[f64]) -> (Vec<f64>, Vec<f64>) {
+        let mut gram = vec![0.0; 9];
+        let mut cross = vec![0.0; 3];
+        for (row, &target) in columns.iter().zip(y) {
+            for i in 0..3 {
+                cross[i] += row[i] * target;
+                for j in 0..3 {
+                    gram[i * 3 + j] += row[i] * row[j];
+                }
+            }
+        }
+        (gram, cross)
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(1000))]
+
+        /// The weights always form a convex mix and are no worse than any
+        /// single column.
+        #[test]
+        fn test_simplex_least_squares_is_convex_and_beats_every_column(
+            rows in prop::collection::vec(prop::array::uniform3(0.0_f64..100.0), 3..30),
+            y in prop::collection::vec(0.0_f64..100.0, 30),
+        ) {
+            let y = &y[..rows.len()];
+            let (gram, cross) = normal_equations_for(&rows, y);
+            let w = simplex_least_squares(&gram, &cross);
+            prop_assert_eq!(w.len(), 3);
+            prop_assert!(w.iter().all(|&x| x >= 0.0));
+            prop_assert!((w.iter().sum::<f64>() - 1.0).abs() < 1e-9);
+            let loss = |weights: &[f64]| -> f64 {
+                rows.iter()
+                    .zip(y)
+                    .map(|(row, t)| (dot(row, weights) - t).powi(2))
+                    .sum()
+            };
+            let mixed = loss(&w);
+            for k in 0..3 {
+                let mut single = [0.0; 3];
+                single[k] = 1.0;
+                let alone = loss(&single);
+                prop_assert!(mixed <= alone * (1.0 + 1e-6) + 1e-6, "{mixed} > {alone}");
+            }
+        }
     }
 
     proptest! {
