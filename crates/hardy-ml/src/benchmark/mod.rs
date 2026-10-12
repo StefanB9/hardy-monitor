@@ -8,10 +8,12 @@
 //! comes from its own errors on the days before, so coverage is measured
 //! honestly; the interval for live forecasts comes from all its errors.
 
+pub mod ensemble;
 mod metrics;
 mod selection;
 
 use chrono::{DateTime, NaiveDate, TimeDelta, TimeZone, Utc};
+pub use ensemble::{Combination, Ensemble};
 use hardy_core::{GymSchedule, analytics::midnight_local_as_utc};
 use metrics::Accumulator;
 pub use metrics::{INTERVAL_TAIL, Interval, MIN_INTERVAL_ERRORS, Score};
