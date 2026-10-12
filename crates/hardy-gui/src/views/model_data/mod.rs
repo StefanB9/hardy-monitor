@@ -51,16 +51,21 @@ pub(super) fn caption(s: impl text::IntoFragment<'static>) -> text::Text<'static
 
 /// The Model & Data page.
 pub fn view(props: ModelDataProps<'_>) -> Element<'_, Message> {
-    let content = row![
-        column![leaderboard::card(&props), accuracy::card(props.accuracy)]
+    // The leaderboard is a wide table: it gets the full width.
+    let content = column![
+        leaderboard::card(&props),
+        row![
+            column![accuracy::card(props.accuracy)]
+                .spacing(style::SPACE_L)
+                .width(Length::FillPortion(3)),
+            column![
+                maintenance::repair_card(&props),
+                maintenance::export_card(&props)
+            ]
             .spacing(style::SPACE_L)
-            .width(Length::FillPortion(3)),
-        column![
-            maintenance::repair_card(&props),
-            maintenance::export_card(&props)
+            .width(Length::FillPortion(2)),
         ]
-        .spacing(style::SPACE_L)
-        .width(Length::FillPortion(2)),
+        .spacing(style::SPACE_L),
     ]
     .spacing(style::SPACE_L);
 
