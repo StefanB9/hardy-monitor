@@ -256,7 +256,7 @@ registry! {
         MeanEnsemble = "ensemble_mean", "Mean of the best five", Mean;
         MedianEnsemble = "ensemble_median", "Median of the best five", Median;
         WeightedEnsemble = "ensemble_inverse_mae", "Accuracy-weighted ensemble", InverseMae;
-        BestMemberEnsemble = "ensemble_best_member", "Best model per horizon", BestMember;
+        BestMemberEnsemble = "ensemble_best_member", "Best-member ensemble", BestMember;
         StackedEnsemble = "ensemble_stacked", "Stacked ensemble", Stacked;
     }
 }

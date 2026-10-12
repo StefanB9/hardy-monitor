@@ -49,8 +49,8 @@ hardy-monitor/                         (workspace root)
 │   │   ├── src/                       grid (15-minute slots), history, profile, features, samples, model,
 │   │   │                              baseline; suite/ (model interface + registry, baselines, profiles/,
 │   │   │                              legacy wrappers, linalg, safety); benchmark/ (rolling-origin backtest, metrics +
-│   │   │                              conformal intervals, selection); nightly, live, service, retrain,
-│   │   │                              confidence
+│   │   │                              conformal intervals, ensembles, selection); nightly, live, service,
+│   │   │                              retrain, confidence
 │   │   └── tests/service.rs           Nightly run and live publishing against a real database
 │   │
 │   ├── hardy-daemon/                  (binary — headless fetch loop; the only process that migrates)
