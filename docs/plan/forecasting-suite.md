@@ -282,7 +282,18 @@ rejected alternatives are in the session record of this plan's discussion.
    noise 9 pts²). The picker ("Best per horizon" or any published model)
    also drives the quiet hour; up to five comparison lines, kept in memory
    only.
-3. Ensembles.
+3. Ensembles. As built: five ensembles of the non-ensemble models, fitted
+   per horizon bucket on the members' backtest forecasts (a backtest day's
+   ensemble uses only earlier days, so its first day is not scored): mean
+   and median of the 5 members with the lowest MAE, inverse-MAE weighted
+   (all members), best member, and stacking (least squares with weights
+   ≥ 0 summing to 1, solved by projected gradient on the simplex). A member
+   counts in a bucket if it forecast at least 80 % of that bucket's scored
+   steps; missing member values are skipped and the weights renormalised.
+   Ensembles compete in the per-bucket selection like any model. Their
+   final weights (fitted on every backtest day) are stored as their
+   artifact in `forecast_models`, so no migration; the daemon combines the
+   members' live forecasts with them.
 4. Hand-written statistical models.
 5. anofox + stlrs statistical models.
 6. Regression and ML models.
