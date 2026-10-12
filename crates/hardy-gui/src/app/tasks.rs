@@ -193,14 +193,16 @@ impl HardyMonitorApp {
         )
     }
 
-    /// The default forecast the daemon published last.
+    /// Every forecast the daemon published last (all models and the
+    /// default), so switching models needs no reload.
     pub(super) fn load_published_forecast(&mut self) -> Task<Message> {
         let db = self.db.clone();
+        let keys: Vec<String> = std::iter::once(hardy_ml::live::SELECTED)
+            .chain(hardy_ml::suite::ModelId::ALL.iter().map(|id| id.key()))
+            .map(ToString::to_string)
+            .collect();
         self.load(
-            async move {
-                db.live_forecasts(&[hardy_ml::live::SELECTED.to_string()])
-                    .await
-            },
+            async move { db.live_forecasts(&keys).await },
             |r: anyhow::Result<Vec<LiveForecast>>| {
                 Message::PublishedForecastLoaded(r.map_err(db_err("live_forecasts")))
             },

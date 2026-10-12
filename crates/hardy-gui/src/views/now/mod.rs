@@ -7,13 +7,19 @@ mod status;
 
 use chrono::{DateTime, Utc};
 use hardy_core::{alert::AlertDuration, db::OccupancyLog, schedule::GymSchedule};
-use hardy_ml::PredictionWithConfidence;
+use hardy_ml::{PredictionWithConfidence, suite::ModelId};
 use iced::{
     Element, Length,
     widget::{canvas::Cache, column, row},
 };
 
-use crate::{app::Message, quiet_window::QuietWindow, style, time_range::ChartRange};
+use crate::{
+    app::Message,
+    forecasting::{ForecastChoice, ForecastLine},
+    quiet_window::QuietWindow,
+    style,
+    time_range::ChartRange,
+};
 
 /// Everything the Now view shows.
 pub struct NowProps<'a> {
@@ -30,6 +36,11 @@ pub struct NowProps<'a> {
     pub forecast: &'a [PredictionWithConfidence],
     /// Name of the model behind the forecast, if one was published.
     pub forecast_source: Option<&'static str>,
+    /// Which forecast is shown, and the models it can be switched to.
+    pub forecast_choice: ForecastChoice,
+    pub available_models: Vec<ModelId>,
+    /// Comparison forecasts drawn on the chart, in overlay order.
+    pub overlays: &'a [ForecastLine],
     /// Alerts armed and not expired.
     pub alert_active: bool,
     pub alert_threshold: f64,

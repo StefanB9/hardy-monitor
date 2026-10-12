@@ -180,3 +180,24 @@ async fn test_a_run_interrupted_by_a_restart_is_rerun() -> Result<()> {
     assert!(running, "the interrupted run starts again");
     Ok(())
 }
+
+#[tokio::test]
+async fn test_models_added_by_an_update_run_at_once() -> Result<()> {
+    let tdb = common::TestDatabase::new().await?;
+    insert_days(&tdb.db, 3).await?;
+    let now = local(3, 12, 0)?;
+    // An older build knew only some of the models.
+    ForecastService::with_models(&MlConfig::default(), GymSchedule::default(), &MODELS[..2])
+        .run_now(&tdb.db, now)
+        .await?;
+
+    let mut updated = service();
+    updated.load(&tdb.db).await?;
+    // Well within the retry spacing for missing models.
+    updated.tick(&tdb.db, now + TimeDelta::minutes(30)).await?;
+    let running = updated.is_running();
+    tdb.cleanup().await;
+
+    assert!(running, "new models are fitted without waiting");
+    Ok(())
+}

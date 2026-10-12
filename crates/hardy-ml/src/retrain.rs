@@ -20,6 +20,8 @@ pub enum RetrainReason {
     Nightly { closed_at: DateTime<Utc> },
     /// A run started but never finished (the daemon stopped during it).
     Interrupted,
+    /// Models without a stored state (added by an update, or unreadable).
+    NewModels,
 }
 
 /// Decides whether to run now. `latest_model_at` is when the last complete
