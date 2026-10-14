@@ -341,7 +341,20 @@ rejected alternatives are in the session record of this plan's discussion.
    the first day of each week of backtest days and reused for the next six
    (its inputs roll forward), so a night fits each net five times. Weight
    initialisation is seeded under a lock, so parallel fits stay
-   reproducible; dropout is off.
+   reproducible; dropout is off. As built: occupancy is scaled to 0–1,
+   deviations (inputs and targets) to tens of points; covariates are the
+   open flag and profile of each target slot plus the origin's calendar.
+   Output heads start at zero (an untrained net forecasts the profile) and
+   the untrained net's validation loss is the bar every epoch must beat.
+   Adam at 1e-2 with gradient-norm clipping at 1, batches of 64, at most
+   60 epochs, patience 8. Designs: MLP (last day + covariates, 2 × 256
+   ReLU), TCN (a stride-4 convolution to hours, then dilations 1–32, 16
+   filters), GRU / LSTM (last day, state 64), N-BEATS (3 generic blocks of
+   3 × 64 on the week of deviations), N-HiTS (the same with input pooling
+   8 / 4 / 1 and 8 / 24 / 96 interpolated forecast points), PatchTST (42
+   patches of 16, model width 32, 2 encoder layers, 4 heads). `gemm` and
+   `pulp` join the optimised dev packages (tests are unusably slow
+   otherwise).
 
 Each phase: fmt, `clippy --workspace --all-targets`, `check --workspace
 --all-targets` (also `SQLX_OFFLINE=true`), `nextest --workspace`, `.sqlx`
