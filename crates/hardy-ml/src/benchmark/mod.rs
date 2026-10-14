@@ -228,9 +228,19 @@ where
         Grid::build(history, schedule, first - SLOT, now)
     });
     let scale = naive_scale(&grid, schedule, history);
+    let (fits, plan) = shared_fits(&days, labels, &make, history, &grid, schedule, settings);
     let mut results: Vec<DayResult> = days
         .par_iter()
-        .map(|&day| backtest_day(day, labels, &make, history, &grid, schedule, now, settings))
+        .enumerate()
+        .map(|(i, &day)| {
+            let shared: Vec<Option<Option<&SharedFit<M>>>> = plan
+                .iter()
+                .map(|days| days.as_ref().map(|d| d[i].and_then(|f| fits.get(f))))
+                .collect();
+            backtest_day(
+                day, labels, &make, &shared, history, &grid, schedule, now, settings,
+            )
+        })
         .collect();
     let combinations: Vec<Combination> = ensembles.iter().map(|&(_, c)| c).collect();
     let fitted = add_ensembles(&mut results, labels.len(), &combinations);
@@ -365,13 +375,104 @@ fn add_ensembles(
     fit_all(&rows)
 }
 
-/// Fits fresh models on the data before `day` and forecasts from each of
-/// its origins.
+/// A model fitted once and used on several backtest days, with the outcome
+/// of its fit.
+struct SharedFit<M> {
+    model: Option<M>,
+    outcome: ModelDay,
+}
+
+/// Fits the models that refit less often than daily (see
+/// [`Forecaster::refit_days`]) once per run of days they serve. Returns
+/// the fits and, per label, `None` for a daily model or the fit (index)
+/// serving each day.
+#[allow(clippy::type_complexity)]
+fn shared_fits<L, M>(
+    days: &[NaiveDate],
+    labels: &[L],
+    make: &(impl Fn(L) -> Option<M> + Sync),
+    history: &History,
+    grid: &Grid,
+    schedule: &GymSchedule,
+    settings: &Settings,
+) -> (Vec<SharedFit<M>>, Vec<Option<Vec<Option<usize>>>>)
+where
+    L: Copy + Send + Sync,
+    M: Forecaster + Send + Sync,
+{
+    let fit_history = |day: NaiveDate| {
+        let cut = midnight_local_as_utc(day, schedule.timezone());
+        (cut, history.range(cut - settings.training_window, cut))
+    };
+    let mut jobs: Vec<(L, NaiveDate)> = Vec::new();
+    let plan = labels
+        .iter()
+        .map(|&label| {
+            let probe = make(label)?;
+            let every = probe.refit_days();
+            if every <= 1 {
+                return None;
+            }
+            let mut anchor: Option<(NaiveDate, usize)> = None;
+            let serving = days
+                .iter()
+                .map(|&day| {
+                    let stale = anchor.is_none_or(|(a, _)| {
+                        (day - a).num_days() >= i64::try_from(every).unwrap_or(i64::MAX)
+                    });
+                    if stale {
+                        let (cut, seen) = fit_history(day);
+                        if suite::can_fit(&probe, &Observed::new(grid, &seen, schedule, cut)) {
+                            anchor = Some((day, jobs.len()));
+                            jobs.push((label, day));
+                        } else {
+                            anchor = None;
+                        }
+                    }
+                    anchor.map(|(_, job)| job)
+                })
+                .collect();
+            Some(serving)
+        })
+        .collect();
+    let fits = jobs
+        .par_iter()
+        .map(|&(label, day)| {
+            let (cut, seen) = fit_history(day);
+            let mut model = make(label);
+            let outcome = fit_for_day(&mut model, &Observed::new(grid, &seen, schedule, cut));
+            SharedFit { model, outcome }
+        })
+        .collect();
+    (fits, plan)
+}
+
+/// Fits `model` (if any) on `data`; the outcome as a day's starting record.
+fn fit_for_day<M: Forecaster>(model: &mut Option<M>, data: &Observed<'_>) -> ModelDay {
+    match model {
+        None => ModelDay::default(),
+        Some(model) => match guarded(|| suite::fit(model, data)) {
+            Ok(()) => ModelDay {
+                fitted: true,
+                ..ModelDay::default()
+            },
+            Err(MlError::NotEnoughHistory { .. }) => ModelDay::default(),
+            Err(e) => ModelDay {
+                failure: Some(e),
+                ..ModelDay::default()
+            },
+        },
+    }
+}
+
+/// Fits fresh models on the data before `day` (or takes the `shared` fit
+/// serving it) and forecasts from each of its origins.
 #[allow(clippy::too_many_arguments)]
 fn backtest_day<L, M>(
     day: NaiveDate,
     labels: &[L],
     make: &(impl Fn(L) -> Option<M> + Sync),
+    shared: &[Option<Option<&SharedFit<M>>>],
     history: &History,
     grid: &Grid,
     schedule: &GymSchedule,
@@ -385,22 +486,30 @@ where
     let cut = midnight_local_as_utc(day, schedule.timezone());
     let fit_history = history.range(cut - settings.training_window, cut);
     let fit_data = Observed::new(grid, &fit_history, schedule, cut);
-    let mut models: Vec<Option<M>> = labels.iter().map(|&l| make(l)).collect();
-    let mut days: Vec<ModelDay> = models
+    let mut owned: Vec<Option<M>> = labels
+        .iter()
+        .zip(shared)
+        .map(|(&l, s)| if s.is_none() { make(l) } else { None })
+        .collect();
+    let mut days: Vec<ModelDay> = owned
         .par_iter_mut()
-        .map(|model| match model {
-            None => ModelDay::default(),
-            Some(model) => match guarded(|| suite::fit(model, &fit_data)) {
-                Ok(()) => ModelDay {
-                    fitted: true,
-                    ..ModelDay::default()
-                },
-                Err(MlError::NotEnoughHistory { .. }) => ModelDay::default(),
-                Err(e) => ModelDay {
-                    failure: Some(e),
-                    ..ModelDay::default()
-                },
+        .zip(shared)
+        .map(|(model, s)| match s {
+            None => fit_for_day(model, &fit_data),
+            Some(None) => ModelDay::default(),
+            Some(Some(fit)) => ModelDay {
+                fitted: fit.outcome.fitted,
+                failure: fit.outcome.failure.clone(),
+                ..ModelDay::default()
             },
+        })
+        .collect();
+    let models: Vec<Option<&M>> = owned
+        .iter()
+        .zip(shared)
+        .map(|(model, s)| match s {
+            None => model.as_ref(),
+            Some(fit) => fit.and_then(|f| f.model.as_ref()),
         })
         .collect();
 
@@ -417,7 +526,6 @@ where
             .zip(&days)
             .map(|(model, d)| {
                 model
-                    .as_ref()
                     .filter(|_| d.fitted)
                     .map(|m| guarded(|| suite::forecast(m, &data)))
             })
@@ -626,6 +734,70 @@ mod tests {
             let empty: Vec<Vec<f64>> = std::hint::black_box(Vec::new());
             Ok(empty[std::hint::black_box(0)].clone())
         }
+    }
+
+    /// Refitted once a week; records the cut of every fit and forecasts
+    /// the number of days since it.
+    struct Weekly(
+        Arc<std::sync::Mutex<Vec<DateTime<Utc>>>>,
+        Option<DateTime<Utc>>,
+    );
+
+    impl Forecaster for Weekly {
+        fn min_history(&self) -> TimeDelta {
+            TimeDelta::zero()
+        }
+
+        fn refit_days(&self) -> usize {
+            7
+        }
+
+        fn fit(&mut self, data: &Observed<'_>) -> Result<(), MlError> {
+            if let Ok(mut cuts) = self.0.lock() {
+                cuts.push(data.origin());
+            }
+            self.1 = Some(data.origin());
+            Ok(())
+        }
+
+        fn predict(&self, data: &Observed<'_>) -> Result<Vec<f64>, MlError> {
+            let cut = self.1.ok_or_else(|| MlError::Fit("unfitted".to_string()))?;
+            #[allow(clippy::cast_precision_loss)]
+            let days = (data.origin() - cut).num_days() as f64;
+            Ok(vec![days; HORIZON_STEPS])
+        }
+    }
+
+    #[test]
+    fn test_weekly_models_are_fitted_once_per_week_of_backtest_days() -> Result<()> {
+        let history = minutely(16, |_| 3.0);
+        let schedule = GymSchedule::default();
+        let cuts = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let result = run(
+            &[0],
+            |_| Some(Weekly(Arc::clone(&cuts), None)),
+            &[],
+            &history,
+            &schedule,
+            local(16, 0, 0),
+            &Settings::default(),
+        );
+        assert_eq!(result.days.len(), 16);
+        let mut cuts = cuts
+            .lock()
+            .map_err(|_| anyhow::anyhow!("poisoned"))?
+            .clone();
+        cuts.sort();
+        // Day 0 has no history to fit on, so the weeks start on day 1.
+        assert_eq!(cuts, vec![local(1, 0, 0), local(8, 0, 0), local(15, 0, 0)]);
+        let report = &result.reports[0];
+        assert_eq!(report.fitted_days, 15);
+        assert!(report.failure.is_none());
+        // Forecasts are 0–6 days after the week's fit, against a flat 3: the
+        // mean error over whole weeks of origins sits between 0 and 6.
+        let mae = report.score(Bucket::Overall).context("scored")?.mae;
+        assert!(mae > 0.5 && mae < 3.5, "MAE {mae}");
+        Ok(())
     }
 
     fn weekly_pattern(t: DateTime<Utc>) -> f64 {

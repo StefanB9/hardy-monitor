@@ -94,6 +94,13 @@ pub trait Forecaster {
     /// is always needed).
     fn min_history(&self) -> TimeDelta;
 
+    /// Backtest days one fit serves: 1 refits every day; more reuses a fit
+    /// for the following days, which it forecasts from their own data
+    /// without refitting (for models whose fit is slow).
+    fn refit_days(&self) -> usize {
+        1
+    }
+
     /// Fits the model on everything in `data`.
     fn fit(&mut self, data: &Observed<'_>) -> Result<(), MlError>;
 
@@ -301,6 +308,10 @@ registry! {
 impl Forecaster for AnyModel {
     fn min_history(&self) -> TimeDelta {
         self.inner().min_history()
+    }
+
+    fn refit_days(&self) -> usize {
+        self.inner().refit_days()
     }
 
     fn fit(&mut self, data: &Observed<'_>) -> Result<(), MlError> {
