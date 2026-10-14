@@ -233,9 +233,14 @@ where
         .par_iter()
         .enumerate()
         .map(|(i, &day)| {
-            let shared: Vec<Option<Option<&SharedFit<M>>>> = plan
+            let shared: Vec<DayFit<'_, M>> = plan
                 .iter()
-                .map(|days| days.as_ref().map(|d| d[i].and_then(|f| fits.get(f))))
+                .map(|days| match days {
+                    None => DayFit::Fresh,
+                    Some(d) => d[i]
+                        .and_then(|f| fits.get(f))
+                        .map_or(DayFit::Unfitted, DayFit::Shared),
+                })
                 .collect();
             backtest_day(
                 day, labels, &make, &shared, history, &grid, schedule, now, settings,
@@ -382,6 +387,16 @@ struct SharedFit<M> {
     outcome: ModelDay,
 }
 
+/// How a model gets its fit for a backtest day.
+enum DayFit<'a, M> {
+    /// Fitted afresh on the data before the day.
+    Fresh,
+    /// A fit made on an earlier day (or this one) serves it.
+    Shared(&'a SharedFit<M>),
+    /// Refits less often than daily and has no fit for the day yet.
+    Unfitted,
+}
+
 /// Fits the models that refit less often than daily (see
 /// [`Forecaster::refit_days`]) once per run of days they serve. Returns
 /// the fits and, per label, `None` for a daily model or the fit (index)
@@ -472,7 +487,7 @@ fn backtest_day<L, M>(
     day: NaiveDate,
     labels: &[L],
     make: &(impl Fn(L) -> Option<M> + Sync),
-    shared: &[Option<Option<&SharedFit<M>>>],
+    shared: &[DayFit<'_, M>],
     history: &History,
     grid: &Grid,
     schedule: &GymSchedule,
@@ -489,15 +504,15 @@ where
     let mut owned: Vec<Option<M>> = labels
         .iter()
         .zip(shared)
-        .map(|(&l, s)| if s.is_none() { make(l) } else { None })
+        .map(|(&l, s)| matches!(s, DayFit::Fresh).then(|| make(l)).flatten())
         .collect();
     let mut days: Vec<ModelDay> = owned
         .par_iter_mut()
         .zip(shared)
         .map(|(model, s)| match s {
-            None => fit_for_day(model, &fit_data),
-            Some(None) => ModelDay::default(),
-            Some(Some(fit)) => ModelDay {
+            DayFit::Fresh => fit_for_day(model, &fit_data),
+            DayFit::Unfitted => ModelDay::default(),
+            DayFit::Shared(fit) => ModelDay {
                 fitted: fit.outcome.fitted,
                 failure: fit.outcome.failure.clone(),
                 ..ModelDay::default()
@@ -508,8 +523,9 @@ where
         .iter()
         .zip(shared)
         .map(|(model, s)| match s {
-            None => model.as_ref(),
-            Some(fit) => fit.and_then(|f| f.model.as_ref()),
+            DayFit::Fresh => model.as_ref(),
+            DayFit::Shared(fit) => fit.model.as_ref(),
+            DayFit::Unfitted => None,
         })
         .collect();
 
