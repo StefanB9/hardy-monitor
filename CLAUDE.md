@@ -52,8 +52,11 @@ hardy-monitor/                         (workspace root)
 │   │   │                              (anofox-forecast + stlrs models refitted per origin, Fourier + ARIMA),
 │   │   │                              tabular/ (slot features; ridge, elastic-net, spline GAM, median
 │   │   │                              regression, random forest, boosted trees, SVR per horizon bucket),
-│   │   │                              legacy wrapper, linalg, safety); benchmark/ (rolling-origin backtest,
-│   │   │                              metrics + conformal intervals, ensembles, selection); nightly, live,
+│   │   │                              neural/ (burn, flex CPU backend: windows, training with early
+│   │   │                              stopping; MLP, TCN, GRU, LSTM, N-BEATS, N-HiTS, PatchTST; weekly
+│   │   │                              refits in the backtest), legacy wrapper, linalg, safety);
+│   │   │                              benchmark/ (rolling-origin backtest, metrics + conformal
+│   │   │                              intervals, ensembles, selection); nightly, live,
 │   │   │                              service, retrain, confidence
 │   │   └── tests/service.rs           Nightly run and live publishing against a real database
 │   │

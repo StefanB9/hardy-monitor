@@ -9,6 +9,7 @@
 mod baselines;
 mod legacy;
 pub(crate) mod linalg;
+mod neural;
 mod packaged;
 mod profiles;
 pub mod safety;
@@ -94,6 +95,13 @@ pub trait Forecaster {
     /// is always needed).
     fn min_history(&self) -> TimeDelta;
 
+    /// Backtest days one fit serves: 1 refits every day; more reuses a fit
+    /// for the following days, which it forecasts from their own data
+    /// without refitting (for models whose fit is slow).
+    fn refit_days(&self) -> usize {
+        1
+    }
+
     /// Fits the model on everything in `data`.
     fn fit(&mut self, data: &Observed<'_>) -> Result<(), MlError>;
 
@@ -109,6 +117,7 @@ pub enum Family {
     Profile,
     Statistical,
     MachineLearning,
+    NeuralNetwork,
     Ensemble,
 }
 
@@ -120,6 +129,7 @@ impl Family {
             Family::Profile => "Profile-based",
             Family::Statistical => "Statistical",
             Family::MachineLearning => "Regression and machine learning",
+            Family::NeuralNetwork => "Neural networks",
             Family::Ensemble => "Ensembles",
         }
     }
@@ -288,6 +298,13 @@ registry! {
             "boosted_trees", "Gradient-boosted trees", MachineLearning;
         SupportVectors(tabular::SupportVectors) =
             "svr", "Support-vector regression", MachineLearning;
+        Mlp(neural::Mlp) = "mlp", "Multi-layer perceptron", NeuralNetwork;
+        Tcn(neural::Tcn) = "tcn", "Temporal convolutional network", NeuralNetwork;
+        Gru(neural::Gru) = "gru", "GRU network", NeuralNetwork;
+        Lstm(neural::Lstm) = "lstm", "LSTM network", NeuralNetwork;
+        NBeats(neural::NBeats) = "n_beats", "N-BEATS", NeuralNetwork;
+        NHits(neural::NHits) = "n_hits", "N-HiTS", NeuralNetwork;
+        PatchTst(neural::PatchTst) = "patch_tst", "PatchTST", NeuralNetwork;
     }
     ensembles {
         MeanEnsemble = "ensemble_mean", "Mean of the best five", Mean;
@@ -301,6 +318,10 @@ registry! {
 impl Forecaster for AnyModel {
     fn min_history(&self) -> TimeDelta {
         self.inner().min_history()
+    }
+
+    fn refit_days(&self) -> usize {
+        self.inner().refit_days()
     }
 
     fn fit(&mut self, data: &Observed<'_>) -> Result<(), MlError> {
