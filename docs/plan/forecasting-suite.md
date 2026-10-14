@@ -191,8 +191,11 @@ forecaster do not serialise), plus the stlrs seasonal components.
 | PatchTST | last 672 slots, patches of 16 | 8 days |
 
 Multi-output heads (96 steps). Adam, early stopping on the last day before
-the fit date, fixed seed. Weights saved with burn's `into_bytes`. The `cpu`
-backend is not enabled (build-time LLVM download, slow here).
+the fit date, fixed seed. Weights saved with burn's burnpack store (`store`
+feature; 0.22 dropped `into_bytes` and the backend type parameter — the
+device picks the backend at runtime). The `cpu` backend is not enabled
+(build-time LLVM download, slow here); `simd` / `rayon` measured no faster
+on this machine, so they stay off.
 
 ## Database
 
@@ -243,7 +246,7 @@ the baseline and its replacements.
 | anofox-forecast (`serde`) | =0.16.0 | 5 | AutoETS, ARIMA, SARIMA, TBATS, MFLES, AutoTheta — no other Rust crate has them |
 | stlrs | 0.4 | 5 | f64 STL / MSTL |
 | forust-ml | 0.7 | 6 | Fastest, most accurate pure-Rust boosted trees measured |
-| burn (`std`, `autodiff`, `optim`, `flex`) | =0.22.0 | 7 | Every layer built in, pure-Rust CPU backend, weights to bytes |
+| burn (`std`, `autodiff`, `optim`, `flex`, `store`) | =0.22.0 | 7 | Every layer built in, pure-Rust CPU backend, weights to bytes |
 
 serde_json moves into hardy-ml for forust-ml's artifacts. linfa / linfa-linear
 are removed once ridge moves to faer (phase 6). Research timings and the
@@ -328,7 +331,17 @@ rejected alternatives are in the session record of this plan's discussion.
    `ridge` / `random_forest` ids; the old pipeline (features, samples,
    model) and linfa go. Quantile regression fits the median only: its band
    is conformal like every other model's.
-7. Neural networks.
+7. Neural networks. Agreed: like phases 4–6 the nets learn the deviation
+   from the weekly profile (forecast = profile + output), with recent
+   occupancy and deviation as inputs (scaled to 0–1, closed slots 0, missing
+   open slots filled from the profile) and the target's calendar / profile
+   as known covariates; the loss covers open target slots with a value
+   only. Training windows: one per 15-minute origin over the last 56 days.
+   Weights in burn's burnpack format. In the backtest a net is fitted on
+   the first day of each week of backtest days and reused for the next six
+   (its inputs roll forward), so a night fits each net five times. Weight
+   initialisation is seeded under a lock, so parallel fits stay
+   reproducible; dropout is off.
 
 Each phase: fmt, `clippy --workspace --all-targets`, `check --workspace
 --all-targets` (also `SQLX_OFFLINE=true`), `nextest --workspace`, `.sqlx`
