@@ -8,6 +8,7 @@ anofox-forecast = { workspace = true }
 anyhow = { workspace = true }
 argmin = { workspace = true }
 argmin-math = { workspace = true }
+burn = { workspace = true }
 chrono = { workspace = true }
 faer = { workspace = true }
 forust-ml = { workspace = true }

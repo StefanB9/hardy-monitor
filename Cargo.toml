@@ -26,6 +26,7 @@ anofox-forecast = { version = "=0.16.0", default-features = false }
 anyhow = { version = "1.0.104", default-features = false, features = ["std"] }
 argmin = { version = "0.11.0", default-features = false }
 argmin-math = { version = "0.5.1", default-features = false, features = ["vec"] }
+burn = { version = "=0.22.0", default-features = false, features = ["std", "autodiff", "optim", "flex", "store"] }
 chrono-tz = { version = "0.10.4", default-features = false, features = ["serde"] }
 
 # --- GUI-only ---
@@ -98,4 +99,48 @@ strip = false
 opt-level = 3
 
 [profile.dev.package.hardy-ml]
+opt-level = 3
+
+# Neural network training is ~50x slower unoptimised; the tensor kernels
+# live in burn's crates and gemm (matrix products) rather than in hardy-ml.
+[profile.dev.package.burn-flex]
+opt-level = 3
+
+[profile.dev.package.burn-autodiff]
+opt-level = 3
+
+[profile.dev.package.burn-backend]
+opt-level = 3
+
+[profile.dev.package.burn-dispatch]
+opt-level = 3
+
+[profile.dev.package.burn-tensor]
+opt-level = 3
+
+[profile.dev.package.burn-nn]
+opt-level = 3
+
+[profile.dev.package.burn-optim]
+opt-level = 3
+
+[profile.dev.package.burn-core]
+opt-level = 3
+
+[profile.dev.package.burn-std]
+opt-level = 3
+
+[profile.dev.package.gemm]
+opt-level = 3
+
+[profile.dev.package.gemm-common]
+opt-level = 3
+
+[profile.dev.package.gemm-f32]
+opt-level = 3
+
+[profile.dev.package.gemm-f64]
+opt-level = 3
+
+[profile.dev.package.pulp]
 opt-level = 3
