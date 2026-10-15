@@ -39,3 +39,6 @@ changes.
 - Headless check: under `tiny-skia` a sort (text changes only) repaints on
   the next damage, since tiny-skia's damage tracking misses it; the
   committed `wgpu` backend redraws whole frames.
+- Follow-up: the status column also shows when a fitted model was last
+  fitted ("53 d of data · fit Wed 23:36", gym-local time), as the suite plan
+  asked.

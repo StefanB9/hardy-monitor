@@ -107,6 +107,10 @@ such.
 - Output gate: a forecast containing a non-finite value or anything outside
   −50…150 before clipping marks the fit failed (catches exploding ARIMA).
 - ARIMA family: AR/MA roots checked for stationarity/invertibility after fit.
+  As built: AutoARIMA's chosen order is refitted (anofox exposes no
+  coefficients of its choice) and the AR, MA and seasonal parts of it and of
+  the fixed SARIMA are checked by Schur–Cohn step-down; a failing fit is
+  refused for that origin.
 
 ## Models
 

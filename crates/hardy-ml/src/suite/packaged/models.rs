@@ -2,18 +2,13 @@
 
 use anofox_forecast::{
     core::TimeSeries,
-    models::{
-        MFLES,
-        arima::{AutoARIMA, SARIMA},
-        exponential::AutoETS,
-        tbats::AutoTBATS,
-        theta::AutoTheta as AnofoxAutoTheta,
-    },
+    models::{MFLES, exponential::AutoETS, tbats::AutoTBATS, theta::AutoTheta as AnofoxAutoTheta},
 };
 use chrono::{DateTime, TimeDelta, Utc};
 use serde::{Deserialize, Serialize};
 
 use super::{
+    arima::{auto_arima, sarima},
     decompose::decompose,
     fourier::Fourier,
     series::{deviation_series, grid_series, open_slots},
@@ -58,20 +53,25 @@ fn all_seasons(len: usize) -> Vec<usize> {
     }
 }
 
-/// Fits `model` on `values` (consecutive slots) and forecasts `horizon`
-/// steps.
-fn run(
-    mut model: impl anofox_forecast::models::Forecaster,
-    values: &[f64],
-    horizon: usize,
-) -> Result<Vec<f64>, MlError> {
-    let failed = |e: anofox_forecast::ForecastError| MlError::Fit(e.to_string());
+/// `values` (consecutive slots) as an anofox series.
+pub(super) fn time_series(values: &[f64]) -> Result<TimeSeries, MlError> {
     // Only the spacing of the timestamps matters to the models.
     let timestamps = (0..values.len())
         .map(|i| DateTime::UNIX_EPOCH + SLOT * i32::try_from(i).unwrap_or(i32::MAX))
         .collect();
-    let series = TimeSeries::univariate(timestamps, values.to_vec()).map_err(failed)?;
-    model.fit(&series).map_err(failed)?;
+    TimeSeries::univariate(timestamps, values.to_vec()).map_err(failed)
+}
+
+#[allow(clippy::needless_pass_by_value)] // used as `map_err(failed)`
+pub(super) fn failed(e: anofox_forecast::ForecastError) -> MlError {
+    MlError::Fit(e.to_string())
+}
+
+/// The fitted `model`'s next `horizon` values.
+pub(super) fn ahead(
+    model: &impl anofox_forecast::models::Forecaster,
+    horizon: usize,
+) -> Result<Vec<f64>, MlError> {
     let forecast = model.predict(horizon).map_err(failed)?;
     let values = forecast.primary();
     if values.len() == horizon {
@@ -84,15 +84,26 @@ fn run(
     }
 }
 
+/// Fits `model` on `values` (consecutive slots) and forecasts `horizon`
+/// steps.
+fn run(
+    mut model: impl anofox_forecast::models::Forecaster,
+    values: &[f64],
+    horizon: usize,
+) -> Result<Vec<f64>, MlError> {
+    model.fit(&time_series(values)?).map_err(failed)?;
+    ahead(&model, horizon)
+}
+
 /// The forecast of the seasonally adjusted `values` by `inner`, plus their
 /// seasonal part (periods `periods`) carried forward.
 fn decomposed(
     values: &[f64],
     periods: &[usize],
-    inner: impl anofox_forecast::models::Forecaster,
+    inner: impl FnOnce(&[f64], usize) -> Result<Vec<f64>, MlError>,
 ) -> Result<Vec<f64>, MlError> {
     let (seasonal, adjusted) = decompose(values, periods)?;
-    let rest = run(inner, &adjusted, HORIZON_STEPS)?;
+    let rest = inner(&adjusted, HORIZON_STEPS)?;
     Ok(rest
         .into_iter()
         .enumerate()
@@ -136,7 +147,7 @@ fn forecast(kind: Kind, profile: &WeeklyProfile, data: &Observed<'_>) -> Result<
     match kind {
         Kind::AutoArima => {
             let deviations = deviation_series(data, profile);
-            let ahead = run(AutoARIMA::new(), &deviations, open_steps(data))?;
+            let ahead = auto_arima(&deviations, open_steps(data))?;
             Ok(on_open_steps(data, &ahead, |end| profile.at(end)))
         }
         Kind::FourierArima => {
@@ -152,7 +163,7 @@ fn forecast(kind: Kind, profile: &WeeklyProfile, data: &Observed<'_>) -> Result<
                 .iter()
                 .map(|&(end, v)| v.map_or(0.0, |v| v - fourier.at(end)))
                 .collect();
-            let ahead = run(AutoARIMA::new(), &residuals, open_steps(data))?;
+            let ahead = auto_arima(&residuals, open_steps(data))?;
             Ok(on_open_steps(data, &ahead, |end| fourier.at(end)))
         }
         _ => {
@@ -160,15 +171,15 @@ fn forecast(kind: Kind, profile: &WeeklyProfile, data: &Observed<'_>) -> Result<
             let n = values.len();
             match kind {
                 Kind::AutoEts => run(AutoETS::with_period(main_season(n)), &values, HORIZON_STEPS),
-                Kind::Sarima => run(
-                    SARIMA::new(1, 0, 1, 1, 1, 1, SLOTS_PER_DAY),
-                    &values,
-                    HORIZON_STEPS,
-                ),
-                Kind::StlEts => decomposed(&values, &[SLOTS_PER_DAY], AutoETS::non_seasonal()),
-                Kind::StlArima => decomposed(&values, &[SLOTS_PER_DAY], AutoARIMA::new()),
-                Kind::MstlEts => decomposed(&values, &all_seasons(n), AutoETS::non_seasonal()),
-                Kind::MstlArima => decomposed(&values, &all_seasons(n), AutoARIMA::new()),
+                Kind::Sarima => sarima(&values, HORIZON_STEPS),
+                Kind::StlEts => decomposed(&values, &[SLOTS_PER_DAY], |v, h| {
+                    run(AutoETS::non_seasonal(), v, h)
+                }),
+                Kind::StlArima => decomposed(&values, &[SLOTS_PER_DAY], auto_arima),
+                Kind::MstlEts => decomposed(&values, &all_seasons(n), |v, h| {
+                    run(AutoETS::non_seasonal(), v, h)
+                }),
+                Kind::MstlArima => decomposed(&values, &all_seasons(n), auto_arima),
                 Kind::AutoTbats => run(AutoTBATS::new(all_seasons(n)), &values, HORIZON_STEPS),
                 Kind::Mfles => run(MFLES::new(all_seasons(n)), &values, HORIZON_STEPS),
                 _ => run(
