@@ -7,6 +7,7 @@ use tray_icon::TrayIconEvent;
 
 use super::{HardyMonitorApp, Message, ViewMode, loads::ErrorSource};
 use crate::{
+    forecasting::ModelOption,
     time_range::{ChartRange, Step, can_step_back, shift_custom},
     views::schema_notice::SchemaGate,
 };
@@ -47,7 +48,8 @@ impl HardyMonitorApp {
                     self.load_chart_history(),
                     self.load_analytics(),
                     self.load_insights_data(),
-                    self.load_model_status(),
+                    self.load_suite_status(),
+                    self.load_published_forecast(),
                     self.load_forecast_history(),
                     self.load_first_reading(),
                 ])
@@ -94,6 +96,8 @@ impl HardyMonitorApp {
             Message::SwitchView(_)
             | Message::SwitchAnalyticsRange(_)
             | Message::ChartRangeSelected(_)
+            | Message::LeaderboardSorted(_)
+            | Message::LeaderboardFiltered(_)
             | Message::CustomStartChanged(_)
             | Message::CustomEndChanged(_)
             | Message::ApplyCustomRange
@@ -106,16 +110,14 @@ impl HardyMonitorApp {
             | Message::RepairPresetSelected(_)
             | Message::StartRepairJob
             | Message::RepairCompleted(_) => self.update_maintenance(message),
-            Message::AccuracyLoaded(result) => {
-                if let Some(rows) = self.errors.record(ErrorSource::Accuracy, result) {
-                    self.data.accuracy = summarize(&rows);
-                }
-                Task::none()
-            }
-            Message::TrainModelRequested
+            Message::AccuracyLoaded(_)
+            | Message::ForecastRunRequested
             | Message::ForecastHistoryLoaded(_)
-            | Message::ModelStatusLoaded(_)
-            | Message::ModelLoaded(_) => self.update_model(message),
+            | Message::SuiteStatusLoaded(_)
+            | Message::PublishedForecastLoaded(_)
+            | Message::ForecastChoiceSelected(_)
+            | Message::OverlayAdded(_)
+            | Message::OverlayRemoved(_) => self.update_model(message),
         }
     }
 
@@ -170,6 +172,14 @@ impl HardyMonitorApp {
             Message::SwitchAnalyticsRange(range) => {
                 self.ui.analytics_range = range;
                 self.load_analytics()
+            }
+            Message::LeaderboardSorted(key) => {
+                self.ui.leaderboard_sort = self.ui.leaderboard_sort.clicked(key);
+                Task::none()
+            }
+            Message::LeaderboardFiltered(family) => {
+                self.ui.leaderboard_family = family;
+                Task::none()
             }
             Message::ChartRangeSelected(range) => {
                 self.ui.chart_range = range;
@@ -254,12 +264,19 @@ impl HardyMonitorApp {
         self.load_chart_history()
     }
 
-    /// Forecast history, model status and retraining.
+    /// Forecast history, the published forecasts, which of them is shown,
+    /// model status, accuracy and run requests.
     fn update_model(&mut self, message: Message) -> Task<Message> {
         match message {
-            Message::TrainModelRequested => {
-                tracing::info!("model retraining requested");
-                self.request_retrain()
+            Message::AccuracyLoaded(result) => {
+                if let Some(rows) = self.errors.record(ErrorSource::Accuracy, result) {
+                    self.data.accuracy = summarize(&rows);
+                }
+                Task::none()
+            }
+            Message::ForecastRunRequested => {
+                tracing::info!("forecast run requested");
+                self.request_forecast_run()
             }
             Message::ForecastHistoryLoaded(result) => {
                 if let Some(logs) = self.errors.record(ErrorSource::ForecastHistory, result) {
@@ -268,28 +285,32 @@ impl HardyMonitorApp {
                 }
                 Task::none()
             }
-            Message::ModelStatusLoaded(result) => {
-                let Some((latest, state)) = self.errors.record(ErrorSource::ModelStatus, result)
-                else {
-                    return Task::none();
-                };
-                self.data.forecasting.set_state(state);
-                match latest {
-                    Some(info) if self.data.forecasting.is_new_model(Some(&info)) => {
-                        self.load_model(info)
-                    }
-                    _ => Task::none(),
+            Message::SuiteStatusLoaded(result) => {
+                if let Some(status) = self.errors.record(ErrorSource::SuiteStatus, result) {
+                    self.data.forecasting.set_status(status);
                 }
+                Task::none()
             }
-            Message::ModelLoaded(result) => {
-                if let Err(e) = &result {
-                    tracing::warn!(error = %e, "could not load stored model");
-                }
-                if let Some((info, artifact)) = self.errors.record(ErrorSource::Model, result) {
-                    tracing::info!(id = info.id, trained_at = %info.trained_at, "loaded model");
-                    self.data.forecasting.set_model(&info, artifact);
+            Message::PublishedForecastLoaded(result) => {
+                if let Some(forecast) = self.errors.record(ErrorSource::PublishedForecast, result) {
+                    self.data.forecasting.set_published(forecast);
                     self.refresh_forecasts();
                 }
+                Task::none()
+            }
+            Message::ForecastChoiceSelected(choice) => {
+                self.data.forecasting.choose(choice);
+                self.refresh_forecasts();
+                Task::none()
+            }
+            Message::OverlayAdded(ModelOption(id)) => {
+                self.data.forecasting.add_overlay(id);
+                self.refresh_forecasts();
+                Task::none()
+            }
+            Message::OverlayRemoved(ModelOption(id)) => {
+                self.data.forecasting.remove_overlay(id);
+                self.refresh_forecasts();
                 Task::none()
             }
             _ => Task::none(),

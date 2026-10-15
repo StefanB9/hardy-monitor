@@ -22,7 +22,11 @@ missing_panics_doc = "allow"
 
 [workspace.dependencies]
 # --- Shared across multiple crates ---
+anofox-forecast = { version = "=0.16.0", default-features = false }
 anyhow = { version = "1.0.104", default-features = false, features = ["std"] }
+argmin = { version = "0.11.0", default-features = false }
+argmin-math = { version = "0.5.1", default-features = false, features = ["vec"] }
+burn = { version = "=0.22.0", default-features = false, features = ["std", "autodiff", "optim", "flex", "store"] }
 chrono-tz = { version = "0.10.4", default-features = false, features = ["serde"] }
 
 # --- GUI-only ---
@@ -34,14 +38,13 @@ config = { version = "0.15.27", default-features = false, features = ["toml"] }
 csv = { version = "1.4.0", default-features = false }
 dirs = { version = "7.0.0", default-features = false }
 dotenvy = { version = "0.15.7", default-features = false }
+faer = { version = "0.24.4", default-features = false, features = ["linalg", "std"] }
+forust-ml = { version = "=0.7.0", default-features = false }
 futures = { version = "0.3.34", default-features = false }
 iced = { version = "0.14.0", default-features = false, features = ["advanced", "canvas", "crisp", "tokio", "wgpu"] }
 image = { version = "0.25.10", default-features = false, features = ["jpeg", "png"] }
-linfa = { version = "0.8.1", default-features = false }
-linfa-linear = { version = "0.8.1", default-features = false }
 mimalloc = { version = "0.1.52", default-features = false }
 muda = { version = "0.21.2", default-features = false }
-ndarray = { version = "0.16.1", default-features = false }
 notify-rust = { version = "4.18.2", default-features = false }
 postcard = { version = "1.1.3", default-features = false, features = ["alloc"] }
 
@@ -49,10 +52,11 @@ postcard = { version = "1.1.3", default-features = false, features = ["alloc"] }
 proptest = { version = "1.12.0" }
 rayon = { version = "1.12.0", default-features = false }
 reqwest = { version = "0.13.5", default-features = false, features = ["json", "native-tls"] }
-serde = { version = "1.0.229", default-features = false, features = ["derive"] }
+serde = { version = "1.0.229", default-features = false, features = ["derive", "rc"] }
 serde_json = { version = "1.0.154", default-features = false, features = ["std"] }
 smartcore = { version = "0.6.15", default-features = false, features = ["serde"] }
 sqlx = { version = "0.9.0", default-features = false, features = ["chrono", "macros", "migrate", "postgres", "runtime-tokio", "tls-rustls"] }
+stlrs = { version = "0.4.0", default-features = false, features = ["alloc"] }
 temp-env = { version = "0.3.6" }
 tempfile = { version = "3.27.0" }
 thiserror = { version = "2.0.21", default-features = false }
@@ -95,4 +99,48 @@ strip = false
 opt-level = 3
 
 [profile.dev.package.hardy-ml]
+opt-level = 3
+
+# Neural network training is ~50x slower unoptimised; the tensor kernels
+# live in burn's crates and gemm (matrix products) rather than in hardy-ml.
+[profile.dev.package.burn-flex]
+opt-level = 3
+
+[profile.dev.package.burn-autodiff]
+opt-level = 3
+
+[profile.dev.package.burn-backend]
+opt-level = 3
+
+[profile.dev.package.burn-dispatch]
+opt-level = 3
+
+[profile.dev.package.burn-tensor]
+opt-level = 3
+
+[profile.dev.package.burn-nn]
+opt-level = 3
+
+[profile.dev.package.burn-optim]
+opt-level = 3
+
+[profile.dev.package.burn-core]
+opt-level = 3
+
+[profile.dev.package.burn-std]
+opt-level = 3
+
+[profile.dev.package.gemm]
+opt-level = 3
+
+[profile.dev.package.gemm-common]
+opt-level = 3
+
+[profile.dev.package.gemm-f32]
+opt-level = 3
+
+[profile.dev.package.gemm-f64]
+opt-level = 3
+
+[profile.dev.package.pulp]
 opt-level = 3

@@ -107,6 +107,32 @@ impl HistoryChart<'_> {
         readings.last().map(|l| (l.timestamp, l.percentage))
     }
 
+    /// Comparison forecasts as thin lines, under the main forecast.
+    pub(super) fn draw_overlays(&self, frame: &mut Frame, plot: &Plot) {
+        for ((_, points), color) in self.overlays.iter().zip(style::COMPARISON) {
+            let visible: Vec<_> = points
+                .iter()
+                .filter(|(t, _)| *t >= self.range_start && *t <= self.range_end)
+                .collect();
+            if visible.len() < 2 {
+                continue;
+            }
+            let line = Path::new(|b| {
+                for (i, (t, v)) in visible.iter().enumerate() {
+                    let p = plot.point(*t, *v);
+                    if i == 0 { b.move_to(p) } else { b.line_to(p) }
+                }
+            });
+            frame.stroke(
+                &line,
+                Stroke::default()
+                    .with_color(color)
+                    .with_width(1.5)
+                    .with_line_join(canvas::LineJoin::Round),
+            );
+        }
+    }
+
     pub(super) fn draw_forecast(
         &self,
         frame: &mut Frame,

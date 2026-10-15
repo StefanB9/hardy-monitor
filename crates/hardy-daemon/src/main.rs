@@ -20,7 +20,7 @@ use hardy_core::{
     health::HealthMonitor,
     schedule::GymSchedule,
 };
-use hardy_ml::maintenance::ModelMaintenance;
+use hardy_ml::service::ForecastService;
 
 use crate::{
     cycle::{Stored, log_outcome, run_cycle},
@@ -51,7 +51,13 @@ fn main() -> Result<()> {
 
     let rt = tokio::runtime::Runtime::new().context("Failed to create tokio runtime")?;
 
-    rt.block_on(run(&config))
+    let result = rt.block_on(run(&config));
+    // A nightly forecast run may still be computing on a blocking thread.
+    // Dropping the runtime would wait for it; it has written nothing yet
+    // (results are stored once collected) and reruns after the restart, so
+    // it is abandoned instead.
+    rt.shutdown_background();
+    result
 }
 
 async fn run(config: &AppConfig) -> Result<()> {
@@ -117,16 +123,16 @@ async fn run(config: &AppConfig) -> Result<()> {
         "alerts configured"
     );
 
-    let mut models = ModelMaintenance::new(config.ml.clone(), schedule.clone());
-    if let Err(e) = models.load_previous(&database).await {
-        tracing::warn!(error = %e, "could not read the stored model");
+    let mut service = ForecastService::new(&config.ml, schedule.clone());
+    if let Err(e) = service.load(&database).await {
+        tracing::warn!(error = %format!("{e:#}"), "could not read the stored forecast models");
     }
 
     fetch_loop(
         &worker,
         &mut alerts,
         &mut health,
-        &mut models,
+        &mut service,
         config.refresh.data_fetch_interval_secs,
         shutdown.as_mut(),
     )
@@ -153,7 +159,7 @@ async fn fetch_loop(
     worker: &Worker<'_>,
     alerts: &mut AlertService,
     health: &mut HealthMonitor,
-    models: &mut ModelMaintenance,
+    service: &mut ForecastService,
     interval_secs: u64,
     mut shutdown: std::pin::Pin<&mut impl std::future::Future<Output = ()>>,
 ) {
@@ -211,7 +217,7 @@ async fn fetch_loop(
         // Runs while the gym is closed too, so it comes before the closed
         // check.
         tokio::select! {
-            () = upkeep::nightly_upkeep(worker, models) => {}
+            () = upkeep::nightly_upkeep(worker, service) => {}
             () = &mut shutdown => {
                 tracing::info!("shutdown requested during upkeep");
                 return;
@@ -240,8 +246,8 @@ async fn fetch_loop(
         if stop {
             return;
         }
-        if forecasts::is_logging_slot(slot) {
-            upkeep::log_forecasts(worker, models, slot).await;
+        if forecasts::is_publishing_slot(slot) {
+            upkeep::publish_forecasts(worker, service, slot).await;
         }
         if let Some(event) = health_event {
             tokio::select! {

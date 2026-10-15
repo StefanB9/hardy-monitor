@@ -1,0 +1,76 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT model, origins, fitted_days, eligible, failure\n            FROM benchmark_models\n            WHERE run_id = $1\n            ORDER BY model\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "model",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "benchmark_models",
+            "name": "model"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "origins",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "benchmark_models",
+            "name": "origins"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "fitted_days",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "benchmark_models",
+            "name": "fitted_days"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "eligible",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "benchmark_models",
+            "name": "eligible"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "failure",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "benchmark_models",
+            "name": "failure"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "1abab21eac04b8f1457e9995b4b15c5c9f036003fdd50c5ec52ed86c969d082f"
+}

@@ -11,7 +11,8 @@ hardy-monitor/                         (workspace root)
 ├── Cargo.toml                         [workspace] manifest — all dependency versions here
 ├── config.toml                        Documented example configuration
 ├── migrations/                        sqlx migrations: occupancy_logs (+ quarantine), alert_settings,
-│                                      ml_models / ml_state, repair_state, forecast_log
+│                                      ml_state, repair_state, forecast_log, forecast suite (forecast_models,
+│                                      benchmark_runs / _models / _scores, forecast_selection, live_forecasts)
 ├── .sqlx/                             sqlx offline query cache
 ├── docs/plan/                         Approved plans
 │
@@ -27,7 +28,8 @@ hardy-monitor/                         (workspace root)
 │   │   │   ├── config/                AppConfig + load (TOML + env var); one file per section group;
 │   │   │   │                          validation.rs
 │   │   │   ├── db/                    Database (sqlx PgPool): readings, averages, export (CSV), alert settings,
-│   │   │   │                          ml, repair state, forecast log; schema.rs: migrations + version check
+│   │   │   │                          ml state, suite (model states), benchmark, live forecasts, repair state,
+│   │   │   │                          forecast log; schema.rs: migrations + version check
 │   │   │   ├── error.rs               AppError, NetworkErrorKind, DatabaseError (thiserror)
 │   │   │   ├── health.rs              HealthMonitor: outage / resumed messages for the daemon
 │   │   │   ├── ntfy.rs                ntfy client (publish, poll)
@@ -44,10 +46,19 @@ hardy-monitor/                         (workspace root)
 │   │                                  RawTestDatabase
 │   │
 │   ├── hardy-ml/                      (library — forecasting, shared by daemon and GUI)
-│   │   ├── src/                       history, profile, features, samples, model, training/ (+ quality gate;
-│   │   │                              tuning, intervals), evaluation, confidence, forecast, forecast_log,
-│   │   │                              retrain, maintenance, persistence
-│   │   └── tests/maintenance.rs       Training against a real database
+│   │   ├── src/                       grid (15-minute slots), history, profile, baseline; suite/ (model
+│   │   │                              interface + registry, baselines, profiles/, statistical/ (smoothing,
+│   │   │                              Theta, AR, Holt–Winters, Kalman; Nelder–Mead, faer OLS), packaged/
+│   │   │                              (anofox-forecast + stlrs models refitted per origin, Fourier + ARIMA),
+│   │   │                              tabular/ (slot features; ridge, elastic-net, spline GAM, median
+│   │   │                              regression, random forest, boosted trees, SVR per horizon bucket),
+│   │   │                              neural/ (burn, flex CPU backend: windows, training with early
+│   │   │                              stopping; MLP, TCN, GRU, LSTM, N-BEATS, N-HiTS, PatchTST; weekly
+│   │   │                              refits in the backtest), legacy wrapper, linalg, safety);
+│   │   │                              benchmark/ (rolling-origin backtest, metrics + conformal
+│   │   │                              intervals, ensembles, selection); nightly, live,
+│   │   │                              service, retrain, confidence
+│   │   └── tests/service.rs           Nightly run and live publishing against a real database
 │   │
 │   ├── hardy-daemon/                  (binary — headless fetch loop; the only process that migrates)
 │   │   └── src/
@@ -55,8 +66,8 @@ hardy-monitor/                         (workspace root)
 │   │       ├── cycle.rs               One fetch cycle: fetch, store, log (shutdown grace)
 │   │       ├── timing.rs              Minute alignment and drift correction
 │   │       ├── connect.rs             Database connect with retry, health and schema checks
-│   │       ├── upkeep.rs              Nightly repair + training, schema check, forecast logging
-│   │       ├── forecasts.rs           Hourly forecast log (accuracy tracking)
+│   │       ├── upkeep.rs              Nightly repair + forecast run, schema check, live forecasts
+│   │       ├── forecasts.rs           Live forecasts every quarter hour, hourly accuracy log
 │   │       └── logging.rs             tracing setup (console / rotated file)
 │   │
 │   └── hardy-gui/                     (binary + library — iced desktop GUI)
@@ -68,7 +79,9 @@ hardy-monitor/                         (workspace root)
 │           │                          (applying loaded data), maintenance (export/repair), view (shell),
 │           │                          sidebar, tasks (DB loads)
 │           ├── style.rs               Design tokens: colours, occupancy scale, type/spacing scales
-│           ├── forecasting.rs         Forecast state: history, loaded model, forecasts, quiet window
+│           ├── forecasting.rs         Forecast state: published forecast, model states, quiet window
+│           ├── leaderboard/           Forecast models table: benchmark error per horizon, standing;
+│           │                          order.rs: column sort, family filter, picker order
 │           ├── quiet_window.rs        Next quiet hour (forecast, else slot averages)
 │           ├── time_range.rs          ChartRange / AnalyticsRange and the instants they cover
 │           ├── freshness.rs           Whether the newest reading is live or stale

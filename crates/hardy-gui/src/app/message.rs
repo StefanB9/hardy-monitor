@@ -1,18 +1,20 @@
 //! What the app reacts to, and the views it can show.
 
-use std::sync::Arc;
-
 use chrono::{DateTime, Utc};
 use hardy_core::{
     alert::{AlertDuration, AlertSettings},
-    db::{HorizonAccuracy, HourlyAverage, MlState, ModelInfo, OccupancyLog, SchemaStatus},
+    db::{HorizonAccuracy, HourlyAverage, LiveForecast, OccupancyLog, SchemaStatus},
     error::AppError,
     repair::RepairSummary,
 };
-use hardy_ml::ModelArtifact;
+use hardy_ml::suite::Family;
 
 use super::loads::RequestId;
-use crate::time_range::{AnalyticsRange, ChartRange, Step};
+use crate::{
+    forecasting::{ForecastChoice, ModelOption, SuiteStatus},
+    leaderboard::SortKey,
+    time_range::{AnalyticsRange, ChartRange, Step},
+};
 
 /// The four top-level views.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -91,6 +93,10 @@ pub enum Message {
     SwitchView(ViewMode),
     SwitchAnalyticsRange(AnalyticsRange),
     ChartRangeSelected(ChartRange),
+    /// A leaderboard column header clicked: sort by it (again: reverse).
+    LeaderboardSorted(SortKey),
+    /// The leaderboard narrowed to a family (`None`: every model).
+    LeaderboardFiltered(Option<Family>),
     CustomStartChanged(String),
     CustomEndChanged(String),
     ApplyCustomRange,
@@ -113,10 +119,16 @@ pub enum Message {
 
     /// New rows for the forecasting history.
     ForecastHistoryLoaded(Result<Vec<OccupancyLog>, AppError>),
-    /// Newest stored model and training state.
-    ModelStatusLoaded(Result<(Option<ModelInfo>, MlState), AppError>),
-    ModelLoaded(Result<(ModelInfo, Arc<ModelArtifact>), AppError>),
-    TrainModelRequested,
+    /// The forecast models' states, benchmark and selection.
+    SuiteStatusLoaded(Result<SuiteStatus, AppError>),
+    /// Every forecast the daemon published.
+    PublishedForecastLoaded(Result<Vec<LiveForecast>, AppError>),
+    ForecastRunRequested,
+    /// Which forecast the chart and the quiet hour use.
+    ForecastChoiceSelected(ForecastChoice),
+    /// A model added to or removed from the chart's comparison lines.
+    OverlayAdded(ModelOption),
+    OverlayRemoved(ModelOption),
     AccuracyLoaded(Result<Vec<HorizonAccuracy>, AppError>),
 
     /// Result of comparing the database schema with this build.
@@ -137,8 +149,8 @@ impl Message {
             | Message::ExportCompleted(_)
             | Message::RepairCompleted(_)
             | Message::ForecastHistoryLoaded(_)
-            | Message::ModelStatusLoaded(_)
-            | Message::ModelLoaded(_)
+            | Message::SuiteStatusLoaded(_)
+            | Message::PublishedForecastLoaded(_)
             | Message::AccuracyLoaded(_)
             | Message::FirstReadingLoaded(_) => true,
             Message::Tick
@@ -153,6 +165,8 @@ impl Message {
             | Message::SwitchView(_)
             | Message::SwitchAnalyticsRange(_)
             | Message::ChartRangeSelected(_)
+            | Message::LeaderboardSorted(_)
+            | Message::LeaderboardFiltered(_)
             | Message::CustomStartChanged(_)
             | Message::CustomEndChanged(_)
             | Message::ApplyCustomRange
@@ -165,7 +179,10 @@ impl Message {
             | Message::RepairEndDateChanged(_)
             | Message::RepairPresetSelected(_)
             | Message::StartRepairJob
-            | Message::TrainModelRequested
+            | Message::ForecastRunRequested
+            | Message::ForecastChoiceSelected(_)
+            | Message::OverlayAdded(_)
+            | Message::OverlayRemoved(_)
             | Message::SchemaChecked(_)
             | Message::RetrySchemaCheck => false,
         }
@@ -196,8 +213,8 @@ mod tests {
             Message::ExportCompleted(failed()),
             Message::RepairCompleted(failed()),
             Message::ForecastHistoryLoaded(failed()),
-            Message::ModelStatusLoaded(failed()),
-            Message::ModelLoaded(failed()),
+            Message::SuiteStatusLoaded(failed()),
+            Message::PublishedForecastLoaded(failed()),
             Message::AccuracyLoaded(failed()),
             Message::FirstReadingLoaded(failed()),
         ];
@@ -210,6 +227,8 @@ mod tests {
             Message::ChartStep(Step::Back),
             Message::SchemaChecked(failed()),
             Message::NotificationSent,
+            Message::LeaderboardSorted(SortKey::Name),
+            Message::LeaderboardFiltered(None),
         ];
         assert!(!others.iter().any(Message::finishes_load));
     }

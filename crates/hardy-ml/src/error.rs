@@ -25,6 +25,15 @@ pub enum MlError {
 
     #[error("stored model has feature version {found}, expected {expected}")]
     IncompatibleVersion { found: u32, expected: u32 },
+
+    #[error("not enough history: {have_hours} h, need {need_hours} h")]
+    NotEnoughHistory { have_hours: i64, need_hours: i64 },
+
+    #[error("unusable forecast: {0}")]
+    BadForecast(String),
+
+    #[error("model crashed: {0}")]
+    Panicked(String),
 }
 
 #[cfg(test)]
@@ -67,6 +76,21 @@ mod tests {
                     expected: 2,
                 },
                 "stored model has feature version 1, expected 2",
+            ),
+            (
+                MlError::NotEnoughHistory {
+                    have_hours: 30,
+                    need_hours: 168,
+                },
+                "not enough history: 30 h, need 168 h",
+            ),
+            (
+                MlError::BadForecast("NaN for step 3".to_string()),
+                "unusable forecast: NaN for step 3",
+            ),
+            (
+                MlError::Panicked("index out of bounds".to_string()),
+                "model crashed: index out of bounds",
             ),
         ];
         for (error, expected) in cases {

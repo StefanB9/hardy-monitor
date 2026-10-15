@@ -1,6 +1,6 @@
 //! "Next quiet hour" card with the upcoming hours.
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Timelike, Utc};
 use hardy_core::Tz;
 use iced::{
     Alignment, Border, Element, Length,
@@ -75,10 +75,10 @@ pub(super) fn card<'a>(props: &NowProps<'a>) -> container::Container<'a, Message
     };
 
     let level = OccupancyLevel::from_percentage(window.expected, low, high);
-    let source = match window.source {
-        Source::Forecast if props.has_model => "Forecast from the trained model",
-        Source::Forecast => "Baseline forecast (no model yet)",
-        Source::Averages => "Typical for this weekday",
+    let source = match (window.source, props.forecast_source) {
+        (Source::Forecast, Some(model)) => format!("Forecast: {model}"),
+        (Source::Forecast, None) => "Forecast".to_string(),
+        (Source::Averages, _) => "Typical for this weekday".to_string(),
     };
     let headline = column![
         text(format!(
@@ -110,7 +110,12 @@ pub(super) fn card<'a>(props: &NowProps<'a>) -> container::Container<'a, Message
     let next: Vec<_> = props
         .forecast
         .iter()
-        .filter(|p| p.timestamp > props.now && props.schedule.is_open(&p.timestamp))
+        // Whole hours only: the forecast comes in quarter hours.
+        .filter(|p| {
+            p.timestamp > props.now
+                && p.timestamp.minute() == 0
+                && props.schedule.is_open(&p.timestamp)
+        })
         .take(UPCOMING_ROWS)
         .collect();
     if next.is_empty() {

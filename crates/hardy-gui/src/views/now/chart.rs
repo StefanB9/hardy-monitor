@@ -1,14 +1,16 @@
 //! Occupancy chart card with range selection and legend.
 
 use chrono::{DateTime, Utc};
+use hardy_ml::suite::ModelId;
 use iced::{
-    Alignment, Element, Length,
-    widget::{Canvas, Space, column, container, row, text},
+    Alignment, Border, Color, Element, Length,
+    widget::{Canvas, Space, button, column, combo_box, container, row, text},
 };
 
 use super::NowProps;
 use crate::{
     app::Message,
+    forecasting::{MAX_OVERLAYS, ModelOption},
     style,
     time_range::{ChartRange, Step, can_step_back},
     views::components::{
@@ -16,6 +18,9 @@ use crate::{
     },
     widgets::history_chart::HistoryChart,
 };
+
+/// Width of a model list: room for the longest model and family names.
+const PICKER_WIDTH: f32 = 300.0;
 
 const RANGES: [(&str, ChartRange); 4] = [
     ("Today", ChartRange::Today),
@@ -53,7 +58,7 @@ pub(super) fn card<'a>(props: &NowProps<'a>) -> container::Container<'a, Message
     card_with_actions(
         "Occupancy",
         segmented(&RANGES, props.chart_range, Message::ChartRangeSelected),
-        column![toolbar(props, window), chart]
+        column![toolbar(props, window), models(props), chart]
             .spacing(style::SPACE_M)
             .height(Length::Fill),
     )
@@ -102,6 +107,81 @@ fn toolbar<'a>(props: &NowProps<'a>, window: Window) -> Element<'a, Message> {
     toolbar.into()
 }
 
+/// Which forecast is drawn, and the models drawn beside it for comparison.
+/// Both lists can be searched by typing a model or family name.
+fn models<'a>(props: &NowProps<'a>) -> Element<'a, Message> {
+    let mut line = row![
+        caption("Forecast"),
+        combo_box(
+            props.forecast_picker,
+            "Search models…",
+            Some(&props.forecast_choice),
+            Message::ForecastChoiceSelected,
+        )
+        .size(style::TEXT_CAPTION)
+        .padding([4, 8])
+        .width(PICKER_WIDTH),
+    ]
+    .spacing(style::SPACE_S)
+    .align_y(Alignment::Center);
+    for ((id, _), color) in props.overlays.iter().zip(style::COMPARISON) {
+        line = line.push(overlay_chip(*id, color));
+    }
+    if props.overlays.len() < MAX_OVERLAYS && !props.compare_picker.options().is_empty() {
+        line = line.push(
+            combo_box(
+                props.compare_picker,
+                "Compare with…",
+                None,
+                Message::OverlayAdded,
+            )
+            .size(style::TEXT_CAPTION)
+            .padding([4, 8])
+            .width(PICKER_WIDTH),
+        );
+    }
+    line.into()
+}
+
+/// A comparison model in its line colour, removable.
+fn overlay_chip(id: ModelId, color: Color) -> Element<'static, Message> {
+    button(
+        row![
+            legend_item(color, id.name()),
+            text("×")
+                .size(style::TEXT_CAPTION)
+                .color(style::TEXT_TERTIARY),
+        ]
+        .spacing(style::SPACE_S)
+        .align_y(Alignment::Center),
+    )
+    .on_press(Message::OverlayRemoved(ModelOption(id)))
+    .padding([4, 8])
+    .style(|_, status| button::Style {
+        background: Some(
+            if status == button::Status::Hovered {
+                style::BG_ELEVATED
+            } else {
+                style::BG_CARD
+            }
+            .into(),
+        ),
+        border: Border {
+            color: style::BORDER,
+            width: 1.0,
+            radius: 12.0.into(),
+        },
+        ..button::Style::default()
+    })
+    .into()
+}
+
+fn caption(label: &str) -> text::Text<'_> {
+    text(label)
+        .size(style::TEXT_CAPTION)
+        .color(style::TEXT_TERTIARY)
+}
+
 /// The chart, or why there is none.
 fn chart_area<'a>(props: &NowProps<'a>, window: Window) -> Element<'a, Message> {
     let notice = |message: &'a str| -> Element<'a, Message> {
@@ -127,6 +207,7 @@ fn chart_area<'a>(props: &NowProps<'a>, window: Window) -> Element<'a, Message> 
     Canvas::new(HistoryChart {
         history: props.history,
         forecast: props.forecast,
+        overlays: props.overlays,
         range_start,
         range_end,
         now: props.now,

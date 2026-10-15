@@ -1,9 +1,7 @@
-//! When the daemon should (re)train, and with which tuning.
+//! When the daemon should run the nightly fit and benchmark.
 
-use chrono::{DateTime, Datelike, TimeDelta, Utc, Weekday};
+use chrono::{DateTime, TimeDelta, Utc};
 use hardy_core::{GymSchedule, db::MlState};
-
-use crate::{model::RfParams, training::Tuning};
 
 /// Nightly training starts this long after closing.
 pub const AFTER_CLOSE: TimeDelta = TimeDelta::minutes(15);
@@ -13,16 +11,21 @@ pub const MISSING_MODEL_RETRY: TimeDelta = TimeDelta::hours(6);
 /// Why training is due.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RetrainReason {
-    /// No model for the current feature version exists.
+    /// No run has completed yet, or a model has never been fitted (e.g. one
+    /// added by an update).
     MissingModel,
     /// Requested from the GUI.
     Requested,
-    /// The gym closed and the newest model predates that closing.
+    /// The gym closed and the last run predates that closing.
     Nightly { closed_at: DateTime<Utc> },
+    /// A run started but never finished (the daemon stopped during it).
+    Interrupted,
+    /// Models without a stored state (added by an update, or unreadable).
+    NewModels,
 }
 
-/// Decides whether to train now. `latest_model_at` is when the newest usable
-/// model was trained; `state.last_attempt_at` prevents retry storms after a
+/// Decides whether to run now. `latest_model_at` is when the last complete
+/// run finished; `state.last_attempt_at` prevents retry storms after a
 /// failed attempt.
 pub fn retrain_due(
     now: DateTime<Utc>,
@@ -50,28 +53,6 @@ pub fn retrain_due(
         && latest_model_at < closed_at
         && !attempted_since(closed_at);
     nightly_due.then_some(RetrainReason::Nightly { closed_at })
-}
-
-/// Grid search on Sunday nights and when no model exists yet; otherwise
-/// reuse the newest model's hyperparameters (or the defaults).
-pub fn tuning_for(
-    reason: RetrainReason,
-    schedule: &GymSchedule,
-    previous_params: Option<RfParams>,
-) -> Tuning {
-    let reuse = Tuning::Fixed(previous_params.unwrap_or(RfParams::DEFAULT));
-    match reason {
-        RetrainReason::MissingModel => Tuning::GridSearch,
-        RetrainReason::Requested => reuse,
-        RetrainReason::Nightly { closed_at } => {
-            let weekday = closed_at.with_timezone(&schedule.timezone()).weekday();
-            if weekday == Weekday::Sun {
-                Tuning::GridSearch
-            } else {
-                reuse
-            }
-        }
-    }
 }
 
 #[cfg(test)]
@@ -182,43 +163,6 @@ mod tests {
         );
         let consumed = state(Some(now - TimeDelta::minutes(1)), Some(now));
         assert_eq!(retrain_due(now, &s, Some(local(0, 1, 0)), &consumed), None);
-    }
-
-    #[test]
-    fn test_tuning_choice() {
-        let s = GymSchedule::default();
-        let params = RfParams::new(50, 8, 20).ok();
-        assert_eq!(
-            tuning_for(RetrainReason::MissingModel, &s, params),
-            Tuning::GridSearch
-        );
-        // 2024-06-23 is a Sunday (weekend closing 21:00).
-        let sunday_close = local(6, 21, 0);
-        assert_eq!(
-            tuning_for(
-                RetrainReason::Nightly {
-                    closed_at: sunday_close
-                },
-                &s,
-                params
-            ),
-            Tuning::GridSearch
-        );
-        let monday_close = local(0, 23, 0);
-        assert_eq!(
-            tuning_for(
-                RetrainReason::Nightly {
-                    closed_at: monday_close
-                },
-                &s,
-                params
-            ),
-            Tuning::Fixed(params.unwrap_or(RfParams::DEFAULT))
-        );
-        assert_eq!(
-            tuning_for(RetrainReason::Requested, &s, None),
-            Tuning::Fixed(RfParams::DEFAULT)
-        );
     }
 
     proptest! {

@@ -26,6 +26,7 @@ use hardy_core::{
     schedule::GymSchedule,
     traits::{Clock, Notifier},
 };
+use hardy_ml::suite::Family;
 use iced::{Subscription, Task, Theme, widget::canvas::Cache, window};
 pub use loads::RequestId;
 use loads::{Errors, LatestOnly, PendingLoads};
@@ -36,6 +37,7 @@ use crate::{
     alerts::AlertControls,
     forecasting::Forecasting,
     freshness::{Freshness, freshness},
+    leaderboard::Sort,
     style::{self, OccupancyLevel},
     time_range::Step,
     tray::{Tray, TrayStatus, quiet_label, rgba8, tooltip_text},
@@ -85,6 +87,10 @@ struct UiState {
     current_view: ViewMode,
     analytics_range: AnalyticsRange,
     chart_range: ChartRange,
+    /// How the forecast models table is sorted and filtered (this session
+    /// only).
+    leaderboard_sort: Sort,
+    leaderboard_family: Option<Family>,
     /// Periods back from the current one (preset ranges).
     chart_offset: u32,
     custom_start: String,
@@ -167,6 +173,8 @@ impl HardyMonitorApp {
                 current_view: ViewMode::default(),
                 analytics_range: AnalyticsRange::default(),
                 chart_range: ChartRange::default(),
+                leaderboard_sort: Sort::default(),
+                leaderboard_family: None,
                 chart_offset: 0,
                 custom_start: week_ago_str.clone(),
                 custom_end: today_str.clone(),
@@ -242,7 +250,8 @@ impl HardyMonitorApp {
         Task::batch([
             self.load_alert_settings(),
             self.load_forecast_history(),
-            self.load_model_status(),
+            self.load_suite_status(),
+            self.load_published_forecast(),
             self.load_chart_history(),
             self.load_analytics(),
             self.load_insights_data(),

@@ -15,7 +15,7 @@ use connection::{
     default_acquire_timeout_secs, default_max_connections, default_statement_timeout_secs,
 };
 pub use display::{RefreshConfig, ThresholdsConfig, WindowConfig};
-pub use ml::{MlAlgorithm, MlConfig};
+pub use ml::MlConfig;
 pub use notifications::NotificationConfig;
 pub use schedule::{ScheduleConfig, ScheduleHours};
 pub use secret::SecretString;
@@ -81,7 +81,7 @@ impl AppConfig {
             .set_default("ml.enabled", true)?
             .set_default("ml.training_window_days", 56_i64)?
             .set_default("ml.prediction_horizon_hours", 6_i64)?
-            .set_default("ml.min_samples_for_training", 500_i64)?
+            .set_default("ml.benchmark_days", 28_i64)?
 
             .add_source(File::from(PathBuf::from("config.toml")).required(false))
 

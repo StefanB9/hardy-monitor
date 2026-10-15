@@ -1,38 +1,10 @@
-//! Storage for trained forecasting models and training coordination.
-//!
-//! Core stores model artifacts as opaque bytes; encoding them is
-//! `hardy-ml`'s concern.
+//! Coordination of the nightly forecasting run: requests from the GUI and
+//! the outcome of the last attempt.
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 
 use super::Database;
-
-/// A model to store.
-#[derive(Debug, Clone, Copy)]
-pub struct NewModel<'a> {
-    pub trained_at: DateTime<Utc>,
-    pub feature_version: u32,
-    pub algorithm: &'a str,
-    pub training_samples: usize,
-    pub holdout_mae: f64,
-    pub baseline_mae: f64,
-    pub tuned: bool,
-    pub bytes: &'a [u8],
-}
-
-/// Metadata of a stored model (without the model bytes).
-#[derive(Debug, Clone, PartialEq)]
-pub struct ModelInfo {
-    pub id: i64,
-    pub trained_at: DateTime<Utc>,
-    pub feature_version: u32,
-    pub algorithm: String,
-    pub training_samples: usize,
-    pub holdout_mae: f64,
-    pub baseline_mae: f64,
-    pub tuned: bool,
-}
 
 /// Training coordination state.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -45,123 +17,6 @@ pub struct MlState {
 }
 
 impl Database {
-    /// Stores a model and deletes all but the newest `keep` models of the
-    /// same feature version, in one transaction. Returns the new id.
-    #[tracing::instrument(skip_all, fields(
-        db.operation = "save_model",
-        feature_version = model.feature_version,
-        bytes = model.bytes.len(),
-    ))]
-    pub async fn save_model(&self, model: &NewModel<'_>, keep: usize) -> Result<i64> {
-        let feature_version =
-            i32::try_from(model.feature_version).context("feature version out of range")?;
-        let samples =
-            i32::try_from(model.training_samples).context("training sample count out of range")?;
-        let keep = i64::try_from(keep).context("keep count out of range")?;
-
-        let mut tx = self
-            .pool
-            .begin()
-            .await
-            .context("failed to begin transaction")?;
-        let id = sqlx::query_scalar!(
-            r#"
-            INSERT INTO ml_models
-                (trained_at, feature_version, algorithm, training_samples,
-                 holdout_mae, baseline_mae, tuned, model)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-            RETURNING id
-            "#,
-            model.trained_at,
-            feature_version,
-            model.algorithm,
-            samples,
-            model.holdout_mae,
-            model.baseline_mae,
-            model.tuned,
-            model.bytes
-        )
-        .fetch_one(&mut *tx)
-        .await
-        .context("Failed to insert model")?;
-
-        sqlx::query!(
-            r#"
-            DELETE FROM ml_models
-            WHERE feature_version = $1
-              AND id NOT IN (
-                  SELECT id FROM ml_models
-                  WHERE feature_version = $1
-                  ORDER BY trained_at DESC, id DESC
-                  LIMIT $2
-              )
-            "#,
-            feature_version,
-            keep
-        )
-        .execute(&mut *tx)
-        .await
-        .context("Failed to prune old models")?;
-
-        tx.commit().await.context("Failed to commit model")?;
-        Ok(id)
-    }
-
-    /// Metadata of the newest model with this feature version.
-    #[tracing::instrument(skip_all, fields(db.operation = "latest_model_info", feature_version))]
-    pub async fn latest_model_info(&self, feature_version: u32) -> Result<Option<ModelInfo>> {
-        let feature_version =
-            i32::try_from(feature_version).context("feature version out of range")?;
-        let row = sqlx::query!(
-            r#"
-            SELECT id, trained_at, feature_version, algorithm, training_samples,
-                   holdout_mae, baseline_mae, tuned
-            FROM ml_models
-            WHERE feature_version = $1
-            ORDER BY trained_at DESC, id DESC
-            LIMIT 1
-            "#,
-            feature_version
-        )
-        .fetch_optional(&self.pool)
-        .await
-        .context("Failed to load model info")?;
-
-        row.map(|r| {
-            Ok(ModelInfo {
-                id: r.id,
-                trained_at: r.trained_at,
-                feature_version: u32::try_from(r.feature_version)
-                    .context("stored feature version is negative")?,
-                algorithm: r.algorithm,
-                training_samples: usize::try_from(r.training_samples)
-                    .context("stored sample count is negative")?,
-                holdout_mae: r.holdout_mae,
-                baseline_mae: r.baseline_mae,
-                tuned: r.tuned,
-            })
-        })
-        .transpose()
-    }
-
-    /// The stored bytes of a model.
-    #[tracing::instrument(skip_all, fields(db.operation = "load_model", id))]
-    pub async fn load_model(&self, id: i64) -> Result<Vec<u8>> {
-        sqlx::query_scalar!("SELECT model FROM ml_models WHERE id = $1", id)
-            .fetch_one(&self.pool)
-            .await
-            .with_context(|| format!("Failed to load model {id}"))
-    }
-
-    /// Ids of all stored models, newest first.
-    #[tracing::instrument(skip_all, fields(db.operation = "model_ids"))]
-    pub async fn model_ids(&self) -> Result<Vec<i64>> {
-        sqlx::query_scalar!("SELECT id FROM ml_models ORDER BY trained_at DESC, id DESC")
-            .fetch_all(&self.pool)
-            .await
-            .context("Failed to list models")
-    }
-
     /// Training coordination state (retrain requests, last attempt).
     #[tracing::instrument(skip_all, fields(db.operation = "get_ml_state"))]
     pub async fn get_ml_state(&self) -> Result<MlState> {

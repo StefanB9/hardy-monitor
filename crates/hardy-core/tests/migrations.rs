@@ -292,3 +292,46 @@ async fn test_forecast_log_migration_reverts() -> Result<()> {
     raw.cleanup().await;
     Ok(())
 }
+
+const FORECAST_SUITE_VERSION: i64 = 20_261_012_051_621;
+
+#[tokio::test]
+async fn test_forecast_suite_migration_replaces_ml_models_and_reverts() -> Result<()> {
+    let raw = common::RawTestDatabase::new().await?;
+    let migrator = sqlx::migrate!("../../migrations");
+    migrator.run(&raw.pool).await?;
+
+    let replaced: bool = sqlx::query_scalar(
+        "SELECT to_regclass('ml_models') IS NULL AND to_regclass('live_forecasts') IS NOT NULL",
+    )
+    .fetch_one(&raw.pool)
+    .await?;
+    assert!(replaced);
+    let bad_status = sqlx::query(
+        "INSERT INTO forecast_models (model, status, updated_at) VALUES ('naive', 'odd', now())",
+    )
+    .execute(&raw.pool)
+    .await;
+    assert!(bad_status.is_err(), "status is checked");
+
+    migrator
+        .undo(&raw.pool, FORECAST_SUITE_VERSION - 1)
+        .await
+        .context("down migration applies")?;
+    let restored: bool = sqlx::query_scalar(
+        "SELECT to_regclass('ml_models') IS NOT NULL AND to_regclass('forecast_models') IS NULL",
+    )
+    .fetch_one(&raw.pool)
+    .await?;
+    assert!(restored);
+    let model_id: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM information_schema.columns WHERE table_name = 'forecast_log' AND \
+         column_name = 'model_id'",
+    )
+    .fetch_one(&raw.pool)
+    .await?;
+    assert_eq!(model_id, 1);
+
+    raw.cleanup().await;
+    Ok(())
+}

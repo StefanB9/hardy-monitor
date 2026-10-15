@@ -1,0 +1,98 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT model, status, message, fitted_at, data_from, data_until, updated_at\n            FROM forecast_models\n            ORDER BY model\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "model",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "forecast_models",
+            "name": "model"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "status",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "forecast_models",
+            "name": "status"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "message",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "forecast_models",
+            "name": "message"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "fitted_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "forecast_models",
+            "name": "fitted_at"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "data_from",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "forecast_models",
+            "name": "data_from"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "data_until",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "forecast_models",
+            "name": "data_until"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "updated_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "forecast_models",
+            "name": "updated_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      false
+    ]
+  },
+  "hash": "ec25965a6d3dbed4de47e19dab371a2d7e3d250fc831759cdd7f388ea634c9de"
+}
