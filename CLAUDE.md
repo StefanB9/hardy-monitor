@@ -80,7 +80,8 @@ hardy-monitor/                         (workspace root)
 │           │                          sidebar, tasks (DB loads)
 │           ├── style.rs               Design tokens: colours, occupancy scale, type/spacing scales
 │           ├── forecasting.rs         Forecast state: published forecast, model states, quiet window
-│           ├── leaderboard.rs         Forecast models table: benchmark error per horizon, standing
+│           ├── leaderboard/           Forecast models table: benchmark error per horizon, standing;
+│           │                          order.rs: column sort, family filter, picker order
 │           ├── quiet_window.rs        Next quiet hour (forecast, else slot averages)
 │           ├── time_range.rs          ChartRange / AnalyticsRange and the instants they cover
 │           ├── freshness.rs           Whether the newest reading is live or stale

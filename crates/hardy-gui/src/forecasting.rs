@@ -8,6 +8,7 @@ use hardy_core::{
     db::{BenchmarkRun, LiveForecast, MlState, ModelRecord, OccupancyLog},
 };
 use hardy_ml::{History, PredictionMethod, PredictionWithConfidence, SlotProfile, suite::ModelId};
+use iced::widget::combo_box;
 
 use crate::{
     leaderboard::{self, Leaderboard},
@@ -58,18 +59,19 @@ impl std::fmt::Display for ForecastChoice {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ForecastChoice::Best => f.write_str("Best per horizon"),
-            ForecastChoice::Model(id) => f.write_str(id.name()),
+            ForecastChoice::Model(id) => ModelOption(*id).fmt(f),
         }
     }
 }
 
-/// A model as a choice in a list.
+/// A model as a choice in a list, labelled with its family so typing the
+/// family finds it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ModelOption(pub ModelId);
 
 impl std::fmt::Display for ModelOption {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.0.name())
+        write!(f, "{} · {}", self.0.name(), self.0.family().name())
     }
 }
 
@@ -93,6 +95,11 @@ pub(crate) struct Forecasting {
     /// How many of `upcoming` lie within the chart's horizon.
     charted: usize,
     quiet_window: Option<QuietWindow>,
+    /// The forecast picker's options: the default, then every published
+    /// model.
+    forecast_picker: combo_box::State<ForecastChoice>,
+    /// Models that can be added for comparison.
+    compare_picker: combo_box::State<ModelOption>,
 }
 
 impl Forecasting {
@@ -110,6 +117,8 @@ impl Forecasting {
             upcoming: Vec::new(),
             charted: 0,
             quiet_window: None,
+            forecast_picker: combo_box::State::new(vec![ForecastChoice::Best]),
+            compare_picker: combo_box::State::new(Vec::new()),
         }
     }
 
@@ -136,6 +145,7 @@ impl Forecasting {
     pub(crate) fn set_status(&mut self, status: SuiteStatus) {
         self.leaderboard = leaderboard::build(&status);
         self.status = status;
+        self.rebuild_pickers();
     }
 
     pub(crate) fn set_published(&mut self, forecast: Vec<LiveForecast>) {
@@ -145,13 +155,38 @@ impl Forecasting {
         {
             self.choice = ForecastChoice::Best;
         }
+        self.rebuild_pickers();
     }
 
-    /// Models with a published forecast, in registry order.
+    /// Rebuilds the pickers' options after the models, their order or the
+    /// shown ones changed.
+    fn rebuild_pickers(&mut self) {
+        let available = self.available_models();
+        let mut choices = Vec::with_capacity(available.len() + 1);
+        choices.push(ForecastChoice::Best);
+        choices.extend(available.iter().map(|id| ForecastChoice::Model(*id)));
+        self.forecast_picker = combo_box::State::new(choices);
+        let addable = available
+            .into_iter()
+            .filter(|id| !self.overlays.contains(id) && self.choice != ForecastChoice::Model(*id))
+            .map(ModelOption)
+            .collect();
+        self.compare_picker = combo_box::State::new(addable);
+    }
+
+    pub(crate) fn forecast_picker(&self) -> &combo_box::State<ForecastChoice> {
+        &self.forecast_picker
+    }
+
+    pub(crate) fn compare_picker(&self) -> &combo_box::State<ModelOption> {
+        &self.compare_picker
+    }
+
+    /// Models with a published forecast, family by family, best first.
     pub(crate) fn available_models(&self) -> Vec<ModelId> {
-        ModelId::ALL
-            .iter()
-            .copied()
+        self.leaderboard
+            .model_order()
+            .into_iter()
             .filter(|id| self.published.iter().any(|f| f.model == id.key()))
             .collect()
     }
@@ -163,6 +198,7 @@ impl Forecasting {
     /// Shows `choice` (call [`Forecasting::refresh`] afterwards).
     pub(crate) fn choose(&mut self, choice: ForecastChoice) {
         self.choice = choice;
+        self.rebuild_pickers();
     }
 
     /// Models drawn for comparison.
@@ -176,10 +212,12 @@ impl Forecasting {
         if !self.overlays.contains(&id) && self.overlays.len() < MAX_OVERLAYS {
             self.overlays.push(id);
         }
+        self.rebuild_pickers();
     }
 
     pub(crate) fn remove_overlay(&mut self, id: ModelId) {
         self.overlays.retain(|o| *o != id);
+        self.rebuild_pickers();
     }
 
     /// The comparison forecasts within the chart's horizon, in overlay
@@ -432,6 +470,52 @@ mod tests {
         f.remove_overlay(ModelId::ALL[0]);
         assert_eq!(f.overlays().len(), MAX_OVERLAYS - 1);
         assert!(!f.overlays().contains(&ModelId::ALL[0]));
+    }
+
+    #[test]
+    fn test_pickers_offer_published_models_by_family_without_the_shown_ones() {
+        let mut f = Forecasting::new(6, TimeDelta::hours(1));
+        let mut rows = vec![published(30, 20.0)];
+        for id in [
+            ModelId::Mlp,
+            ModelId::Ridge,
+            ModelId::WeeklySeasonalNaive,
+            ModelId::Naive,
+        ] {
+            rows.push(row(id.key(), 30, 30.0));
+        }
+        f.set_published(rows);
+        f.choose(ForecastChoice::Model(ModelId::Mlp));
+        f.add_overlay(ModelId::Ridge);
+        assert_eq!(
+            f.available_models(),
+            [
+                ModelId::Naive,
+                ModelId::WeeklySeasonalNaive,
+                ModelId::Ridge,
+                ModelId::Mlp
+            ]
+        );
+        let choices = f.forecast_picker().options();
+        assert_eq!(choices[0], ForecastChoice::Best);
+        assert_eq!(choices.len(), 5);
+        let addable: Vec<ModelId> = f.compare_picker().options().iter().map(|o| o.0).collect();
+        assert_eq!(addable, [ModelId::Naive, ModelId::WeeklySeasonalNaive]);
+        f.remove_overlay(ModelId::Ridge);
+        assert_eq!(f.compare_picker().options().len(), 3);
+    }
+
+    #[test]
+    fn test_model_labels_name_the_family_for_searching() {
+        assert_eq!(
+            ModelOption(ModelId::PatchTst).to_string(),
+            "PatchTST · Neural networks"
+        );
+        assert_eq!(
+            ForecastChoice::Model(ModelId::Naive).to_string(),
+            "Persistence · Baselines"
+        );
+        assert_eq!(ForecastChoice::Best.to_string(), "Best per horizon");
     }
 
     #[test]

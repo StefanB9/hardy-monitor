@@ -1,10 +1,16 @@
 //! The forecast leaderboard on the Model & Data page: every model with its
 //! benchmark error per horizon and whether it is in use, best first.
 
+mod order;
+
 use chrono::{DateTime, Utc};
 use hardy_core::db::FitStatus;
-use hardy_ml::{benchmark::Bucket, suite::ModelId};
+use hardy_ml::{
+    benchmark::Bucket,
+    suite::{Family, ModelId},
+};
 
+pub use self::order::{Sort, SortKey};
 use crate::forecasting::SuiteStatus;
 
 /// Where a model stands.
@@ -26,10 +32,24 @@ pub enum Standing {
     Pending,
 }
 
+/// Short name of a family for chips and row tags.
+pub fn family_label(family: Family) -> &'static str {
+    match family {
+        Family::Baseline => "Baselines",
+        Family::Profile => "Profile",
+        Family::Statistical => "Statistical",
+        Family::MachineLearning => "ML",
+        Family::NeuralNetwork => "Neural",
+        Family::Ensemble => "Ensembles",
+    }
+}
+
 /// One model's line.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Row {
+    pub id: ModelId,
     pub name: &'static str,
+    pub family: Family,
     /// Mean absolute error per bucket, in [`Bucket::ALL`] order.
     pub mae: [Option<f64>; 4],
     /// Share of actual values inside the 80 % band, over all horizons.
@@ -51,7 +71,7 @@ pub struct Leaderboard {
 /// Builds the table from what the daemon reported.
 pub fn build(status: &SuiteStatus) -> Leaderboard {
     let run = status.benchmark.as_ref();
-    let mut rows: Vec<Row> = ModelId::ALL
+    let rows: Vec<Row> = ModelId::ALL
         .iter()
         .map(|id| {
             let key = id.key();
@@ -83,7 +103,9 @@ pub fn build(status: &SuiteStatus) -> Leaderboard {
                 },
             };
             Row {
+                id: *id,
                 name: id.name(),
+                family: id.family(),
                 mae: Bucket::ALL.map(|b| score(b).map(|s| s.mae)),
                 coverage: score(Bucket::Overall).and_then(|s| s.coverage),
                 selected: status
@@ -96,17 +118,6 @@ pub fn build(status: &SuiteStatus) -> Leaderboard {
             }
         })
         .collect();
-    // Ready models by overall error, then the rest in registry order.
-    rows.sort_by(|a, b| {
-        let rank = |r: &Row| match (&r.standing, r.mae[0]) {
-            (Standing::Ready { .. }, Some(mae)) => (0, mae),
-            (_, Some(mae)) => (1, mae),
-            _ => (2, 0.0),
-        };
-        let (ra, ma) = rank(a);
-        let (rb, mb) = rank(b);
-        ra.cmp(&rb).then(ma.total_cmp(&mb))
-    });
     Leaderboard {
         rows,
         period: run.map(|r| {
@@ -218,23 +229,28 @@ mod tests {
     }
 
     #[test]
-    fn test_ready_models_come_first_by_overall_error() {
+    fn test_rows_carry_scores_selection_and_standing() -> Result<()> {
         let board = build(&status());
-        let names: Vec<_> = board.rows.iter().take(3).map(|r| r.name).collect();
-        // Ridge has the lowest error but too few forecasts to count yet.
+        let view = board.view(Sort::default(), None);
+        let names: Vec<_> = view.iter().take(3).map(|r| r.name).collect();
         assert_eq!(
             names,
-            ["Daily seasonal naive", "Persistence", "Ridge regression"]
+            ["Ridge regression", "Daily seasonal naive", "Persistence"]
         );
-        let ridge = &board.rows[2];
+        // Ridge has the lowest error but too few forecasts to count yet.
         assert_eq!(
-            ridge.standing,
+            view[0].standing,
             Standing::Learning {
                 days: 9,
                 forecasts: 10
             }
         );
-        let naive = &board.rows[1];
+        let naive = board
+            .rows
+            .iter()
+            .find(|r| r.id == ModelId::Naive)
+            .context("naive")?;
+        assert_eq!(naive.family, Family::Baseline);
         assert_eq!(naive.mae, [Some(9.0), Some(2.0), None, None]);
         assert_eq!(naive.coverage, Some(0.75));
         assert_eq!(naive.selected, vec![Bucket::NextHour]);
@@ -244,6 +260,7 @@ mod tests {
             Some("5 Jun – 9 Jun · 5 days · 90 forecasts")
         );
         assert!(board.finished_at.is_some());
+        Ok(())
     }
 
     #[test]
@@ -266,6 +283,14 @@ mod tests {
             Standing::Pending
         );
         Ok(())
+    }
+
+    #[test]
+    fn test_family_labels_are_short_and_distinct() {
+        let labels: std::collections::HashSet<_> =
+            Family::ALL.iter().map(|f| family_label(*f)).collect();
+        assert_eq!(labels.len(), Family::ALL.len());
+        assert!(labels.iter().all(|l| !l.is_empty() && l.len() <= 11));
     }
 
     #[test]

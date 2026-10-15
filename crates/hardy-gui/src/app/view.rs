@@ -43,6 +43,8 @@ impl HardyMonitorApp {
             ViewMode::ModelData => views::model_data::view(ModelDataProps {
                 timezone: self.schedule.timezone(),
                 leaderboard: self.data.forecasting.leaderboard(),
+                leaderboard_sort: self.ui.leaderboard_sort,
+                leaderboard_family: self.ui.leaderboard_family,
                 accuracy: self.data.accuracy.as_ref(),
                 run_pending: self.data.forecasting.run_pending(),
                 last_run_error: self.data.forecasting.last_error(),
@@ -95,7 +97,8 @@ impl HardyMonitorApp {
             forecast: self.data.forecasting.forecasts(),
             forecast_source: self.data.forecasting.forecast_source(),
             forecast_choice: self.data.forecasting.choice(),
-            available_models: self.data.forecasting.available_models(),
+            forecast_picker: self.data.forecasting.forecast_picker(),
+            compare_picker: self.data.forecasting.compare_picker(),
             overlays: self.data.forecasting.overlay_lines(),
             alert_active: self.alerts.is_active(now),
             alert_threshold: self.alerts.threshold(),

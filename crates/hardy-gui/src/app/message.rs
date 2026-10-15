@@ -7,10 +7,12 @@ use hardy_core::{
     error::AppError,
     repair::RepairSummary,
 };
+use hardy_ml::suite::Family;
 
 use super::loads::RequestId;
 use crate::{
     forecasting::{ForecastChoice, ModelOption, SuiteStatus},
+    leaderboard::SortKey,
     time_range::{AnalyticsRange, ChartRange, Step},
 };
 
@@ -91,6 +93,10 @@ pub enum Message {
     SwitchView(ViewMode),
     SwitchAnalyticsRange(AnalyticsRange),
     ChartRangeSelected(ChartRange),
+    /// A leaderboard column header clicked: sort by it (again: reverse).
+    LeaderboardSorted(SortKey),
+    /// The leaderboard narrowed to a family (`None`: every model).
+    LeaderboardFiltered(Option<Family>),
     CustomStartChanged(String),
     CustomEndChanged(String),
     ApplyCustomRange,
@@ -159,6 +165,8 @@ impl Message {
             | Message::SwitchView(_)
             | Message::SwitchAnalyticsRange(_)
             | Message::ChartRangeSelected(_)
+            | Message::LeaderboardSorted(_)
+            | Message::LeaderboardFiltered(_)
             | Message::CustomStartChanged(_)
             | Message::CustomEndChanged(_)
             | Message::ApplyCustomRange
@@ -219,6 +227,8 @@ mod tests {
             Message::ChartStep(Step::Back),
             Message::SchemaChecked(failed()),
             Message::NotificationSent,
+            Message::LeaderboardSorted(SortKey::Name),
+            Message::LeaderboardFiltered(None),
         ];
         assert!(!others.iter().any(Message::finishes_load));
     }

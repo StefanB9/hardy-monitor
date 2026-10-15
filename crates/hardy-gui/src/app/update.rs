@@ -96,6 +96,8 @@ impl HardyMonitorApp {
             Message::SwitchView(_)
             | Message::SwitchAnalyticsRange(_)
             | Message::ChartRangeSelected(_)
+            | Message::LeaderboardSorted(_)
+            | Message::LeaderboardFiltered(_)
             | Message::CustomStartChanged(_)
             | Message::CustomEndChanged(_)
             | Message::ApplyCustomRange
@@ -170,6 +172,14 @@ impl HardyMonitorApp {
             Message::SwitchAnalyticsRange(range) => {
                 self.ui.analytics_range = range;
                 self.load_analytics()
+            }
+            Message::LeaderboardSorted(key) => {
+                self.ui.leaderboard_sort = self.ui.leaderboard_sort.clicked(key);
+                Task::none()
+            }
+            Message::LeaderboardFiltered(family) => {
+                self.ui.leaderboard_family = family;
+                Task::none()
             }
             Message::ChartRangeSelected(range) => {
                 self.ui.chart_range = range;
