@@ -7,6 +7,7 @@
 //! whole slot grid (closed slots 0, missing ones the profile's value); the
 //! non-seasonal ARIMA runs on the open-slot deviation from the profile.
 
+mod arima;
 mod decompose;
 mod fourier;
 mod models;
