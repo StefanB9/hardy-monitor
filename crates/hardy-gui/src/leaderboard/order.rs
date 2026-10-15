@@ -208,10 +208,9 @@ mod tests {
         ]);
         let neural = table.view(Sort::default(), Some(Family::NeuralNetwork));
         assert_eq!(ids(&neural), [ModelId::Mlp, ModelId::PatchTst]);
-        assert!(
-            table
-                .view(Sort::default(), Some(Family::Ensemble))
-                .is_empty()
+        assert_eq!(
+            table.view(Sort::default(), Some(Family::Ensemble)),
+            Vec::<&Row>::new()
         );
     }
 

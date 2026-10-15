@@ -7,18 +7,27 @@ mod maintenance;
 
 pub(crate) use accuracy::DAYS as ACCURACY_DAYS;
 use hardy_core::{Tz, accuracy::AccuracySummary, error::AppError, repair::RepairSummary};
+use hardy_ml::suite::Family;
 use iced::{
     Element, Length,
     widget::{column, row, text},
 };
 
-use crate::{app::Message, leaderboard::Leaderboard, style, views::components::scroll};
+use crate::{
+    app::Message,
+    leaderboard::{Leaderboard, Sort},
+    style,
+    views::components::scroll,
+};
 
 /// Everything the Model & Data view shows.
 #[derive(Clone, Copy)]
 pub struct ModelDataProps<'a> {
     pub timezone: Tz,
     pub leaderboard: &'a Leaderboard,
+    pub leaderboard_sort: Sort,
+    /// The family the table is narrowed to; `None` for every model.
+    pub leaderboard_family: Option<Family>,
     /// Logged forecasts scored against readings; `None` before any.
     pub accuracy: Option<&'a AccuracySummary>,
     /// A run was requested and the daemon has not started it yet.
