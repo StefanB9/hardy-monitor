@@ -70,9 +70,13 @@ async fn test_run_now_stores_states_benchmark_selection_and_forecasts() -> Resul
     let mut service = service();
     service.load(&tdb.db).await?;
     let now = local(5, 0, 30)?;
+    assert_eq!((service.last_run_at(), service.fitted_count()), (None, 0));
     tokio::time::timeout(Duration::from_secs(120), service.run_now(&tdb.db, now))
         .await
         .context("run finishes")??;
+    assert_eq!(service.last_run_at(), Some(now));
+    // The weekly model waits for more history.
+    assert_eq!(service.fitted_count(), MODELS.len() - 1);
 
     let records = tdb.db.model_records().await?;
     let run = tdb.db.latest_benchmark().await?;

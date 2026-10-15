@@ -1,4 +1,4 @@
-//! Runs the forecasting suite for the daemon: the nightly fit and benchmark
+//! Runs the forecasting suite for the forecaster: the nightly fit and benchmark
 //! in the background, and live forecasts as new readings arrive.
 
 use std::{
@@ -38,7 +38,7 @@ struct Running {
     handle: JoinHandle<Result<NightlyOutcome>>,
 }
 
-/// The suite as the daemon runs it.
+/// The suite as the forecaster runs it.
 pub struct ForecastService {
     config: MlConfig,
     schedule: GymSchedule,
@@ -158,6 +158,16 @@ impl ForecastService {
             "forecast models loaded"
         );
         Ok(())
+    }
+
+    /// When the last complete run finished.
+    pub fn last_run_at(&self) -> Option<DateTime<Utc>> {
+        self.last_run_at
+    }
+
+    /// Models with a usable fit.
+    pub fn fitted_count(&self) -> usize {
+        self.fitted.len()
     }
 
     /// Whether a nightly run is in progress.

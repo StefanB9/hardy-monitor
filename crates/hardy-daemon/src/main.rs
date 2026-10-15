@@ -3,7 +3,6 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 mod connect;
 mod cycle;
-mod forecasts;
 mod logging;
 mod timing;
 mod upkeep;
@@ -20,7 +19,6 @@ use hardy_core::{
     health::HealthMonitor,
     schedule::GymSchedule,
 };
-use hardy_ml::service::ForecastService;
 
 use crate::{
     cycle::{Stored, log_outcome, run_cycle},
@@ -52,13 +50,7 @@ fn main() -> Result<()> {
 
     let rt = tokio::runtime::Runtime::new().context("Failed to create tokio runtime")?;
 
-    let result = rt.block_on(run(&config));
-    // A nightly forecast run may still be computing on a blocking thread.
-    // Dropping the runtime would wait for it; it has written nothing yet
-    // (results are stored once collected) and reruns after the restart, so
-    // it is abandoned instead.
-    rt.shutdown_background();
-    result
+    rt.block_on(run(&config))
 }
 
 async fn run(config: &AppConfig) -> Result<()> {
@@ -113,8 +105,6 @@ async fn run(config: &AppConfig) -> Result<()> {
         cycle_budget: Duration::from_secs(config.refresh.data_fetch_interval_secs)
             .saturating_sub(CYCLE_HEADROOM)
             .max(Duration::from_secs(1)),
-        forecast_hours: u32::try_from(config.ml.prediction_horizon_hours)
-            .context("ml.prediction_horizon_hours out of range")?,
     };
 
     let mut alerts = alerts;
@@ -124,16 +114,10 @@ async fn run(config: &AppConfig) -> Result<()> {
         "alerts configured"
     );
 
-    let mut service = ForecastService::new(&config.ml, schedule.clone());
-    if let Err(e) = service.load(&database).await {
-        tracing::warn!(error = %format!("{e:#}"), "could not read the stored forecast models");
-    }
-
     fetch_loop(
         &worker,
         &mut alerts,
         &mut health,
-        &mut service,
         config.refresh.data_fetch_interval_secs,
         shutdown.as_mut(),
     )
@@ -152,7 +136,6 @@ struct Worker<'a> {
     schedule: &'a GymSchedule,
     fetch_policy: RetryPolicy,
     cycle_budget: Duration,
-    forecast_hours: u32,
 }
 
 /// Runs fetch cycles aligned to full minutes until `shutdown` completes.
@@ -160,7 +143,6 @@ async fn fetch_loop(
     worker: &Worker<'_>,
     alerts: &mut AlertService,
     health: &mut HealthMonitor,
-    service: &mut ForecastService,
     interval_secs: u64,
     mut shutdown: std::pin::Pin<&mut impl std::future::Future<Output = ()>>,
 ) {
@@ -215,10 +197,10 @@ async fn fetch_loop(
             }
         }
 
-        // Runs while the gym is closed too, so it comes before the closed
-        // check.
+        // The nightly repair runs while the gym is closed, so it comes
+        // before the closed check.
         tokio::select! {
-            () = upkeep::nightly_upkeep(worker, service) => {}
+            () = upkeep::run_repair(worker) => {}
             () = &mut shutdown => {
                 tracing::info!("shutdown requested during upkeep");
                 return;
@@ -246,9 +228,6 @@ async fn fetch_loop(
         log_outcome(slot, outcome);
         if stop {
             return;
-        }
-        if forecasts::is_publishing_slot(slot) {
-            upkeep::publish_forecasts(worker, service, slot).await;
         }
         if let Some(event) = health_event {
             tokio::select! {
