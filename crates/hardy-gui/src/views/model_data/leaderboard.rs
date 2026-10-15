@@ -1,6 +1,8 @@
 //! The forecast models card: every model's benchmark error per horizon and
 //! where it stands.
 
+use chrono::{DateTime, Utc};
+use hardy_core::Tz;
 use hardy_ml::{benchmark::Bucket, suite::Family};
 use iced::{
     Alignment, Element, Length,
@@ -115,11 +117,24 @@ fn number(value: Option<f64>, selected: bool) -> Element<'static, Message> {
         .into()
 }
 
-fn standing(standing: &Standing) -> (String, iced::Color) {
+/// The status column: how much data a fitted model saw and when it was
+/// last fitted, or why it is not ready.
+fn standing(
+    standing: &Standing,
+    fitted_at: Option<DateTime<Utc>>,
+    timezone: Tz,
+) -> (String, iced::Color) {
+    let fitted = |days: i64| match fitted_at {
+        Some(at) => format!(
+            "{days} d of data · fit {}",
+            at.with_timezone(&timezone).format("%a %H:%M")
+        ),
+        None => format!("{days} d of data"),
+    };
     match standing {
-        Standing::Ready { days } => (format!("{days} d of data"), style::TEXT_SECONDARY),
+        Standing::Ready { days } => (fitted(*days), style::TEXT_SECONDARY),
         Standing::Learning { days, forecasts } => (
-            format!("{days} d of data · {forecasts} test forecasts so far"),
+            format!("{} · {forecasts} test forecasts so far", fitted(*days)),
             style::TEXT_SECONDARY,
         ),
         Standing::Waiting(message) => (message.clone(), style::TEXT_TERTIARY),
@@ -128,9 +143,9 @@ fn standing(standing: &Standing) -> (String, iced::Color) {
     }
 }
 
-fn line(r: &Row) -> Element<'static, Message> {
+fn line(r: &Row, timezone: Tz) -> Element<'static, Message> {
     let is_selected = |bucket: Bucket| r.selected.contains(&bucket);
-    let (status, status_color) = standing(&r.standing);
+    let (status, status_color) = standing(&r.standing, r.fitted_at, timezone);
     row![
         row![
             text(r.name)
@@ -188,7 +203,7 @@ pub(super) fn card<'a>(props: &ModelDataProps<'a>) -> Element<'a, Message> {
     }
     let mut table = column![header(props.leaderboard_sort)].spacing(style::SPACE_XS);
     for r in board.view(props.leaderboard_sort, props.leaderboard_family) {
-        table = table.push(line(r));
+        table = table.push(line(r, props.timezone));
     }
     body = body
         .push(family_filter(props.leaderboard_family))
@@ -208,4 +223,37 @@ pub(super) fn card<'a>(props: &ModelDataProps<'a>) -> Element<'a, Message> {
     card_with_actions("Forecast models", actions, body)
         .width(Length::Fill)
         .into()
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::TimeZone;
+
+    use super::*;
+
+    #[test]
+    fn test_status_shows_data_and_last_fit_in_gym_time() {
+        let tz: Tz = "Europe/Berlin".parse().unwrap_or(Tz::UTC);
+        // Wednesday 21:36 UTC is 23:36 in Berlin in summer.
+        let at = Utc.with_ymd_and_hms(2024, 6, 5, 21, 36, 0).single();
+        let (ready, _) = standing(&Standing::Ready { days: 53 }, at, tz);
+        assert_eq!(ready, "53 d of data · fit Wed 23:36");
+        let (learning, _) = standing(
+            &Standing::Learning {
+                days: 9,
+                forecasts: 10,
+            },
+            at,
+            tz,
+        );
+        assert_eq!(
+            learning,
+            "9 d of data · fit Wed 23:36 · 10 test forecasts so far"
+        );
+        let (unknown, _) = standing(&Standing::Ready { days: 3 }, None, tz);
+        assert_eq!(unknown, "3 d of data");
+        let (failed, color) = standing(&Standing::Failed("boom".to_string()), at, tz);
+        assert_eq!(failed, "failed: boom");
+        assert_eq!(color, style::DANGER);
+    }
 }

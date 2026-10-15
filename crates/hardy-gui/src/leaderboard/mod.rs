@@ -57,6 +57,8 @@ pub struct Row {
     /// Buckets this model is shown for by default.
     pub selected: Vec<Bucket>,
     pub standing: Standing,
+    /// When the model was last fitted.
+    pub fitted_at: Option<DateTime<Utc>>,
 }
 
 /// The whole table.
@@ -115,6 +117,7 @@ pub fn build(status: &SuiteStatus) -> Leaderboard {
                     .filter_map(|(code, _)| Bucket::from_code(*code))
                     .collect(),
                 standing,
+                fitted_at: record.and_then(|r| r.fitted_at),
             }
         })
         .collect();
@@ -255,6 +258,13 @@ mod tests {
         assert_eq!(naive.coverage, Some(0.75));
         assert_eq!(naive.selected, vec![Bucket::NextHour]);
         assert_eq!(naive.standing, Standing::Ready { days: 9 });
+        assert_eq!(naive.fitted_at, Some(at(10)));
+        let waiting = board
+            .rows
+            .iter()
+            .find(|r| r.id == ModelId::WeeklySeasonalNaive)
+            .context("weekly")?;
+        assert_eq!(waiting.fitted_at, None);
         assert_eq!(
             board.period.as_deref(),
             Some("5 Jun – 9 Jun · 5 days · 90 forecasts")

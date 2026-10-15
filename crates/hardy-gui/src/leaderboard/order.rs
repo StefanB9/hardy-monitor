@@ -121,6 +121,7 @@ mod tests {
             coverage,
             selected: Vec::new(),
             standing: Standing::Pending,
+            fitted_at: None,
         }
     }
 
