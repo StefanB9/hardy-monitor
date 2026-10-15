@@ -45,7 +45,8 @@ const CONNECT_RETRY_MAX: Duration = Duration::from_secs(60);
 const CYCLE_HEADROOM: Duration = Duration::from_secs(5);
 
 fn main() -> Result<()> {
-    let _log_guard = logging::setup_logging();
+    let options = hardy_core::cli::Options::parse("hardy-daemon", std::env::args().skip(1))?;
+    let _log_guard = logging::setup_logging(options.console);
 
     let config = AppConfig::load().context("Failed to load configuration")?;
 
