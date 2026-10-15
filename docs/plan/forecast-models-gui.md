@@ -27,3 +27,15 @@ changes.
 - `combo_box::State` for both lists lives in the app and is rebuilt when the
   available models or the leaderboard change.
 - Headless screenshots of both pages before the PR.
+
+## As built
+
+- Number columns are 76 px (room for "Next hour ↑"); the name column takes
+  5 / 8 of the rest, the status 3 / 8. Header buttons get 2 px of vertical
+  padding as a click target.
+- The table no longer orders itself in `leaderboard::build`; `view` is the
+  only sort. A model still learning (too few benchmark forecasts) can
+  therefore rank above ready ones; its status says so.
+- Headless check: under `tiny-skia` a sort (text changes only) repaints on
+  the next damage, since tiny-skia's damage tracking misses it; the
+  committed `wgpu` backend redraws whole frames.

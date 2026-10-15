@@ -16,7 +16,11 @@ use crate::{
 };
 
 /// Width of a number column.
-const NUMBER: f32 = 64.0;
+const NUMBER: f32 = 76.0;
+/// Shares of the remaining width: names with their family tag need more
+/// room than the status.
+const NAME: u16 = 5;
+const STATUS: u16 = 3;
 
 /// The family chips: every model, or one family.
 fn family_filter(selected: Option<Family>) -> Element<'static, Message> {
@@ -49,7 +53,7 @@ fn sort_header(
             .align_x(align),
     )
     .on_press(Message::LeaderboardSorted(key))
-    .padding(0)
+    .padding([2, 0])
     .width(width)
     .style(move |_, status| button::Style {
         text_color: if active || status == button::Status::Hovered {
@@ -67,7 +71,7 @@ fn header(sort: Sort) -> Element<'static, Message> {
         "Model",
         SortKey::Name,
         sort,
-        Length::FillPortion(3),
+        Length::FillPortion(NAME),
         Alignment::Start
     )]
     .spacing(style::SPACE_S)
@@ -93,7 +97,7 @@ fn header(sort: Sort) -> Element<'static, Message> {
         Length::Fixed(NUMBER),
         Alignment::End,
     ))
-    .push(caption("Status").width(Length::FillPortion(3)))
+    .push(caption("Status").width(Length::FillPortion(STATUS)))
     .into()
 }
 
@@ -137,7 +141,7 @@ fn line(r: &Row) -> Element<'static, Message> {
                 .color(style::TEXT_TERTIARY),
         ]
         .spacing(style::SPACE_S)
-        .width(Length::FillPortion(3)),
+        .width(Length::FillPortion(NAME)),
         number(r.mae[1], is_selected(Bucket::NextHour)),
         number(r.mae[2], is_selected(Bucket::OneToThreeHours)),
         number(r.mae[3], is_selected(Bucket::ThreeToDay)),
@@ -153,7 +157,7 @@ fn line(r: &Row) -> Element<'static, Message> {
         text(status)
             .size(style::TEXT_CAPTION)
             .color(status_color)
-            .width(Length::FillPortion(3)),
+            .width(Length::FillPortion(STATUS)),
     ]
     .spacing(style::SPACE_S)
     .align_y(Alignment::Center)
