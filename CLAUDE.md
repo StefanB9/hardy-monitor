@@ -25,6 +25,7 @@ hardy-monitor/                         (workspace root)
 │   │   │   ├── analytics/             Stats, day analysis, peak/quiet slots, insights, period comparison,
 │   │   │   │                          trend; time.rs: gym-local time helpers
 │   │   │   ├── api.rs                 GymApiClient (reqwest HTTP)
+│   │   │   ├── cli.rs                 Command-line options shared by daemon and GUI (--console)
 │   │   │   ├── config/                AppConfig + load (TOML + env var); one file per section group;
 │   │   │   │                          validation.rs
 │   │   │   ├── db/                    Database (sqlx PgPool): readings, averages, export (CSV), alert settings,
@@ -269,7 +270,7 @@ Minimum necessary. `pub(super)` or `pub(crate)` for internal types. Private fiel
 - **Levels:** `error!` = failures requiring attention. `warn!` = degraded states. `info!` = lifecycle events. `debug!` = protocol detail.
 - **Default filter:** `hardy_core=DEBUG,hardy_daemon=DEBUG` / `hardy_gui=DEBUG` (debug), `INFO` (release). Noisy crates (fontdb, wgpu, naga, iced) filtered out in GUI.
 - **Override:** `RUST_LOG` env var via `EnvFilter::try_from_default_env()`.
-- **Release logging:** Writes to `logs/hardy-monitor.log` with daily rotation via `tracing-appender`.
+- **Release logging:** Writes to `logs/hardy-monitor.log` with daily rotation via `tracing-appender`; `--console` (daemon and GUI, parsed by `hardy_core::cli::Options`) also logs to the console.
 
 ## Git Workflow
 
