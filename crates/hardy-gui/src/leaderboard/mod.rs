@@ -1,10 +1,16 @@
 //! The forecast leaderboard on the Model & Data page: every model with its
 //! benchmark error per horizon and whether it is in use, best first.
 
+mod order;
+
 use chrono::{DateTime, Utc};
 use hardy_core::db::FitStatus;
-use hardy_ml::{benchmark::Bucket, suite::ModelId};
+use hardy_ml::{
+    benchmark::Bucket,
+    suite::{Family, ModelId},
+};
 
+pub use self::order::{Sort, SortKey};
 use crate::forecasting::SuiteStatus;
 
 /// Where a model stands.
@@ -29,7 +35,9 @@ pub enum Standing {
 /// One model's line.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Row {
+    pub id: ModelId,
     pub name: &'static str,
+    pub family: Family,
     /// Mean absolute error per bucket, in [`Bucket::ALL`] order.
     pub mae: [Option<f64>; 4],
     /// Share of actual values inside the 80 % band, over all horizons.
@@ -83,7 +91,9 @@ pub fn build(status: &SuiteStatus) -> Leaderboard {
                 },
             };
             Row {
+                id: *id,
                 name: id.name(),
+                family: id.family(),
                 mae: Bucket::ALL.map(|b| score(b).map(|s| s.mae)),
                 coverage: score(Bucket::Overall).and_then(|s| s.coverage),
                 selected: status

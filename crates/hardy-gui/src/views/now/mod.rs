@@ -7,15 +7,15 @@ mod status;
 
 use chrono::{DateTime, Utc};
 use hardy_core::{alert::AlertDuration, db::OccupancyLog, schedule::GymSchedule};
-use hardy_ml::{PredictionWithConfidence, suite::ModelId};
+use hardy_ml::PredictionWithConfidence;
 use iced::{
     Element, Length,
-    widget::{canvas::Cache, column, row},
+    widget::{canvas::Cache, column, combo_box, row},
 };
 
 use crate::{
     app::Message,
-    forecasting::{ForecastChoice, ForecastLine},
+    forecasting::{ForecastChoice, ForecastLine, ModelOption},
     quiet_window::QuietWindow,
     style,
     time_range::ChartRange,
@@ -38,7 +38,9 @@ pub struct NowProps<'a> {
     pub forecast_source: Option<&'static str>,
     /// Which forecast is shown, and the models it can be switched to.
     pub forecast_choice: ForecastChoice,
-    pub available_models: Vec<ModelId>,
+    pub forecast_picker: &'a combo_box::State<ForecastChoice>,
+    /// Models that can be added for comparison.
+    pub compare_picker: &'a combo_box::State<ModelOption>,
     /// Comparison forecasts drawn on the chart, in overlay order.
     pub overlays: &'a [ForecastLine],
     /// Alerts armed and not expired.

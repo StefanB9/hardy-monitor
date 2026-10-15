@@ -122,6 +122,16 @@ pub enum Family {
 }
 
 impl Family {
+    /// Every family, in display order.
+    pub const ALL: [Family; 6] = [
+        Family::Baseline,
+        Family::Profile,
+        Family::Statistical,
+        Family::MachineLearning,
+        Family::NeuralNetwork,
+        Family::Ensemble,
+    ];
+
     /// Display name.
     pub fn name(self) -> &'static str {
         match self {
@@ -430,6 +440,15 @@ mod tests {
         fn predict(&self, _: &Observed<'_>) -> Result<Vec<f64>, MlError> {
             Ok(vec![self.0; HORIZON_STEPS])
         }
+    }
+
+    #[test]
+    fn test_every_family_is_listed_once_and_used() {
+        let listed: HashSet<_> = Family::ALL.iter().collect();
+        assert_eq!(listed.len(), Family::ALL.len());
+        let used: HashSet<_> = ModelId::ALL.iter().map(|id| id.family()).collect();
+        assert_eq!(used.len(), Family::ALL.len());
+        assert!(Family::ALL.iter().all(|f| !f.name().is_empty()));
     }
 
     #[test]

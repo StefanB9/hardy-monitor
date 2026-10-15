@@ -4,13 +4,13 @@ use chrono::{DateTime, Utc};
 use hardy_ml::suite::ModelId;
 use iced::{
     Alignment, Border, Color, Element, Length,
-    widget::{Canvas, Space, button, column, container, pick_list, row, text},
+    widget::{Canvas, Space, button, column, combo_box, container, row, text},
 };
 
 use super::NowProps;
 use crate::{
     app::Message,
-    forecasting::{ForecastChoice, MAX_OVERLAYS, ModelOption},
+    forecasting::{MAX_OVERLAYS, ModelOption},
     style,
     time_range::{ChartRange, Step, can_step_back},
     views::components::{
@@ -18,6 +18,9 @@ use crate::{
     },
     widgets::history_chart::HistoryChart,
 };
+
+/// Width of a model list: room for the longest model and family names.
+const PICKER_WIDTH: f32 = 300.0;
 
 const RANGES: [(&str, ChartRange); 4] = [
     ("Today", ChartRange::Today),
@@ -105,44 +108,36 @@ fn toolbar<'a>(props: &NowProps<'a>, window: Window) -> Element<'a, Message> {
 }
 
 /// Which forecast is drawn, and the models drawn beside it for comparison.
+/// Both lists can be searched by typing a model or family name.
 fn models<'a>(props: &NowProps<'a>) -> Element<'a, Message> {
-    let mut choices = Vec::with_capacity(props.available_models.len() + 1);
-    choices.push(ForecastChoice::Best);
-    choices.extend(
-        props
-            .available_models
-            .iter()
-            .map(|id| ForecastChoice::Model(*id)),
-    );
-    let shown: Vec<ModelId> = props.overlays.iter().map(|(id, _)| *id).collect();
-    let addable: Vec<ModelOption> = props
-        .available_models
-        .iter()
-        .filter(|id| !shown.contains(id) && props.forecast_choice != ForecastChoice::Model(**id))
-        .map(|id| ModelOption(*id))
-        .collect();
-
     let mut line = row![
         caption("Forecast"),
-        pick_list(
-            choices,
-            Some(props.forecast_choice),
-            Message::ForecastChoiceSelected
+        combo_box(
+            props.forecast_picker,
+            "Search models…",
+            Some(&props.forecast_choice),
+            Message::ForecastChoiceSelected,
         )
-        .text_size(style::TEXT_CAPTION)
-        .padding([4, 8]),
+        .size(style::TEXT_CAPTION)
+        .padding([4, 8])
+        .width(PICKER_WIDTH),
     ]
     .spacing(style::SPACE_S)
     .align_y(Alignment::Center);
     for ((id, _), color) in props.overlays.iter().zip(style::COMPARISON) {
         line = line.push(overlay_chip(*id, color));
     }
-    if shown.len() < MAX_OVERLAYS && !addable.is_empty() {
+    if props.overlays.len() < MAX_OVERLAYS && !props.compare_picker.options().is_empty() {
         line = line.push(
-            pick_list(addable, None::<ModelOption>, Message::OverlayAdded)
-                .placeholder("Compare with…")
-                .text_size(style::TEXT_CAPTION)
-                .padding([4, 8]),
+            combo_box(
+                props.compare_picker,
+                "Compare with…",
+                None,
+                Message::OverlayAdded,
+            )
+            .size(style::TEXT_CAPTION)
+            .padding([4, 8])
+            .width(PICKER_WIDTH),
         );
     }
     line.into()
