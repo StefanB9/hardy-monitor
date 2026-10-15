@@ -28,6 +28,7 @@ use crate::{
     error::MlError,
     grid::{Grid, HORIZON_STEPS, SLOT, is_open_slot, same_local_time_before},
     history::History,
+    progress::{Progress, Silent, Stage},
     suite::{self, Forecaster, Observed, safety::guarded},
 };
 
@@ -223,30 +224,35 @@ where
     L: Copy + Send + Sync,
     M: Forecaster + Send + Sync,
 {
+    run_reporting(
+        labels, make, ensembles, history, schedule, now, settings, &Silent,
+    )
+}
+
+/// [`run`], reporting the shared fits and the backtest days to `progress`.
+#[allow(clippy::too_many_arguments)]
+pub fn run_reporting<L, M>(
+    labels: &[L],
+    make: impl Fn(L) -> Option<M> + Sync,
+    ensembles: &[(L, Combination)],
+    history: &History,
+    schedule: &GymSchedule,
+    now: DateTime<Utc>,
+    settings: &Settings,
+    progress: &dyn Progress,
+) -> Benchmark<L>
+where
+    L: Copy + Send + Sync,
+    M: Forecaster + Send + Sync,
+{
     let days = backtest_days(history, schedule, now, settings.days);
     let grid = history.first_time().map_or_else(Grid::default, |first| {
         Grid::build(history, schedule, first - SLOT, now)
     });
     let scale = naive_scale(&grid, schedule, history);
-    let (fits, plan) = shared_fits(&days, labels, &make, history, &grid, schedule, settings);
-    let mut results: Vec<DayResult> = days
-        .par_iter()
-        .enumerate()
-        .map(|(i, &day)| {
-            let shared: Vec<DayFit<'_, M>> = plan
-                .iter()
-                .map(|days| match days {
-                    None => DayFit::Fresh,
-                    Some(d) => d[i]
-                        .and_then(|f| fits.get(f))
-                        .map_or(DayFit::Unfitted, DayFit::Shared),
-                })
-                .collect();
-            backtest_day(
-                day, labels, &make, &shared, history, &grid, schedule, now, settings,
-            )
-        })
-        .collect();
+    let mut results = backtest_days_of(
+        &days, labels, &make, history, &grid, schedule, now, settings, progress,
+    );
     let combinations: Vec<Combination> = ensembles.iter().map(|&(_, c)| c).collect();
     let fitted = add_ensembles(&mut results, labels.len(), &combinations);
 
@@ -326,6 +332,51 @@ where
     }
 }
 
+/// Backtests every model on every day of `days`, shared fits first.
+#[allow(clippy::too_many_arguments)]
+fn backtest_days_of<L, M>(
+    days: &[NaiveDate],
+    labels: &[L],
+    make: &(impl Fn(L) -> Option<M> + Sync),
+    history: &History,
+    grid: &Grid,
+    schedule: &GymSchedule,
+    now: DateTime<Utc>,
+    settings: &Settings,
+    progress: &dyn Progress,
+) -> Vec<DayResult>
+where
+    L: Copy + Send + Sync,
+    M: Forecaster + Send + Sync,
+{
+    let (fits, plan) = shared_fits(
+        days, labels, make, history, grid, schedule, settings, progress,
+    );
+    progress.start(Stage::Backtest, days.len());
+    let results = days
+        .par_iter()
+        .enumerate()
+        .map(|(i, &day)| {
+            let shared: Vec<DayFit<'_, M>> = plan
+                .iter()
+                .map(|days| match days {
+                    None => DayFit::Fresh,
+                    Some(d) => d[i]
+                        .and_then(|f| fits.get(f))
+                        .map_or(DayFit::Unfitted, DayFit::Shared),
+                })
+                .collect();
+            let result = backtest_day(
+                day, labels, make, &shared, history, grid, schedule, now, settings,
+            );
+            progress.advance(Stage::Backtest);
+            result
+        })
+        .collect();
+    progress.finish(Stage::Backtest);
+    results
+}
+
 /// Appends each ensemble's forecasts to every day of `results` (whose first
 /// `members` models are the members), each day combined with weights
 /// fitted on the days before it; returns each ensemble fitted on all days.
@@ -401,7 +452,7 @@ enum DayFit<'a, M> {
 /// [`Forecaster::refit_days`]) once per run of days they serve. Returns
 /// the fits and, per label, `None` for a daily model or the fit (index)
 /// serving each day.
-#[allow(clippy::type_complexity)]
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
 fn shared_fits<L, M>(
     days: &[NaiveDate],
     labels: &[L],
@@ -410,6 +461,7 @@ fn shared_fits<L, M>(
     grid: &Grid,
     schedule: &GymSchedule,
     settings: &Settings,
+    progress: &dyn Progress,
 ) -> (Vec<SharedFit<M>>, Vec<Option<Vec<Option<usize>>>>)
 where
     L: Copy + Send + Sync,
@@ -450,15 +502,18 @@ where
             Some(serving)
         })
         .collect();
+    progress.start(Stage::SharedFits, jobs.len());
     let fits = jobs
         .par_iter()
         .map(|&(label, day)| {
             let (cut, seen) = fit_history(day);
             let mut model = make(label);
             let outcome = fit_for_day(&mut model, &Observed::new(grid, &seen, schedule, cut));
+            progress.advance(Stage::SharedFits);
             SharedFit { model, outcome }
         })
         .collect();
+    progress.finish(Stage::SharedFits);
     (fits, plan)
 }
 

@@ -4,7 +4,7 @@
 #[path = "../../hardy-core/tests/common/mod.rs"]
 mod common;
 
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, TimeDelta, TimeZone, Timelike, Utc};
@@ -14,6 +14,7 @@ use hardy_core::{
 };
 use hardy_ml::{
     live::SELECTED,
+    progress::{Progress, Stage},
     service::ForecastService,
     suite::{ARTIFACT_VERSION, ModelId},
 };
@@ -98,6 +99,55 @@ async fn test_run_now_stores_states_benchmark_selection_and_forecasts() -> Resul
     assert!(
         live.iter()
             .all(|f| f.source.as_deref() == Some("daily_seasonal_naive"))
+    );
+    Ok(())
+}
+
+/// Counts the steps of each stage reported to it.
+#[derive(Default)]
+struct Steps(std::sync::Mutex<Vec<(Stage, usize, usize)>>);
+
+impl Progress for Steps {
+    fn start(&self, stage: Stage, total: usize) {
+        if let Ok(mut steps) = self.0.lock() {
+            steps.push((stage, total, 0));
+        }
+    }
+
+    fn advance(&self, stage: Stage) {
+        if let Ok(mut steps) = self.0.lock()
+            && let Some(entry) = steps.iter_mut().rev().find(|(s, _, _)| *s == stage)
+        {
+            entry.2 += 1;
+        }
+    }
+
+    fn finish(&self, _: Stage) {}
+}
+
+#[tokio::test]
+async fn test_a_run_reports_its_progress() -> Result<()> {
+    let tdb = common::TestDatabase::new().await?;
+    insert_days(&tdb.db, 5).await?;
+    let steps = Arc::new(Steps::default());
+    let mut service = service().with_progress(steps.clone());
+    service.load(&tdb.db).await?;
+    tokio::time::timeout(
+        Duration::from_secs(120),
+        service.run_now(&tdb.db, local(5, 0, 30)?),
+    )
+    .await
+    .context("run finishes")??;
+    tdb.cleanup().await;
+    let steps = steps
+        .0
+        .lock()
+        .map_err(|_| anyhow::anyhow!("poisoned"))?
+        .clone();
+    assert!(steps.contains(&(Stage::Backtest, 5, 5)), "{steps:?}");
+    assert!(
+        steps.contains(&(Stage::Fit, MODELS.len(), MODELS.len())),
+        "{steps:?}"
     );
     Ok(())
 }
