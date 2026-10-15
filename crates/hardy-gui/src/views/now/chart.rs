@@ -77,6 +77,13 @@ fn toolbar<'a>(props: &NowProps<'a>, window: Window) -> Element<'a, Message> {
     if props.alert_active {
         legend = legend.push(legend_item(style::SUCCESS, "Alert threshold"));
     }
+    if let Some(notice) = &props.forecast_notice {
+        legend = legend.push(
+            text(notice.clone())
+                .size(style::TEXT_CAPTION)
+                .color(style::WARNING),
+        );
+    }
     let period = window.map(|w| {
         text(
             props
