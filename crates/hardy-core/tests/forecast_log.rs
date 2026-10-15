@@ -59,8 +59,6 @@ async fn test_forecast_accuracy_scores_against_readings() -> Result<()> {
         .await?;
 
     let rows = db.forecast_accuracy(utc(0, 0)?, utc(23, 0)?, tz).await?;
-    let deleted = db.delete_forecasts_before(utc(9, 30)?).await?;
-    let after = db.forecast_accuracy(utc(0, 0)?, utc(23, 0)?, tz).await?;
     tdb.cleanup().await;
 
     assert_eq!(added, 4);
@@ -86,8 +84,6 @@ async fn test_forecast_accuracy_scores_against_readings() -> Result<()> {
         "unscored horizons are omitted"
     );
 
-    assert_eq!(deleted, 3);
-    assert_eq!(after.len(), 1);
     Ok(())
 }
 

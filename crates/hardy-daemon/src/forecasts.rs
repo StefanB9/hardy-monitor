@@ -2,12 +2,9 @@
 //! logged every full hour so their accuracy can be measured later.
 
 use anyhow::{Context, Result};
-use chrono::{DateTime, TimeDelta, Timelike, Utc};
+use chrono::{DateTime, Timelike, Utc};
 use hardy_core::Database;
 use hardy_ml::service::ForecastService;
-
-/// Logged forecasts are kept this long.
-const RETENTION: TimeDelta = TimeDelta::days(90);
 
 /// Whether forecasts are published for this fetch slot: every quarter hour.
 pub(crate) fn is_publishing_slot(slot: DateTime<Utc>) -> bool {
@@ -20,8 +17,8 @@ pub(crate) fn is_logging_slot(slot: DateTime<Utc>) -> bool {
 }
 
 /// Publishes every model's forecast made at `slot`; on full hours also logs
-/// the default forecast and prunes old log entries. Returns how many log
-/// entries were stored.
+/// the default forecast (kept for good, so accuracy covers all history).
+/// Returns how many log entries were stored.
 pub(crate) async fn publish(
     database: &Database,
     service: &mut ForecastService,
@@ -35,11 +32,7 @@ pub(crate) async fn publish(
     if !is_logging_slot(slot) {
         return Ok(0);
     }
-    let stored = database
-        .save_forecasts(&live.log_entries(log_hours))
-        .await?;
-    database.delete_forecasts_before(slot - RETENTION).await?;
-    Ok(stored)
+    database.save_forecasts(&live.log_entries(log_hours)).await
 }
 
 #[cfg(test)]

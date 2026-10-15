@@ -25,7 +25,7 @@ mod suite;
 pub use benchmark::{BenchmarkModel, BenchmarkRun, BenchmarkScore};
 pub use forecast_log::{ForecastLogEntry, HorizonAccuracy};
 pub use live_forecasts::LiveForecast;
-pub use ml::MlState;
+pub use ml::{ForecasterLock, MlState};
 pub use repair_state::RepairState;
 pub use schema::{Migrations, SchemaStatus, app_schema_version};
 pub use suite::{FitStatus, ModelRecord, ModelUpdate};
