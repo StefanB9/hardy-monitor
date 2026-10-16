@@ -1,45 +1,27 @@
-//! ARIMA fits with a stability check: the order is chosen by anofox's
-//! `AutoARIMA`, then that model is refitted (anofox fits each candidate the
-//! same, deterministic way) so its coefficients can be read. A fit whose AR
-//! part is not stationary or whose MA part is not invertible is refused
-//! rather than forecast from: its forecasts drift or explode.
+//! ARIMA fits with a stability check: a fit whose AR part is not stationary
+//! or whose MA part is not invertible is refused rather than forecast from,
+//! as its forecasts drift or explode.
+//!
+//! `AutoARIMA` checks its own choice: since anofox-forecast 0.16.1 it fits
+//! the way R's `auto.arima` does and keeps that fit, refusing any candidate
+//! with a root within 1.01 of the unit circle. Its forecasts come straight
+//! from that model; refitting the chosen order with the crate's own
+//! estimator would give different, possibly unstable coefficients.
 
 use anofox_forecast::models::{
     Forecaster as _,
-    arima::{ARIMA, AutoARIMA, SARIMA},
+    arima::{AutoARIMA, SARIMA},
 };
 
 use super::models::{ahead, failed, time_series};
 use crate::{error::MlError, grid::SLOTS_PER_DAY};
 
-/// `AutoARIMA`'s choice for `values`, refitted, checked and forecast
-/// `horizon` steps ahead.
+/// `AutoARIMA`'s choice for `values`, forecast `horizon` steps ahead.
 pub(super) fn auto_arima(values: &[f64], horizon: usize) -> Result<Vec<f64>, MlError> {
     let series = time_series(values)?;
     let mut search = AutoARIMA::new();
     search.fit(&series).map_err(failed)?;
-    let order = search
-        .selected_full_order()
-        .ok_or_else(|| MlError::Fit("AutoARIMA selected no model".to_string()))?;
-    if order.is_seasonal() {
-        let mut model = SARIMA::new(
-            order.p,
-            order.d,
-            order.q,
-            order.cap_p,
-            order.cap_d,
-            order.cap_q,
-            order.s,
-        );
-        model.fit(&series).map_err(failed)?;
-        check_sarima(&model)?;
-        ahead(&model, horizon)
-    } else {
-        let mut model = ARIMA::new(order.p, order.d, order.q);
-        model.fit(&series).map_err(failed)?;
-        check(model.ar_coefficients(), model.ma_coefficients(), &[], &[])?;
-        ahead(&model, horizon)
-    }
+    ahead(&search, horizon)
 }
 
 /// `SARIMA(1,0,1)(1,1,1)` with a daily season on `values`, checked and

@@ -26,6 +26,12 @@ pub enum AnalyticsRange {
 }
 
 impl ChartRange {
+    /// Whether the chart draws the past hour-ahead forecast (the week and
+    /// month views).
+    pub fn shows_past_forecasts(self) -> bool {
+        matches!(self, ChartRange::Days7 | ChartRange::Days30)
+    }
+
     /// `[start, end)` shown for this range; `None` for invalid custom dates.
     pub fn window(
         self,
@@ -176,6 +182,14 @@ mod tests {
             .single()
             .context("valid local time")?
             .with_timezone(&Utc))
+    }
+
+    #[test]
+    fn test_chart_shows_past_forecasts_for_days_only() {
+        assert!(ChartRange::Days7.shows_past_forecasts());
+        assert!(ChartRange::Days30.shows_past_forecasts());
+        assert!(!ChartRange::Today.shows_past_forecasts());
+        assert!(!ChartRange::Custom.shows_past_forecasts());
     }
 
     #[test]

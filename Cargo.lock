@@ -149,9 +149,9 @@ dependencies = [
 
 [[package]]
 name = "anofox-forecast"
-version = "0.16.0"
+version = "0.16.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "afeed332bb3aa6fb391a0308f19ab1ccb5d12e0b7fe17436881e0200d15a765e"
+checksum = "2d4f959446cbd3bc2f0dd93b8a0f374378a9cca5eec6b8e21ba12838d449d1e9"
 dependencies = [
  "anofox-statistics",
  "chrono",
@@ -1512,6 +1512,17 @@ dependencies = [
  "serde_core",
  "toml",
  "winnow",
+]
+
+[[package]]
+name = "console"
+version = "0.16.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e96a4956774c13c126a8b5af4daa79384f4d826534c95a02d76afb39e2ab64e3"
+dependencies = [
+ "encode_unicode",
+ "libc",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2886,6 +2897,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "edd0f118536f44f5ccd48bcb8b111bdc3de888b58c74639dfb034a357d0f206d"
 
 [[package]]
+name = "encode_unicode"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "34aa73646ffb006b8f5147f3dc182bd4bcb190227ce861fc4a4844bf8e3cb2c0"
+
+[[package]]
 name = "enum-as-inner"
 version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3347,9 +3364,9 @@ dependencies = [
 
 [[package]]
 name = "forust-ml"
-version = "0.7.0"
+version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d98a33230d6554e68ee5abee5aea0567c756df3e9fc5fab4d18125dd8d8da3b7"
+checksum = "bd88b4f1f4e4d38a20c98795aa3f6a50d3c8732175d7179ba49b8dc78620888e"
 dependencies = [
  "log",
  "rand 0.8.8",
@@ -3905,7 +3922,22 @@ dependencies = [
  "anyhow",
  "chrono",
  "hardy-core",
+ "mimalloc",
+ "tokio",
+ "tracing",
+ "tracing-appender",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "hardy-forecaster"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "hardy-core",
  "hardy-ml",
+ "indicatif",
  "mimalloc",
  "tokio",
  "tracing",
@@ -4669,6 +4701,17 @@ checksum = "cc4e190f5d26ca7051642629da2c52fc03bde85a03197c99408dcd291734c855"
 dependencies = [
  "equivalent",
  "hashbrown 0.17.1",
+]
+
+[[package]]
+name = "indicatif"
+version = "0.18.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9433806cd6b4ec1aba79c021c7e4c58fb4c3b9977c085062e611ac929998fb0c"
+dependencies = [
+ "console",
+ "portable-atomic",
+ "unit-prefix",
 ]
 
 [[package]]
@@ -6509,7 +6552,7 @@ dependencies = [
  "rustc_apfloat",
  "slotmap",
  "smallvec",
- "spin 0.9.9",
+ "spin 0.12.3",
  "thiserror 2.0.21",
  "utf8-chars",
 ]
@@ -7796,9 +7839,9 @@ dependencies = [
 
 [[package]]
 name = "smartcore"
-version = "0.6.15"
+version = "0.6.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "749c20993f7901cf1c8020686bf3eb3a3673ae7233f3401e3d71ac3abea39ca3"
+checksum = "3fdeed8d6b33ec4ade226c614453e0279adb49e6754a199a718563760f654588"
 dependencies = [
  "approx 0.5.1",
  "cfg-if",
@@ -8505,9 +8548,9 @@ checksum = "fd3ca314f692efd6c868f8408f53fe444634a845f96c028b97d35f6a1f79f0ee"
 
 [[package]]
 name = "tokio"
-version = "1.53.2"
+version = "1.53.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e95f91fcc7a621e8b030f6aa23c71fe9838ae2fb4d8118b75602a328f5144044"
+checksum = "ce3335fa71841cda333a58d7615b03901380ecf09d59b3296d21f8bbac0dde4e"
 dependencies = [
  "bytes",
  "libc",
@@ -9148,6 +9191,12 @@ name = "unicode-xid"
 version = "0.2.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ebc1c04c71510c7f702b52b7c350734c9ff1295c464a03335b00bb84fc54f853"
+
+[[package]]
+name = "unit-prefix"
+version = "0.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "81e544489bf3d8ef66c953931f56617f423cd4b5494be343d9b9d3dda037b9a3"
 
 [[package]]
 name = "universal-hash"

@@ -65,8 +65,8 @@ pub(super) fn card(summary: Option<&AccuracySummary>) -> Element<'_, Message> {
             "Live accuracy",
             header,
             empty_state(
-                "Nothing scored yet. The daemon logs a forecast every hour while the gym is open; \
-                 scores appear once those hours have passed.",
+                "Nothing scored yet. The forecaster logs a forecast every hour while the gym is \
+                 open; scores appear once those hours have passed.",
             ),
         )
         .width(Length::Fill)

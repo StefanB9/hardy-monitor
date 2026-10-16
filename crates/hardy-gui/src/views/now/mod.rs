@@ -6,7 +6,11 @@ mod quiet;
 mod status;
 
 use chrono::{DateTime, Utc};
-use hardy_core::{alert::AlertDuration, db::OccupancyLog, schedule::GymSchedule};
+use hardy_core::{
+    alert::AlertDuration,
+    db::{ForecastHistoryEntry, OccupancyLog},
+    schedule::GymSchedule,
+};
 use hardy_ml::PredictionWithConfidence;
 use iced::{
     Element, Length,
@@ -36,6 +40,8 @@ pub struct NowProps<'a> {
     pub forecast: &'a [PredictionWithConfidence],
     /// Name of the model behind the forecast, if one was published.
     pub forecast_source: Option<&'static str>,
+    /// Set when the forecast is old (the forecaster seems offline).
+    pub forecast_notice: Option<String>,
     /// Which forecast is shown, and the models it can be switched to.
     pub forecast_choice: ForecastChoice,
     pub forecast_picker: &'a combo_box::State<ForecastChoice>,
@@ -51,6 +57,8 @@ pub struct NowProps<'a> {
     /// e.g. "On below 25% until 21:00 · set from phone".
     pub alert_status: String,
     pub history: &'a [OccupancyLog],
+    /// The past hour-ahead forecast in the chart range.
+    pub past_forecasts: &'a [ForecastHistoryEntry],
     pub chart_range: ChartRange,
     /// Periods back from the current one (preset ranges).
     pub chart_offset: u32,

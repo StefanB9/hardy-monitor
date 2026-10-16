@@ -6,10 +6,12 @@ use hardy_core::GymSchedule;
 use rayon::prelude::*;
 
 use crate::{
-    benchmark::{self, Benchmark, Combination, Selection, Settings},
+    benchmark::{self, Benchmark, Combination, Defaults, Selection, Settings},
     error::MlError,
     grid::{Grid, SLOT},
     history::History,
+    live::{COMPARISON, FALLBACKS},
+    progress::{Progress, Silent, Stage},
     suite::{self, AnyModel, ModelId, Observed, safety::guarded},
 };
 
@@ -48,6 +50,39 @@ pub fn run(
     settings: &Settings,
     previous: &Selection<ModelId>,
 ) -> NightlyOutcome {
+    run_reporting(models, history, schedule, now, settings, previous, &Silent)
+}
+
+/// [`run`], reporting its stages to `progress`.
+pub fn run_reporting(
+    models: &[ModelId],
+    history: &History,
+    schedule: &GymSchedule,
+    now: DateTime<Utc>,
+    settings: &Settings,
+    previous: &Selection<ModelId>,
+    progress: &dyn Progress,
+) -> NightlyOutcome {
+    let benchmark = benchmark_suite(models, history, schedule, now, settings, progress);
+    let selection = benchmark::select(&benchmark.reports, previous, settings);
+    let fits = fit_reporting(models, history, schedule, now, settings, progress);
+    NightlyOutcome {
+        benchmark,
+        fits,
+        selection,
+    }
+}
+
+/// The benchmark of `models` (forecasters and ensembles of them), recording
+/// the default forecast with the live fallbacks and comparison model.
+pub(crate) fn benchmark_suite(
+    models: &[ModelId],
+    history: &History,
+    schedule: &GymSchedule,
+    now: DateTime<Utc>,
+    settings: &Settings,
+    progress: &dyn Progress,
+) -> Benchmark<ModelId> {
     let forecasters: Vec<ModelId> = models
         .iter()
         .copied()
@@ -57,7 +92,7 @@ pub fn run(
         .iter()
         .filter_map(|&id| id.combination().map(|c| (id, c)))
         .collect();
-    let benchmark = benchmark::run(
+    benchmark::run_reporting(
         &forecasters,
         AnyModel::new,
         &ensembles,
@@ -65,14 +100,12 @@ pub fn run(
         schedule,
         now,
         settings,
-    );
-    let selection = benchmark::select(&benchmark.reports, previous, settings);
-    let fits = fit_all(models, history, schedule, now, settings);
-    NightlyOutcome {
-        benchmark,
-        fits,
-        selection,
-    }
+        &Defaults {
+            fallbacks: FALLBACKS.to_vec(),
+            comparison: Some(COMPARISON),
+        },
+        progress,
+    )
 }
 
 /// Fits every forecaster in `models` on the readings in the training window
@@ -84,12 +117,28 @@ pub fn fit_all(
     now: DateTime<Utc>,
     settings: &Settings,
 ) -> Vec<(ModelId, FitResult)> {
+    fit_reporting(models, history, schedule, now, settings, &Silent)
+}
+
+fn fit_reporting(
+    models: &[ModelId],
+    history: &History,
+    schedule: &GymSchedule,
+    now: DateTime<Utc>,
+    settings: &Settings,
+    progress: &dyn Progress,
+) -> Vec<(ModelId, FitResult)> {
+    let forecasters = models
+        .iter()
+        .filter(|id| id.combination().is_none())
+        .count();
+    progress.start(Stage::Fit, forecasters);
     let window = history.range(now - settings.training_window, now);
     let grid = history.first_time().map_or_else(Grid::default, |first| {
         Grid::build(history, schedule, first - SLOT, now)
     });
     let data = Observed::new(&grid, &window, schedule, now);
-    models
+    let fits = models
         .par_iter()
         .filter_map(|&id| {
             let mut model = AnyModel::new(id)?;
@@ -114,9 +163,12 @@ pub fn fit_all(
                 },
                 Err(e) => FitResult::Failed(e),
             };
+            progress.advance(Stage::Fit);
             Some((id, result))
         })
-        .collect()
+        .collect();
+    progress.finish(Stage::Fit);
+    fits
 }
 
 #[cfg(test)]
@@ -124,6 +176,7 @@ mod tests {
     use super::*;
     use crate::{
         benchmark::Bucket,
+        progress::{Stage, counting::Counting},
         test_support::{local, minutely},
     };
 
@@ -203,6 +256,27 @@ mod tests {
             outcome.benchmark.ensembles.as_slice(),
             [(ModelId::StackedEnsemble, Some(_))]
         ));
+    }
+
+    #[test]
+    fn test_nightly_run_reports_every_stage() {
+        let history = minutely(10, |_| 30.0);
+        let models = [ModelId::Naive, ModelId::MovingAverage, ModelId::Mlp];
+        let progress = Counting::default();
+        let _ = run_reporting(
+            &models,
+            &history,
+            &GymSchedule::default(),
+            local(10, 0, 0),
+            &Settings::default(),
+            &Vec::new(),
+            &progress,
+        );
+        // Ten backtest days; the network refits weekly: days 1 and 8 (day
+        // 0 has no history before it).
+        assert_eq!(progress.get(Stage::Backtest), Some((10, 10, true)));
+        assert_eq!(progress.get(Stage::SharedFits), Some((2, 2, true)));
+        assert_eq!(progress.get(Stage::Fit), Some((3, 3, true)));
     }
 
     #[test]

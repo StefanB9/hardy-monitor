@@ -1,7 +1,10 @@
-//! Runs the forecasting suite for the daemon: the nightly fit and benchmark
+//! Runs the forecasting suite for the forecaster: the nightly fit and benchmark
 //! in the background, and live forecasts as new readings arrive.
 
-use std::collections::{HashMap, HashSet};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, TimeDelta, Utc};
@@ -13,11 +16,13 @@ use hardy_core::{
 use tokio::task::JoinHandle;
 
 use crate::{
-    benchmark::{Bucket, Ensemble, Interval, Selection, Settings},
+    backfill,
+    benchmark::{Bucket, Ensemble, Interval, PastForecast, Selection, Settings},
     error::MlError,
     history::History,
     live::{HorizonIntervals, LiveForecasts, forecast_all},
     nightly::{self, FitResult, NightlyOutcome},
+    progress::{Progress, Silent},
     retrain::{RetrainReason, retrain_due},
     suite::{ARTIFACT_VERSION, AnyModel, ModelId},
 };
@@ -34,7 +39,7 @@ struct Running {
     handle: JoinHandle<Result<NightlyOutcome>>,
 }
 
-/// The suite as the daemon runs it.
+/// The suite as the forecaster runs it.
 pub struct ForecastService {
     config: MlConfig,
     schedule: GymSchedule,
@@ -52,7 +57,12 @@ pub struct ForecastService {
     /// was interrupted, or some models have never been run.
     run_at_once: Option<RetrainReason>,
     running: Option<Running>,
+    /// The history backfill in progress: stores its rows, returns how many
+    /// log entries and slots were added.
+    backfilling: Option<JoinHandle<Result<(u64, u64)>>>,
     history: History,
+    /// Told about the nightly run's stages.
+    progress: Arc<dyn Progress>,
 }
 
 impl ForecastService {
@@ -81,8 +91,17 @@ impl ForecastService {
             known: HashSet::new(),
             run_at_once: None,
             running: None,
+            backfilling: None,
             history: History::default(),
+            progress: Arc::new(Silent),
         }
+    }
+
+    /// Reports the nightly run's stages to `progress`.
+    #[must_use]
+    pub fn with_progress(mut self, progress: Arc<dyn Progress>) -> Self {
+        self.progress = progress;
+        self
     }
 
     /// Loads stored fits, intervals and the selection from the last run.
@@ -146,9 +165,83 @@ impl ForecastService {
         Ok(())
     }
 
+    /// When the last complete run finished.
+    pub fn last_run_at(&self) -> Option<DateTime<Utc>> {
+        self.last_run_at
+    }
+
+    /// Models with a usable fit.
+    pub fn fitted_count(&self) -> usize {
+        self.fitted.len()
+    }
+
     /// Whether a nightly run is in progress.
     pub fn is_running(&self) -> bool {
         self.running.is_some()
+    }
+
+    /// Whether the history backfill is in progress.
+    pub fn is_backfilling(&self) -> bool {
+        self.backfilling.is_some()
+    }
+
+    /// Starts the history backfill in the background: every day with data
+    /// before `now` is benchmarked and the default forecast, as it would
+    /// have been made, is added to the accuracy log and the forecast
+    /// history. The nightly run waits until it is done.
+    pub fn start_backfill(&mut self, db: &Database, now: DateTime<Utc>) {
+        if !self.config.enabled || self.backfilling.is_some() {
+            return;
+        }
+        tracing::info!("starting the history backfill");
+        let db = db.clone();
+        let schedule = self.schedule.clone();
+        let models = self.models.clone();
+        let settings = self.settings;
+        let progress = Arc::clone(&self.progress);
+        let log_hours = self.log_hours();
+        self.backfilling = Some(tokio::spawn(async move {
+            let Some(first) = db.first_reading_time().await? else {
+                return Ok((0, 0));
+            };
+            let logs = db
+                .get_history_range(first, now)
+                .await
+                .context("failed to load history for the backfill")?;
+            let history = History::from_logs(&logs);
+            let past = tokio::task::spawn_blocking(move || {
+                backfill::run_reporting(
+                    &models,
+                    &history,
+                    &schedule,
+                    now,
+                    &settings,
+                    progress.as_ref(),
+                )
+            })
+            .await
+            .context("backfill computation panicked")?;
+            save_past(&db, &past, log_hours, DateTime::<Utc>::MIN_UTC).await
+        }));
+    }
+
+    /// Hours ahead logged for accuracy.
+    fn log_hours(&self) -> u32 {
+        u32::try_from(self.config.prediction_horizon_hours).unwrap_or(6)
+    }
+
+    /// Collects a finished backfill; `true` while one is still running.
+    async fn collect_backfill(&mut self) -> bool {
+        let Some(handle) = self.backfilling.take_if(|h| h.is_finished()) else {
+            return self.backfilling.is_some();
+        };
+        match handle.await.context("backfill panicked").and_then(|r| r) {
+            Ok((logged, slots)) => {
+                tracing::info!(logged, slots, "history backfill stored");
+            }
+            Err(e) => tracing::error!(error = %format!("{e:#}"), "history backfill failed"),
+        }
+        false
     }
 
     /// Collects a finished run (storing its results and publishing fresh
@@ -163,7 +256,7 @@ impl ForecastService {
             self.finish(db, running.started_at, result, now).await?;
             self.publish(db, now).await?;
         }
-        if self.running.is_some() {
+        if self.collect_backfill().await || self.running.is_some() {
             return Ok(());
         }
 
@@ -206,6 +299,7 @@ impl ForecastService {
         let models = self.models.clone();
         let settings = self.settings;
         let previous = self.selection.clone();
+        let progress = Arc::clone(&self.progress);
         let reach = settings.training_window + TimeDelta::days(i64::from(settings.days) + 1);
         tokio::spawn(async move {
             let logs = db
@@ -214,7 +308,15 @@ impl ForecastService {
                 .context("failed to load history for the nightly run")?;
             let history = History::from_logs(&logs);
             tokio::task::spawn_blocking(move || {
-                nightly::run(&models, &history, &schedule, now, &settings, &previous)
+                nightly::run_reporting(
+                    &models,
+                    &history,
+                    &schedule,
+                    now,
+                    &settings,
+                    &previous,
+                    progress.as_ref(),
+                )
             })
             .await
             .context("nightly computation panicked")
@@ -260,6 +362,12 @@ impl ForecastService {
             .map(|(bucket, id)| (bucket.code(), id.key().to_string()))
             .collect();
         db.save_benchmark(&run, &selection, RUNS_KEPT).await?;
+        if let Some(&newest) = outcome.benchmark.days.last() {
+            let since = midnight_local_as_utc(newest, self.schedule.timezone());
+            let (logged, slots) =
+                save_past(db, &outcome.benchmark.past, self.log_hours(), since).await?;
+            tracing::debug!(logged, slots, "newest benchmark day added to the history");
+        }
         db.finish_training_attempt(None).await?;
 
         self.intervals = intervals_from_scores(&run.scores);
@@ -340,6 +448,21 @@ impl ForecastService {
         }
         Ok(())
     }
+}
+
+/// Stores the accuracy log entries and hour-ahead slots of the `past`
+/// forecasts made at or after `since`; returns how many of each were added
+/// (stored ones are kept).
+async fn save_past(
+    db: &Database,
+    past: &[PastForecast<ModelId>],
+    log_hours: u32,
+    since: DateTime<Utc>,
+) -> Result<(u64, u64)> {
+    let rows = backfill::rows(past, log_hours, since);
+    let logged = db.save_forecasts(&rows.log).await?;
+    let slots = db.save_forecast_history(&rows.history).await?;
+    Ok((logged, slots))
 }
 
 /// Why a model waits, in whole days: "needs 7 days of history, has 3".

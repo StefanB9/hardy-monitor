@@ -41,19 +41,7 @@ impl HardyMonitorApp {
                 // Settings may change from the phone at any time.
                 Task::batch([self.poll(), self.load_alert_settings()])
             }
-            Message::RefreshNow => {
-                self.errors.clear_all();
-                Task::batch([
-                    self.fetch_latest(),
-                    self.load_chart_history(),
-                    self.load_analytics(),
-                    self.load_insights_data(),
-                    self.load_suite_status(),
-                    self.load_published_forecast(),
-                    self.load_forecast_history(),
-                    self.load_first_reading(),
-                ])
-            }
+            Message::RefreshNow => self.refresh_all(),
             Message::FirstReadingLoaded(result) => {
                 if let Some(first) = self.errors.record(ErrorSource::FirstReading, result) {
                     self.data.first_reading = first;
@@ -62,13 +50,7 @@ impl HardyMonitorApp {
             }
             Message::FetchCompleted(result) => self.handle_fetch_completed(result),
             Message::HistoryLoaded(id, result) => {
-                // A newer load for another range is on its way.
-                if self.ui.chart_requests.is_current(id)
-                    && let Some(logs) = self.errors.record(ErrorSource::Chart, result)
-                {
-                    self.data.history = logs;
-                    self.ui.chart_cache.clear();
-                }
+                self.handle_chart_loaded(id, result);
                 Task::none()
             }
             Message::AnalyticsLoaded(id, result) => {
@@ -102,6 +84,9 @@ impl HardyMonitorApp {
             | Message::CustomEndChanged(_)
             | Message::ApplyCustomRange
             | Message::ChartStep(_) => self.update_navigation(message),
+            Message::DataPeriodSelected(_)
+            | Message::DataScrolled { .. }
+            | Message::DataLoaded(..) => self.update_data(message),
             Message::ExportCsv
             | Message::ExportCompleted(_)
             | Message::ClearExportStatus
@@ -119,6 +104,28 @@ impl HardyMonitorApp {
             | Message::OverlayAdded(_)
             | Message::OverlayRemoved(_) => self.update_model(message),
         }
+    }
+
+    /// Reloads everything shown; the Data tab's readings only while it is
+    /// open (a week is thousands of rows).
+    fn refresh_all(&mut self) -> Task<Message> {
+        self.errors.clear_all();
+        let data = if self.ui.current_view == ViewMode::Data {
+            self.load_data_table()
+        } else {
+            Task::none()
+        };
+        Task::batch([
+            self.fetch_latest(),
+            self.load_chart_history(),
+            self.load_analytics(),
+            self.load_insights_data(),
+            self.load_suite_status(),
+            self.load_published_forecast(),
+            self.load_forecast_history(),
+            self.load_first_reading(),
+            data,
+        ])
     }
 
     /// Alert controls and their stored settings.
@@ -164,6 +171,7 @@ impl HardyMonitorApp {
                 // Reload on entry so long-running sessions stay current.
                 match mode {
                     ViewMode::Week => self.load_analytics(),
+                    ViewMode::Data => self.load_data_table(),
                     ViewMode::Insights => self.load_insights_data(),
                     ViewMode::ModelData => self.load_accuracy(),
                     ViewMode::Now => Task::none(),
@@ -224,10 +232,13 @@ impl HardyMonitorApp {
     }
 
     /// Shows the previous or next period, within the data and up to now.
-    /// Arrow keys arrive from every view; only the Now view's chart moves.
+    /// Arrow keys arrive from every view; the Now view's chart and the Data
+    /// tab's table move.
     fn step_chart(&mut self, step: Step) -> Task<Message> {
-        if self.ui.current_view != ViewMode::Now {
-            return Task::none();
+        match self.ui.current_view {
+            ViewMode::Now => {}
+            ViewMode::Data => return self.step_data(step),
+            ViewMode::Week | ViewMode::Insights | ViewMode::ModelData => return Task::none(),
         }
         let now = self.clock.now_utc();
         let range = self.ui.chart_range;

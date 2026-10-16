@@ -4,7 +4,7 @@
 #[path = "../../hardy-core/tests/common/mod.rs"]
 mod common;
 
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, TimeDelta, TimeZone, Timelike, Utc};
@@ -14,6 +14,7 @@ use hardy_core::{
 };
 use hardy_ml::{
     live::SELECTED,
+    progress::{Progress, Stage},
     service::ForecastService,
     suite::{ARTIFACT_VERSION, ModelId},
 };
@@ -69,9 +70,13 @@ async fn test_run_now_stores_states_benchmark_selection_and_forecasts() -> Resul
     let mut service = service();
     service.load(&tdb.db).await?;
     let now = local(5, 0, 30)?;
+    assert_eq!((service.last_run_at(), service.fitted_count()), (None, 0));
     tokio::time::timeout(Duration::from_secs(120), service.run_now(&tdb.db, now))
         .await
         .context("run finishes")??;
+    assert_eq!(service.last_run_at(), Some(now));
+    // The weekly model waits for more history.
+    assert_eq!(service.fitted_count(), MODELS.len() - 1);
 
     let records = tdb.db.model_records().await?;
     let run = tdb.db.latest_benchmark().await?;
@@ -98,6 +103,55 @@ async fn test_run_now_stores_states_benchmark_selection_and_forecasts() -> Resul
     assert!(
         live.iter()
             .all(|f| f.source.as_deref() == Some("daily_seasonal_naive"))
+    );
+    Ok(())
+}
+
+/// Counts the steps of each stage reported to it.
+#[derive(Default)]
+struct Steps(std::sync::Mutex<Vec<(Stage, usize, usize)>>);
+
+impl Progress for Steps {
+    fn start(&self, stage: Stage, total: usize) {
+        if let Ok(mut steps) = self.0.lock() {
+            steps.push((stage, total, 0));
+        }
+    }
+
+    fn advance(&self, stage: Stage) {
+        if let Ok(mut steps) = self.0.lock()
+            && let Some(entry) = steps.iter_mut().rev().find(|(s, _, _)| *s == stage)
+        {
+            entry.2 += 1;
+        }
+    }
+
+    fn finish(&self, _: Stage) {}
+}
+
+#[tokio::test]
+async fn test_a_run_reports_its_progress() -> Result<()> {
+    let tdb = common::TestDatabase::new().await?;
+    insert_days(&tdb.db, 5).await?;
+    let steps = Arc::new(Steps::default());
+    let mut service = service().with_progress(steps.clone());
+    service.load(&tdb.db).await?;
+    tokio::time::timeout(
+        Duration::from_secs(120),
+        service.run_now(&tdb.db, local(5, 0, 30)?),
+    )
+    .await
+    .context("run finishes")??;
+    tdb.cleanup().await;
+    let steps = steps
+        .0
+        .lock()
+        .map_err(|_| anyhow::anyhow!("poisoned"))?
+        .clone();
+    assert!(steps.contains(&(Stage::Backtest, 5, 5)), "{steps:?}");
+    assert!(
+        steps.contains(&(Stage::Fit, MODELS.len(), MODELS.len())),
+        "{steps:?}"
     );
     Ok(())
 }
@@ -251,5 +305,81 @@ async fn test_ensembles_are_stored_reloaded_and_published() -> Result<()> {
         values("ensemble_best_member"),
         values("daily_seasonal_naive")
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_backfill_stores_every_day_and_holds_back_the_nightly_run() -> Result<()> {
+    let tdb = common::TestDatabase::new().await?;
+    insert_days(&tdb.db, 5).await?;
+    let mut service = service();
+    service.load(&tdb.db).await?;
+    let now = local(5, 12, 0)?;
+
+    service.start_backfill(&tdb.db, now);
+    let started = service.is_backfilling();
+    // New models would start a run at once, but the backfill comes first.
+    service.tick(&tdb.db, now).await?;
+    let nightly_meanwhile = service.is_running();
+    let finished = tokio::time::timeout(Duration::from_secs(120), async {
+        while service.is_backfilling() {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            service.tick(&tdb.db, now).await?;
+        }
+        anyhow::Ok(())
+    })
+    .await;
+    let nightly_after = service.is_running();
+    let stored = tdb.db.has_forecast_history().await?;
+    let history = tdb.db.forecast_history(local(0, 0, 0)?, now).await?;
+    let accuracy = tdb
+        .db
+        .forecast_accuracy(local(0, 0, 0)?, now, GymSchedule::default().timezone())
+        .await?;
+    tdb.cleanup().await;
+
+    assert!(started, "the backfill runs in the background");
+    assert!(!nightly_meanwhile, "the nightly run waits for the backfill");
+    finished.context("backfill finishes")??;
+    assert!(nightly_after, "then the nightly run starts");
+    assert!(stored);
+    let tz = GymSchedule::default().timezone();
+    let days: std::collections::BTreeSet<_> = history
+        .iter()
+        .map(|e| e.target.with_timezone(&tz).date_naive())
+        .collect();
+    // Days 1–4 (day 0 has nothing before it to fit on).
+    assert_eq!(days.len(), 4, "{days:?}");
+    let logged: std::collections::BTreeSet<_> = accuracy.iter().map(|a| a.day).collect();
+    assert_eq!(logged.len(), 4, "{logged:?}");
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_a_nightly_run_appends_its_newest_day_to_the_history() -> Result<()> {
+    let tdb = common::TestDatabase::new().await?;
+    insert_days(&tdb.db, 5).await?;
+    let mut service = service();
+    service.load(&tdb.db).await?;
+    let now = local(5, 0, 30)?;
+    tokio::time::timeout(Duration::from_secs(120), service.run_now(&tdb.db, now))
+        .await
+        .context("run finishes")??;
+    let history = tdb.db.forecast_history(local(0, 0, 0)?, now).await?;
+    let accuracy = tdb
+        .db
+        .forecast_accuracy(local(0, 0, 0)?, now, GymSchedule::default().timezone())
+        .await?;
+    tdb.cleanup().await;
+
+    let newest = local(4, 0, 0)?;
+    assert_ne!(history.len(), 0);
+    assert!(history.iter().all(|e| e.made_at >= newest), "{history:?}");
+    let day = newest
+        .with_timezone(&GymSchedule::default().timezone())
+        .date_naive();
+    let days: Vec<_> = accuracy.iter().map(|a| a.day).collect();
+    assert_ne!(days.len(), 0);
+    assert!(days.iter().all(|d| *d == day), "{days:?}");
     Ok(())
 }

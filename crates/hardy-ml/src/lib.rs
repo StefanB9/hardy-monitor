@@ -2,6 +2,7 @@
 //! service that fits them nightly and publishes live forecasts. Used by the
 //! daemon; the GUI shares the history and profile types.
 
+pub mod backfill;
 pub mod baseline;
 pub mod benchmark;
 pub mod confidence;
@@ -12,6 +13,7 @@ pub mod history;
 pub mod live;
 pub mod nightly;
 pub mod profile;
+pub mod progress;
 pub mod retrain;
 pub mod service;
 pub mod suite;

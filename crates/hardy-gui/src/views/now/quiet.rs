@@ -100,6 +100,14 @@ pub(super) fn card<'a>(props: &NowProps<'a>) -> container::Container<'a, Message
         .align_y(Alignment::Center),
     ]
     .spacing(style::SPACE_XS);
+    let headline = match &props.forecast_notice {
+        Some(notice) => headline.push(
+            text(notice.clone())
+                .size(style::TEXT_CAPTION)
+                .color(style::WARNING),
+        ),
+        None => headline,
+    };
 
     let mut upcoming = column![
         text("Next hours")

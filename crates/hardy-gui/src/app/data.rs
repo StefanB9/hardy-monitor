@@ -12,7 +12,7 @@ use hardy_core::{
 };
 use iced::Task;
 
-use super::{HardyMonitorApp, Message, loads::ErrorSource};
+use super::{ChartData, HardyMonitorApp, Message, RequestId, loads::ErrorSource};
 use crate::{freshness::Freshness, widgets::heatmap::WeekGrid};
 
 impl HardyMonitorApp {
@@ -110,6 +110,22 @@ impl HardyMonitorApp {
                 self.data.trend = None;
                 self.data.insights = generate_insights(&current, None);
             }
+        }
+    }
+
+    /// Shows loaded chart data, unless a newer load for another range is on
+    /// its way.
+    pub(super) fn handle_chart_loaded(
+        &mut self,
+        id: RequestId,
+        result: Result<ChartData, AppError>,
+    ) {
+        if self.ui.chart_requests.is_current(id)
+            && let Some(chart) = self.errors.record(ErrorSource::Chart, result)
+        {
+            self.data.history = chart.readings;
+            self.data.past_forecasts = chart.past_forecasts;
+            self.ui.chart_cache.clear();
         }
     }
 

@@ -1,6 +1,7 @@
 //! Application state, messages and the iced entry points.
 
 mod data;
+mod data_tab;
 mod loads;
 mod maintenance;
 mod message;
@@ -15,12 +16,13 @@ use std::{
 };
 
 use chrono::{DateTime, TimeDelta, Utc};
+pub(crate) use data_tab::TABLE_ID as DATA_TABLE_ID;
 use hardy_core::{
     accuracy::AccuracySummary,
     alert::AlertRules,
     analytics::{DayAnalysis, Insight, OccupancyStats, TrendDirection},
     config::AppConfig,
-    db::{Database, OccupancyLog},
+    db::{Database, ForecastHistoryEntry, OccupancyLog},
     error::AppError,
     repair::RepairSummary,
     schedule::GymSchedule,
@@ -30,11 +32,12 @@ use hardy_ml::suite::Family;
 use iced::{Subscription, Task, Theme, widget::canvas::Cache, window};
 pub use loads::RequestId;
 use loads::{Errors, LatestOnly, PendingLoads};
-pub use message::{Message, RepairPreset, ViewMode};
+pub use message::{ChartData, Message, RepairPreset, ViewMode};
 
 pub use crate::time_range::{AnalyticsRange, ChartRange};
 use crate::{
     alerts::AlertControls,
+    data_table::DataPeriod,
     forecasting::Forecasting,
     freshness::{Freshness, freshness},
     leaderboard::Sort,
@@ -56,6 +59,8 @@ struct MonitorState {
     occupancy: Option<f64>,
     /// Readings of the chart range.
     history: Vec<OccupancyLog>,
+    /// The past hour-ahead forecast in the chart range.
+    past_forecasts: Vec<ForecastHistoryEntry>,
     /// When the GUI last polled the database.
     last_update: Option<DateTime<Utc>>,
     /// When the newest stored reading was taken.
@@ -73,12 +78,15 @@ struct MonitorState {
     accuracy: Option<AccuracySummary>,
     /// Oldest reading; the chart does not step back past it.
     first_reading: Option<DateTime<Utc>>,
+    /// Readings of the Data tab's period.
+    data_rows: Vec<OccupancyLog>,
 }
 
 struct UiState {
     pending: PendingLoads,
     chart_requests: LatestOnly,
     analytics_requests: LatestOnly,
+    data_requests: LatestOnly,
     is_poll_aligned: bool,
     chart_cache: Cache,
     gauge_cache: Cache,
@@ -95,6 +103,11 @@ struct UiState {
     chart_offset: u32,
     custom_start: String,
     custom_end: String,
+    /// The Data tab: its period, how many periods back, and the table's
+    /// scroll offset and visible height.
+    data_period: DataPeriod,
+    data_offset: u32,
+    data_scroll: (f32, f32),
     is_window_visible: bool,
 }
 
@@ -148,6 +161,7 @@ impl HardyMonitorApp {
             data: MonitorState {
                 occupancy: None,
                 history: Vec::new(),
+                past_forecasts: Vec::new(),
                 last_update: None,
                 latest_reading_at: None,
                 week_grid: WeekGrid::default(),
@@ -160,11 +174,13 @@ impl HardyMonitorApp {
                 forecasting: Forecasting::new(horizon_hours, grace),
                 accuracy: None,
                 first_reading: None,
+                data_rows: Vec::new(),
             },
             ui: UiState {
                 pending: PendingLoads::default(),
                 chart_requests: LatestOnly::default(),
                 analytics_requests: LatestOnly::default(),
+                data_requests: LatestOnly::default(),
                 is_poll_aligned: false,
                 chart_cache: Cache::new(),
                 gauge_cache: Cache::new(),
@@ -176,6 +192,9 @@ impl HardyMonitorApp {
                 leaderboard_sort: Sort::default(),
                 leaderboard_family: None,
                 chart_offset: 0,
+                data_period: DataPeriod::default(),
+                data_offset: 0,
+                data_scroll: (0.0, 0.0),
                 custom_start: week_ago_str.clone(),
                 custom_end: today_str.clone(),
                 is_window_visible: true,

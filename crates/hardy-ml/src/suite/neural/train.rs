@@ -165,7 +165,7 @@ pub(super) fn train<N: Net>(
         }
         let candidate = net.valid();
         let loss = evaluate(&candidate, validation, settings.batch);
-        tracing::debug!(epoch, validation = loss, "network epoch");
+        tracing::trace!(epoch, validation = loss, "network epoch");
         if !loss.is_finite() {
             return Err(MlError::Fit(format!("validation loss {loss}")));
         }
