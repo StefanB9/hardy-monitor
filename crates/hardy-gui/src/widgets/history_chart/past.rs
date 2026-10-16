@@ -1,5 +1,5 @@
 //! The past forecast layer: what was forecast for each slot an hour before,
-//! as a thin line with its likely range, under the readings.
+//! as a thin line with its likely range, drawn over the readings.
 
 use chrono::{DateTime, TimeDelta, Utc};
 use hardy_core::db::ForecastHistoryEntry;

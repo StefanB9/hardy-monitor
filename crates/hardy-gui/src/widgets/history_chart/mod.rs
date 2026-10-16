@@ -123,8 +123,9 @@ impl<Message> canvas::Program<Message> for HistoryChart<'_> {
         let plot = self.plot(bounds.size());
         let base = self.cache.draw(renderer, bounds.size(), |frame| {
             self.draw_grid(frame, &plot);
-            self.draw_past(frame, &plot);
             let last = self.draw_history(frame, &plot);
+            // Thin, over the readings: where it was right it hides in them.
+            self.draw_past(frame, &plot);
             self.draw_overlays(frame, &plot);
             self.draw_forecast(frame, &plot, last);
             self.draw_markers(frame, &plot);
