@@ -2,11 +2,14 @@
 //! on a machine strong enough for it. It publishes every model's forecast
 //! every quarter hour while the gym is open, logs the default forecast
 //! every full hour, and refits and benchmarks every model each night.
+//! Once, while no history is stored (or with `--backfill`), it backfills
+//! the default forecast of every past day as it would have been made.
 //! Readings come from the daemon, which also migrates the database.
 
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
+mod args;
 mod forecasts;
 mod logging;
 mod progress;
@@ -17,7 +20,6 @@ use std::{sync::Arc, time::Duration};
 use anyhow::{Context, Result, bail};
 use chrono::Utc;
 use hardy_core::{
-    cli::Options,
     config::AppConfig,
     db::{Database, Migrations, SchemaStatus, minute_slot},
     schedule::GymSchedule,
@@ -32,12 +34,12 @@ use crate::progress::Terminal;
 const SCHEMA_RETRY: Duration = Duration::from_secs(60);
 
 fn main() -> Result<()> {
-    let options = Options::parse("hardy-forecaster", std::env::args().skip(1))?;
+    let args = args::parse(std::env::args().skip(1))?;
     let terminal = Arc::new(Terminal::new(MultiProgress::new()));
-    let _log_guard = logging::setup_logging(options.console, terminal.log_writer());
+    let _log_guard = logging::setup_logging(args.options.console, terminal.log_writer());
     let config = AppConfig::load().context("Failed to load configuration")?;
     let runtime = tokio::runtime::Runtime::new().context("Failed to create tokio runtime")?;
-    let result = runtime.block_on(run(&config, &terminal));
+    let result = runtime.block_on(run(&config, &terminal, args.backfill));
     terminal.close();
     // A nightly run may still be computing on a blocking thread; it has
     // stored nothing yet and reruns at the next start.
@@ -48,7 +50,7 @@ fn main() -> Result<()> {
     result
 }
 
-async fn run(config: &AppConfig, terminal: &Arc<Terminal>) -> Result<()> {
+async fn run(config: &AppConfig, terminal: &Arc<Terminal>, backfill: bool) -> Result<()> {
     let shutdown = shutdown_signal();
     tokio::pin!(shutdown);
 
@@ -85,6 +87,11 @@ async fn run(config: &AppConfig, terminal: &Arc<Terminal>) -> Result<()> {
         true,
     )
     .await;
+    match database.has_forecast_history().await {
+        Ok(stored) if backfill || !stored => service.start_backfill(&database, Utc::now()),
+        Ok(_) => {}
+        Err(e) => tracing::warn!(error = %format!("{e:#}"), "could not check the forecast history"),
+    }
     loop {
         // After the tick, so a run that just started shows at once.
         terminal.status(status::line(&service, &schedule, Utc::now()));
@@ -93,11 +100,12 @@ async fn run(config: &AppConfig, terminal: &Arc<Terminal>) -> Result<()> {
             () = &mut shutdown => break,
         }
         let now = Utc::now();
-        let was_running = service.is_running();
+        let busy = |s: &ForecastService| s.is_running() || s.is_backfilling();
+        let was_busy = busy(&service);
         if let Err(e) = service.tick(&database, now).await {
             tracing::warn!(error = %format!("{e:#}"), "forecast run failed");
         }
-        if was_running && !service.is_running() {
+        if was_busy && !busy(&service) {
             terminal.clear_run();
         }
         publish(

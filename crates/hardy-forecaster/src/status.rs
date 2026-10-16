@@ -12,14 +12,24 @@ pub(crate) fn line(
     schedule: &GymSchedule,
     now: DateTime<Utc>,
 ) -> String {
+    let activity = if service.is_backfilling() {
+        Some(BACKFILLING)
+    } else if service.is_running() {
+        Some(RUNNING)
+    } else {
+        None
+    };
     describe(
-        service.is_running(),
+        activity,
         service.last_run_at(),
         service.fitted_count(),
         next_publish(schedule, now),
         schedule.timezone(),
     )
 }
+
+const RUNNING: &str = "forecast run in progress";
+const BACKFILLING: &str = "history backfill in progress";
 
 /// The next quarter hour after `now` at which forecasts are published.
 fn next_publish(schedule: &GymSchedule, now: DateTime<Utc>) -> Option<DateTime<Utc>> {
@@ -31,23 +41,24 @@ fn next_publish(schedule: &GymSchedule, now: DateTime<Utc>) -> Option<DateTime<U
         .find(|&slot| should_publish(schedule, slot))
 }
 
+/// The status line; `activity` is the long job in progress, if any.
 fn describe(
-    running: bool,
+    activity: Option<&str>,
     last_run: Option<DateTime<Utc>>,
     fitted: usize,
     next: Option<DateTime<Utc>>,
     tz: Tz,
 ) -> String {
     let mut parts = Vec::with_capacity(4);
-    if running {
-        parts.push("forecast run in progress".to_string());
+    if let Some(activity) = activity {
+        parts.push(activity.to_string());
     }
     parts.push(if fitted == 0 {
         "no models fitted yet".to_string()
     } else {
         format!("{fitted} models fitted")
     });
-    if !running {
+    if activity.is_none() {
         parts.push(last_run.map_or_else(
             || "no run yet".to_string(),
             |t| format!("last run {}", t.with_timezone(&tz).format("%a %H:%M")),
@@ -104,7 +115,7 @@ mod tests {
     fn test_describe_idle_and_running() -> Result<()> {
         let tz = GymSchedule::default().timezone();
         let idle = describe(
-            false,
+            None,
             Some(berlin(17, 23, 36)?),
             46,
             Some(berlin(18, 10, 30)?),
@@ -114,12 +125,17 @@ mod tests {
             idle,
             "46 models fitted · last run Mon 23:36 · next forecasts 10:30"
         );
-        let first = describe(false, None, 0, None, tz);
+        let first = describe(None, None, 0, None, tz);
         assert_eq!(first, "no models fitted yet · no run yet");
-        let running = describe(true, None, 0, Some(berlin(18, 10, 30)?), tz);
+        let running = describe(Some(RUNNING), None, 0, Some(berlin(18, 10, 30)?), tz);
         assert_eq!(
             running,
             "forecast run in progress · no models fitted yet · next forecasts 10:30"
+        );
+        let backfilling = describe(Some(BACKFILLING), None, 3, None, tz);
+        assert_eq!(
+            backfilling,
+            "history backfill in progress · 3 models fitted"
         );
         Ok(())
     }
