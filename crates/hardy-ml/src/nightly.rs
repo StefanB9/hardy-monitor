@@ -6,10 +6,11 @@ use hardy_core::GymSchedule;
 use rayon::prelude::*;
 
 use crate::{
-    benchmark::{self, Benchmark, Combination, Selection, Settings},
+    benchmark::{self, Benchmark, Combination, Defaults, Selection, Settings},
     error::MlError,
     grid::{Grid, SLOT},
     history::History,
+    live::{COMPARISON, FALLBACKS},
     progress::{Progress, Silent, Stage},
     suite::{self, AnyModel, ModelId, Observed, safety::guarded},
 };
@@ -79,6 +80,10 @@ pub fn run_reporting(
         schedule,
         now,
         settings,
+        &Defaults {
+            fallbacks: FALLBACKS.to_vec(),
+            comparison: Some(COMPARISON),
+        },
         progress,
     );
     let selection = benchmark::select(&benchmark.reports, previous, settings);
