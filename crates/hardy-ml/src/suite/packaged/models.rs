@@ -453,6 +453,26 @@ mod tests {
         ),
     ];
 
+    /// How far a golden value may move before it counts as changed.
+    /// MFLES boosts Fourier terms and log/exp transforms over many rounds,
+    /// which amplifies the platform maths libraries' last-bit differences
+    /// (`sin`, `cos`, `exp`, `ln`): MSVC builds land about 0.003 points
+    /// from these glibc values. Every other model matches to 1e-6.
+    fn golden_tolerance(kind: Kind) -> f64 {
+        match kind {
+            Kind::Mfles => 0.01,
+            _ => 1e-6,
+        }
+    }
+
+    #[test]
+    fn test_golden_tolerance_is_tight_except_for_mfles() {
+        assert!((golden_tolerance(Kind::Mfles) - 0.01).abs() < 1e-12);
+        for (kind, _) in GOLDEN.iter().filter(|(k, _)| *k != Kind::Mfles) {
+            assert!(golden_tolerance(*kind) <= 1e-6, "{kind:?}");
+        }
+    }
+
     #[test]
     fn test_golden_values_are_unchanged() -> Result<()> {
         let schedule = GymSchedule::default();
@@ -465,7 +485,12 @@ mod tests {
         for (kind, expected) in GOLDEN {
             let values = forecast(kind, &profile, &data)?;
             let got = [values[0], values[7], values[39]];
-            if got.iter().zip(expected).any(|(g, e)| (g - e).abs() > 1e-6) {
+            let tolerance = golden_tolerance(kind);
+            if got
+                .iter()
+                .zip(expected)
+                .any(|(g, e)| (g - e).abs() > tolerance)
+            {
                 changed.push(format!("(Kind::{kind:?}, {got:?}),"));
             }
         }
