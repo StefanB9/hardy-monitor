@@ -1,5 +1,6 @@
 pub(crate) mod alerts;
 pub mod app;
+pub(crate) mod data_table;
 pub mod forecasting;
 pub(crate) mod freshness;
 pub mod leaderboard;

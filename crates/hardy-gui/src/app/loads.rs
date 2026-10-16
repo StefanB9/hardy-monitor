@@ -76,6 +76,8 @@ pub(crate) enum ErrorSource {
     PublishedForecast,
     AlertSettings,
     FirstReading,
+    /// The Data tab's readings.
+    DataTable,
     Export,
     /// An invalid custom chart range.
     ChartRangeInput,
