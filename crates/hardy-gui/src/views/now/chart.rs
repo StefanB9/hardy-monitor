@@ -74,6 +74,18 @@ fn toolbar<'a>(props: &NowProps<'a>, window: Window) -> Element<'a, Message> {
     ]
     .spacing(style::SPACE_L)
     .align_y(Alignment::Center);
+    let past_shown = window.is_some_and(|(start, end)| {
+        props
+            .past_forecasts
+            .iter()
+            .any(|e| (start..=end).contains(&e.target))
+    });
+    if past_shown {
+        legend = legend.push(legend_item(
+            style::tint(style::FORECAST, 0.7),
+            "Forecast an hour before",
+        ));
+    }
     if props.alert_active {
         legend = legend.push(legend_item(style::SUCCESS, "Alert threshold"));
     }
@@ -213,6 +225,7 @@ fn chart_area<'a>(props: &NowProps<'a>, window: Window) -> Element<'a, Message> 
     }
     Canvas::new(HistoryChart {
         history: props.history,
+        past_forecasts: props.past_forecasts,
         forecast: props.forecast,
         overlays: props.overlays,
         range_start,

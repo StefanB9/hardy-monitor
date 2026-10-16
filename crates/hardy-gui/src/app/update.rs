@@ -62,13 +62,7 @@ impl HardyMonitorApp {
             }
             Message::FetchCompleted(result) => self.handle_fetch_completed(result),
             Message::HistoryLoaded(id, result) => {
-                // A newer load for another range is on its way.
-                if self.ui.chart_requests.is_current(id)
-                    && let Some(logs) = self.errors.record(ErrorSource::Chart, result)
-                {
-                    self.data.history = logs;
-                    self.ui.chart_cache.clear();
-                }
+                self.handle_chart_loaded(id, result);
                 Task::none()
             }
             Message::AnalyticsLoaded(id, result) => {

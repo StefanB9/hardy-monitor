@@ -1,12 +1,17 @@
 //! Occupancy over time: measured readings, the forecast with its 80% range,
-//! a "now" marker and the alert threshold.
+//! what was forecast an hour ahead for past slots, a "now" marker and the
+//! alert threshold.
 
 mod axis;
 mod layers;
+mod past;
 mod plot;
 
 use chrono::{DateTime, TimeDelta, Utc};
-use hardy_core::{Tz, db::OccupancyLog};
+use hardy_core::{
+    Tz,
+    db::{ForecastHistoryEntry, OccupancyLog},
+};
 use hardy_ml::PredictionWithConfidence;
 use iced::{
     Point, Rectangle, Renderer, Size, Theme,
@@ -34,6 +39,8 @@ const DASH: &[f32] = &[5.0, 5.0];
 pub struct HistoryChart<'a> {
     /// Readings sorted by time; only those inside the range are drawn.
     pub history: &'a [OccupancyLog],
+    /// The hour-ahead forecast of past slots, sorted by target.
+    pub past_forecasts: &'a [ForecastHistoryEntry],
     pub forecast: &'a [PredictionWithConfidence],
     /// Comparison forecasts, each drawn in its colour from
     /// [`style::COMPARISON`] by position.
@@ -71,6 +78,11 @@ impl HistoryChart<'_> {
                 .iter()
                 .map(|l| l.percentage)
                 .chain(self.forecast_in_range().map(|p| p.confidence_high))
+                .chain(
+                    self.past_in_range()
+                        .iter()
+                        .map(|e| e.high.unwrap_or(e.value)),
+                )
                 .chain(
                     self.overlays
                         .iter()
@@ -111,6 +123,7 @@ impl<Message> canvas::Program<Message> for HistoryChart<'_> {
         let plot = self.plot(bounds.size());
         let base = self.cache.draw(renderer, bounds.size(), |frame| {
             self.draw_grid(frame, &plot);
+            self.draw_past(frame, &plot);
             let last = self.draw_history(frame, &plot);
             self.draw_overlays(frame, &plot);
             self.draw_forecast(frame, &plot, last);
