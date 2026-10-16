@@ -14,6 +14,7 @@ mod alert_settings;
 mod averages;
 mod benchmark;
 mod export;
+mod forecast_history;
 mod forecast_log;
 mod live_forecasts;
 mod ml;
@@ -23,6 +24,7 @@ mod schema;
 mod suite;
 
 pub use benchmark::{BenchmarkModel, BenchmarkRun, BenchmarkScore};
+pub use forecast_history::ForecastHistoryEntry;
 pub use forecast_log::{ForecastLogEntry, HorizonAccuracy};
 pub use live_forecasts::LiveForecast;
 pub use ml::{ForecasterLock, MlState};
