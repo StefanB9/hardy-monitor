@@ -145,7 +145,7 @@ fn table(props: DataProps<'_>) -> Element<'_, Message> {
         list = list.push(table_row(props, i));
     }
     list = list.push(spacer(props.rows.len() - shown.end));
-    scroll_area(list)
+    scroll_area(list.width(Length::Fill))
         .id(DATA_TABLE_ID)
         .on_scroll(|viewport| Message::DataScrolled {
             offset: viewport.absolute_offset().y,
@@ -196,6 +196,7 @@ fn table_row(props: DataProps<'_>, index: usize) -> Element<'_, Message> {
         .spacing(style::SPACE_M)
         .align_y(Alignment::Center),
     )
+    .width(Length::Fill)
     .height(ROW_HEIGHT)
     .padding([0.0, style::SPACE_S])
     .center_y(ROW_HEIGHT)

@@ -91,21 +91,23 @@ hardy-monitor/                         (workspace root)
 │           ├── main.rs                Entry point, tray icon, iced runner
 │           ├── lib.rs                 Module declarations
 │           ├── app/                   HardyMonitorApp (mod), message (Message, ViewMode), update, data
-│           │                          (applying loaded data), maintenance (export/repair), view (shell),
-│           │                          sidebar, tasks (DB loads)
+│           │                          (applying loaded data), data_tab (Data tab loads, period, scroll),
+│           │                          maintenance (export/repair), view (shell), sidebar, tasks (DB loads)
 │           ├── style.rs               Design tokens: colours, occupancy scale, type/spacing scales
 │           ├── forecasting.rs         Forecast state: published forecast, model states, quiet window
 │           ├── leaderboard/           Forecast models table: benchmark error per horizon, standing;
 │           │                          order.rs: column sort, family filter, picker order
 │           ├── quiet_window.rs        Next quiet hour (forecast, else slot averages)
 │           ├── time_range.rs          ChartRange / AnalyticsRange and the instants they cover
+│           ├── data_table.rs          Data tab: day/week periods, rows in view, reading counts by source
 │           ├── freshness.rs           Whether the newest reading is live or stale
 │           ├── tray.rs                Tray tooltip and status dot
 │           ├── alerts.rs              Alert controls (shared settings, desktop popups)
 │           ├── notifier.rs            SystemNotifier (desktop popups)
 │           ├── widgets/               Canvas widgets: gauge, heatmap/ (grid.rs: WeekGrid), history_chart/
 │           │                          (plot, layers, past forecast layer, axis)
-│           └── views/                 now/, week, insights, model_data/, schema_notice, opening;
+│           └── views/                 now/, week, data (readings table), insights, model_data/,
+│                                      schema_notice, opening;
 │                                      components/ (cards, buttons, …)
 ```
 
