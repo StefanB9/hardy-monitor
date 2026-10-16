@@ -270,6 +270,25 @@ Minimum necessary. `pub(super)` or `pub(crate)` for internal types. Private fiel
 **General:**
 - New dependencies require justification: what problem, why this crate, what alternatives were considered.
 - Prefer zero-cost abstractions over convenience crates.
+- No exact (`=`) version pins: every dependency goes through the upgrade workflow below.
+
+### Upgrading Dependencies
+
+On a feature branch (`chore/upgrade-deps`), never directly on `dev`:
+
+```bash
+cargo upgrade --dry-run -vv                   # Every dependency: current, compatible and latest version
+cargo upgrade                                 # Compatible upgrades (Cargo.toml and Cargo.lock)
+cargo upgrade --incompatible                  # Also major / 0.x-minor upgrades: read their changelogs first
+```
+
+Then run the full check (fmt, clippy, check, nextest, as in the Pre-Merge Checklist), plus the offline cache check `SQLX_OFFLINE=true cargo check --workspace --all-targets` after an sqlx upgrade.
+
+The forecasting crates change forecasts silently, even in patch releases (anofox-forecast 0.16.1 changed how AutoARIMA fits):
+
+- **anofox-forecast, stlrs:** `cargo nextest run -p hardy-ml golden` pins their forecasts. If it fails, the forecasts changed: benchmark the affected models on the dev database with the old and new version (same data, same cut-off) and update the golden values only when the new version is not worse. Put the comparison in the PR.
+- **burn, forust-ml, smartcore, faer:** no golden values. The suite's tests must pass; after merging, compare the leaderboard of the next nightly run with the one before.
+- **Stored models:** if a crate can no longer read a model saved by the old version, the forecaster logs "stored model unreadable" and refits it in the next run. No migration is needed.
 
 ## Database & sqlx
 
