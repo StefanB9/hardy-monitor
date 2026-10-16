@@ -6,7 +6,11 @@ mod quiet;
 mod status;
 
 use chrono::{DateTime, Utc};
-use hardy_core::{alert::AlertDuration, db::OccupancyLog, schedule::GymSchedule};
+use hardy_core::{
+    alert::AlertDuration,
+    db::{ForecastHistoryEntry, OccupancyLog},
+    schedule::GymSchedule,
+};
 use hardy_ml::PredictionWithConfidence;
 use iced::{
     Element, Length,
@@ -53,6 +57,8 @@ pub struct NowProps<'a> {
     /// e.g. "On below 25% until 21:00 · set from phone".
     pub alert_status: String,
     pub history: &'a [OccupancyLog],
+    /// The past hour-ahead forecast in the chart range.
+    pub past_forecasts: &'a [ForecastHistoryEntry],
     pub chart_range: ChartRange,
     /// Periods back from the current one (preset ranges).
     pub chart_offset: u32,

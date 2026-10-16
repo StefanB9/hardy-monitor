@@ -20,7 +20,7 @@ use hardy_core::{
     alert::AlertRules,
     analytics::{DayAnalysis, Insight, OccupancyStats, TrendDirection},
     config::AppConfig,
-    db::{Database, OccupancyLog},
+    db::{Database, ForecastHistoryEntry, OccupancyLog},
     error::AppError,
     repair::RepairSummary,
     schedule::GymSchedule,
@@ -30,7 +30,7 @@ use hardy_ml::suite::Family;
 use iced::{Subscription, Task, Theme, widget::canvas::Cache, window};
 pub use loads::RequestId;
 use loads::{Errors, LatestOnly, PendingLoads};
-pub use message::{Message, RepairPreset, ViewMode};
+pub use message::{ChartData, Message, RepairPreset, ViewMode};
 
 pub use crate::time_range::{AnalyticsRange, ChartRange};
 use crate::{
@@ -56,6 +56,8 @@ struct MonitorState {
     occupancy: Option<f64>,
     /// Readings of the chart range.
     history: Vec<OccupancyLog>,
+    /// The past hour-ahead forecast in the chart range.
+    past_forecasts: Vec<ForecastHistoryEntry>,
     /// When the GUI last polled the database.
     last_update: Option<DateTime<Utc>>,
     /// When the newest stored reading was taken.
@@ -148,6 +150,7 @@ impl HardyMonitorApp {
             data: MonitorState {
                 occupancy: None,
                 history: Vec::new(),
+                past_forecasts: Vec::new(),
                 last_update: None,
                 latest_reading_at: None,
                 week_grid: WeekGrid::default(),

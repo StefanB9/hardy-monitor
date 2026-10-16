@@ -10,7 +10,7 @@ use hardy_core::{
 };
 use iced::Task;
 
-use super::{HardyMonitorApp, Message, loads::ErrorSource};
+use super::{ChartData, HardyMonitorApp, Message, loads::ErrorSource};
 use crate::{forecasting::SuiteStatus, time_range::AnalyticsRange};
 
 /// Wraps a database error with the failing operation.
@@ -86,7 +86,8 @@ impl HardyMonitorApp {
         )
     }
 
-    /// Readings for the selected chart range (up to now).
+    /// Readings for the selected chart range (up to now), and for the week
+    /// and month views the past hour-ahead forecast.
     pub(super) fn load_chart_history(&mut self) -> Task<Message> {
         let now = self.clock.now_utc();
         let Some((start, end)) = self.ui.chart_range.window(
@@ -100,10 +101,22 @@ impl HardyMonitorApp {
         let db = self.db.clone();
         let end = end.min(now);
         let id = self.ui.chart_requests.issue();
+        let past = self.ui.chart_range.shows_past_forecasts();
         self.load(
-            async move { db.get_history_range(start, end).await },
-            move |r: anyhow::Result<Vec<OccupancyLog>>| {
-                Message::HistoryLoaded(id, r.map_err(db_err("get_history_range")))
+            async move {
+                let readings = db.get_history_range(start, end).await?;
+                let past_forecasts = if past {
+                    db.forecast_history(start, end).await?
+                } else {
+                    Vec::new()
+                };
+                Ok(ChartData {
+                    readings,
+                    past_forecasts,
+                })
+            },
+            move |r: anyhow::Result<ChartData>| {
+                Message::HistoryLoaded(id, r.map_err(db_err("load_chart")))
             },
         )
     }

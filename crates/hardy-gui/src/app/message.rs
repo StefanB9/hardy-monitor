@@ -3,7 +3,10 @@
 use chrono::{DateTime, Utc};
 use hardy_core::{
     alert::{AlertDuration, AlertSettings},
-    db::{HorizonAccuracy, HourlyAverage, LiveForecast, OccupancyLog, SchemaStatus},
+    db::{
+        ForecastHistoryEntry, HorizonAccuracy, HourlyAverage, LiveForecast, OccupancyLog,
+        SchemaStatus,
+    },
     error::AppError,
     repair::RepairSummary,
 };
@@ -15,6 +18,14 @@ use crate::{
     leaderboard::SortKey,
     time_range::{AnalyticsRange, ChartRange, Step},
 };
+
+/// What the chart shows of one range.
+#[derive(Debug, Clone, Default)]
+pub struct ChartData {
+    pub readings: Vec<OccupancyLog>,
+    /// The hour-ahead forecast of past slots (week and month views only).
+    pub past_forecasts: Vec<ForecastHistoryEntry>,
+}
 
 /// The four top-level views.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -74,8 +85,8 @@ pub enum Message {
 
     /// Newest stored reading: when it was taken and its value.
     FetchCompleted(Result<Option<(DateTime<Utc>, f64)>, AppError>),
-    /// Chart readings; applied only if `RequestId` is the newest chart load.
-    HistoryLoaded(RequestId, Result<Vec<OccupancyLog>, AppError>),
+    /// Chart data; applied only if `RequestId` is the newest chart load.
+    HistoryLoaded(RequestId, Result<ChartData, AppError>),
     /// Hourly averages; applied only if `RequestId` is the newest one.
     AnalyticsLoaded(RequestId, Result<Vec<HourlyAverage>, AppError>),
     InsightsDataLoaded {

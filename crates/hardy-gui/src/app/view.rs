@@ -109,6 +109,7 @@ impl HardyMonitorApp {
             alert_duration: self.alerts.duration(),
             alert_status: self.alerts.status_line(now, &self.schedule),
             history: &self.data.history,
+            past_forecasts: &self.data.past_forecasts,
             chart_range: self.ui.chart_range,
             chart_offset: self.ui.chart_offset,
             first_reading: self.data.first_reading,

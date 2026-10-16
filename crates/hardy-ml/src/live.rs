@@ -25,14 +25,14 @@ use crate::{
 pub const SELECTED: &str = "selected";
 /// Used in this order when a selected model has no forecast (or nothing
 /// has been selected yet).
-const FALLBACKS: [ModelId; 4] = [
+pub(crate) const FALLBACKS: [ModelId; 4] = [
     ModelId::ProfileDecayingOffset,
     ModelId::WeeklyRecencyMean,
     ModelId::DailySeasonalNaive,
     ModelId::Naive,
 ];
 /// The model logged alongside the default forecast for comparison.
-const COMPARISON: ModelId = ModelId::ProfileDecayingOffset;
+pub(crate) const COMPARISON: ModelId = ModelId::ProfileDecayingOffset;
 
 /// A model's interval offsets per horizon bucket.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]

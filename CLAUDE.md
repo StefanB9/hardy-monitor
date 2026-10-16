@@ -12,7 +12,8 @@ hardy-monitor/                         (workspace root)
 ├── config.toml                        Documented example configuration
 ├── migrations/                        sqlx migrations: occupancy_logs (+ quarantine), alert_settings,
 │                                      ml_state, repair_state, forecast_log, forecast suite (forecast_models,
-│                                      benchmark_runs / _models / _scores, forecast_selection, live_forecasts)
+│                                      benchmark_runs / _models / _scores, forecast_selection, live_forecasts),
+│                                      forecast_history
 ├── .sqlx/                             sqlx offline query cache
 ├── docs/plan/                         Approved plans
 │
@@ -30,7 +31,7 @@ hardy-monitor/                         (workspace root)
 │   │   │   │                          validation.rs
 │   │   │   ├── db/                    Database (sqlx PgPool): readings, averages, export (CSV), alert settings,
 │   │   │   │                          ml state, suite (model states), benchmark, live forecasts, repair state,
-│   │   │   │                          forecast log; schema.rs: migrations + version check
+│   │   │   │                          forecast log, forecast history; schema.rs: migrations + version check
 │   │   │   ├── error.rs               AppError, NetworkErrorKind, DatabaseError (thiserror)
 │   │   │   ├── health.rs              HealthMonitor: outage / resumed messages for the daemon
 │   │   │   ├── ntfy.rs                ntfy client (publish, poll)
@@ -42,7 +43,8 @@ hardy-monitor/                         (workspace root)
 │   │   │   └── traits.rs              Clock, Notifier, SystemClock, MockClock, MockNotifier
 │   │   └── tests/                     Integration tests (TestDatabase / wiremock): api, api_errors,
 │   │                                  db_connect, db_readings, db_averages, db_alert_settings, db_models,
-│   │                                  schema, migrations, repair, forecast_log, alert_service, ntfy,
+│   │                                  schema, migrations, repair, forecast_log, forecast_history,
+│   │                                  forecaster_lock, alert_service, ntfy,
 │   │                                  notifier, schedule_clock; common/mod.rs: TestDatabase and
 │   │                                  RawTestDatabase
 │   │
@@ -57,8 +59,9 @@ hardy-monitor/                         (workspace root)
 │   │   │                              stopping; MLP, TCN, GRU, LSTM, N-BEATS, N-HiTS, PatchTST; weekly
 │   │   │                              refits in the backtest), legacy wrapper, linalg, safety);
 │   │   │                              benchmark/ (rolling-origin backtest, metrics + conformal
-│   │   │                              intervals, ensembles, selection); nightly, live,
-│   │   │                              service, retrain, confidence, progress (stage reporting)
+│   │   │                              intervals, ensembles, selection, past: the default forecast
+│   │   │                              as it would have been); nightly, live, backfill (history
+│   │   │                              rows), service, retrain, confidence, progress (stage reporting)
 │   │   └── tests/service.rs           Nightly run and live publishing against a real database
 │   │
 │   ├── hardy-daemon/                  (binary — headless fetch loop for a small cloud instance; the only
@@ -74,8 +77,9 @@ hardy-monitor/                         (workspace root)
 │   ├── hardy-forecaster/              (binary — long-running forecasting on a stronger machine; one at a
 │   │   │                              time via an advisory lock; waits for the daemon's migrations)
 │   │   └── src/
-│   │       ├── main.rs                Startup (schema wait, lock) and the minute loop: nightly run,
-│   │       │                          quarter-hour publishing
+│   │       ├── main.rs                Startup (schema wait, lock, history backfill) and the minute loop:
+│   │       │                          nightly run, quarter-hour publishing
+│   │       ├── args.rs                Command line: shared options plus --backfill
 │   │       ├── forecasts.rs           Live forecasts every quarter hour while open, hourly accuracy log
 │   │       ├── status.rs              Status line between runs
 │   │       ├── progress.rs            Terminal progress bars (indicatif); log lines above the bars
@@ -100,7 +104,7 @@ hardy-monitor/                         (workspace root)
 │           ├── alerts.rs              Alert controls (shared settings, desktop popups)
 │           ├── notifier.rs            SystemNotifier (desktop popups)
 │           ├── widgets/               Canvas widgets: gauge, heatmap/ (grid.rs: WeekGrid), history_chart/
-│           │                          (plot, layers, axis)
+│           │                          (plot, layers, past forecast layer, axis)
 │           └── views/                 now/, week, insights, model_data/, schema_notice, opening;
 │                                      components/ (cards, buttons, …)
 ```

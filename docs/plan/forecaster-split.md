@@ -27,6 +27,16 @@ both share the database.
 2. History: backfill, `forecast_history` (migration + queries), nightly
    append, chart line.
 
+## History details (agreed for part 2)
+
+| Topic | Decision |
+|---|---|
+| Earlier days | Each past day's default model, intervals and ensemble weights come from **all** earlier days of the backfill (cumulative), not a rolling 28-day window |
+| Comparison column | The accuracy log's comparison value is the same model live logging uses (profile with decaying offset), so backfilled and live rows mean the same |
+| Which slots | Only open slots with a reading (the slots the benchmark scores) |
+| Existing rows | Kept: backfill and nightly append never overwrite stored rows (live log rows win) |
+| When | At start-up while `forecast_history` is empty, or with `--backfill` (fills gaps); runs in the background, live forecasts keep publishing, the nightly run waits for it |
+
 ## Dependencies
 
 | Crate | Why | Alternatives |

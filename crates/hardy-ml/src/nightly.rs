@@ -6,10 +6,11 @@ use hardy_core::GymSchedule;
 use rayon::prelude::*;
 
 use crate::{
-    benchmark::{self, Benchmark, Combination, Selection, Settings},
+    benchmark::{self, Benchmark, Combination, Defaults, Selection, Settings},
     error::MlError,
     grid::{Grid, SLOT},
     history::History,
+    live::{COMPARISON, FALLBACKS},
     progress::{Progress, Silent, Stage},
     suite::{self, AnyModel, ModelId, Observed, safety::guarded},
 };
@@ -62,6 +63,26 @@ pub fn run_reporting(
     previous: &Selection<ModelId>,
     progress: &dyn Progress,
 ) -> NightlyOutcome {
+    let benchmark = benchmark_suite(models, history, schedule, now, settings, progress);
+    let selection = benchmark::select(&benchmark.reports, previous, settings);
+    let fits = fit_reporting(models, history, schedule, now, settings, progress);
+    NightlyOutcome {
+        benchmark,
+        fits,
+        selection,
+    }
+}
+
+/// The benchmark of `models` (forecasters and ensembles of them), recording
+/// the default forecast with the live fallbacks and comparison model.
+pub(crate) fn benchmark_suite(
+    models: &[ModelId],
+    history: &History,
+    schedule: &GymSchedule,
+    now: DateTime<Utc>,
+    settings: &Settings,
+    progress: &dyn Progress,
+) -> Benchmark<ModelId> {
     let forecasters: Vec<ModelId> = models
         .iter()
         .copied()
@@ -71,7 +92,7 @@ pub fn run_reporting(
         .iter()
         .filter_map(|&id| id.combination().map(|c| (id, c)))
         .collect();
-    let benchmark = benchmark::run_reporting(
+    benchmark::run_reporting(
         &forecasters,
         AnyModel::new,
         &ensembles,
@@ -79,15 +100,12 @@ pub fn run_reporting(
         schedule,
         now,
         settings,
+        &Defaults {
+            fallbacks: FALLBACKS.to_vec(),
+            comparison: Some(COMPARISON),
+        },
         progress,
-    );
-    let selection = benchmark::select(&benchmark.reports, previous, settings);
-    let fits = fit_reporting(models, history, schedule, now, settings, progress);
-    NightlyOutcome {
-        benchmark,
-        fits,
-        selection,
-    }
+    )
 }
 
 /// Fits every forecaster in `models` on the readings in the training window
