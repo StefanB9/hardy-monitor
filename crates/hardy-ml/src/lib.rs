@@ -12,6 +12,7 @@ pub mod history;
 pub mod live;
 pub mod nightly;
 pub mod profile;
+pub mod progress;
 pub mod retrain;
 pub mod service;
 pub mod suite;

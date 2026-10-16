@@ -90,16 +90,6 @@ impl Database {
         Ok(result.rows_affected())
     }
 
-    /// Deletes forecasts made before `cutoff`.
-    #[tracing::instrument(skip(self), fields(db.operation = "delete_forecasts_before"))]
-    pub async fn delete_forecasts_before(&self, cutoff: DateTime<Utc>) -> Result<u64> {
-        let result = sqlx::query!("DELETE FROM forecast_log WHERE made_at < $1", cutoff)
-            .execute(&self.pool)
-            .await
-            .context("failed to delete old forecasts")?;
-        Ok(result.rows_affected())
-    }
-
     /// Accuracy per gym-local target day and horizon for targets in
     /// `[since, until)`, compared with measured or smoothed readings.
     #[tracing::instrument(skip(self), fields(db.operation = "forecast_accuracy"))]

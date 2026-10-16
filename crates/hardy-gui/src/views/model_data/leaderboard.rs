@@ -196,8 +196,8 @@ pub(super) fn card<'a>(props: &ModelDataProps<'a>) -> Element<'a, Message> {
         }
         _ => {
             body = body.push(empty_state(
-                "No benchmark yet. The daemon fits and tests every model each night, and right \
-                 away when a model is new; the table fills in after its first run.",
+                "No benchmark yet. The forecaster fits and tests every model each night, and \
+                 right away when a model is new; the table fills in after its first run.",
             ));
         }
     }

@@ -1,7 +1,13 @@
 cargo-features = ["panic-immediate-abort"]
 
 [workspace]
-members = ["crates/hardy-core", "crates/hardy-daemon", "crates/hardy-gui", "crates/hardy-ml"]
+members = [
+    "crates/hardy-core",
+    "crates/hardy-daemon",
+    "crates/hardy-forecaster",
+    "crates/hardy-gui",
+    "crates/hardy-ml",
+]
 resolver = "3"
 
 [workspace.lints.rust]
@@ -42,6 +48,7 @@ faer = { version = "0.24.4", default-features = false, features = ["linalg", "st
 forust-ml = { version = "=0.7.0", default-features = false }
 futures = { version = "0.3.34", default-features = false }
 iced = { version = "0.14.0", default-features = false, features = ["advanced", "canvas", "crisp", "tokio", "wgpu"] }
+indicatif = { version = "0.18.6", default-features = false }
 image = { version = "0.25.10", default-features = false, features = ["jpeg", "png"] }
 mimalloc = { version = "0.1.52", default-features = false }
 muda = { version = "0.21.2", default-features = false }

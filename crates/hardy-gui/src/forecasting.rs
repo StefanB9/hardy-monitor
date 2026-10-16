@@ -4,7 +4,7 @@
 
 use chrono::{DateTime, TimeDelta, Utc};
 use hardy_core::{
-    GymSchedule,
+    GymSchedule, Tz,
     db::{BenchmarkRun, LiveForecast, MlState, ModelRecord, OccupancyLog},
 };
 use hardy_ml::{History, PredictionMethod, PredictionWithConfidence, SlotProfile, suite::ModelId};
@@ -32,6 +32,12 @@ pub struct SuiteStatus {
 
 /// A model's forecast as (slot end, value) points.
 pub type ForecastLine = (ModelId, Vec<(DateTime<Utc>, f64)>);
+
+/// A published forecast older than this is labelled: the forecaster seems
+/// to be offline (it publishes every quarter hour while the gym is open).
+const STALE_AFTER: TimeDelta = TimeDelta::minutes(30);
+/// Older than this, the quiet hour no longer relies on the forecast.
+const IGNORED_AFTER: TimeDelta = TimeDelta::hours(1);
 
 /// Most models compared on the chart at once.
 pub(crate) const MAX_OVERLAYS: usize = 5;
@@ -269,8 +275,30 @@ impl Forecasting {
             .collect();
         self.charted = self.upcoming.partition_point(|p| p.timestamp <= horizon);
         let profile = SlotProfile::from_history(self.history.view(), schedule.timezone());
+        let usable = self
+            .made_at()
+            .is_some_and(|made| now - made <= IGNORED_AFTER);
+        let forecasts: &[PredictionWithConfidence] = if usable { &self.upcoming } else { &[] };
         self.quiet_window =
-            next_quiet_window(now, schedule, &self.upcoming, &profile, self.opening_grace);
+            next_quiet_window(now, schedule, forecasts, &profile, self.opening_grace);
+    }
+
+    /// When the default forecast was made.
+    fn made_at(&self) -> Option<DateTime<Utc>> {
+        self.published
+            .iter()
+            .filter(|f| f.model == hardy_ml::live::SELECTED)
+            .map(|f| f.made_at)
+            .max()
+    }
+
+    /// A note when the forecast is old, i.e. the forecaster seems offline.
+    pub(crate) fn forecast_notice(&self, now: DateTime<Utc>, tz: Tz) -> Option<String> {
+        let made = self.made_at().filter(|made| now - *made > STALE_AFTER)?;
+        Some(format!(
+            "Forecast from {} – forecaster offline",
+            made.with_timezone(&tz).format("%H:%M")
+        ))
     }
 
     /// The forecast within the chart's horizon.
@@ -347,6 +375,38 @@ mod tests {
             high: None,
             source: Some("naive".to_string()),
         }
+    }
+
+    #[test]
+    fn test_an_old_forecast_is_flagged_then_left_out_of_the_quiet_hour() {
+        let schedule = GymSchedule::default();
+        let tz = schedule.timezone();
+        let mut f = Forecasting::new(6, TimeDelta::hours(1));
+        // Made at 10:00 Berlin (08:00 UTC), every quarter hour for 15 hours.
+        f.set_published((1..60).map(|k| published(15 * k, 10.0)).collect());
+        f.refresh(&schedule, at(20));
+        assert_eq!(f.forecast_notice(at(20), tz), None);
+        assert!(
+            f.quiet_window()
+                .is_some_and(|w| w.source == crate::quiet_window::Source::Forecast)
+        );
+
+        f.refresh(&schedule, at(45));
+        assert_eq!(
+            f.forecast_notice(at(45), tz).as_deref(),
+            Some("Forecast from 10:00 – forecaster offline")
+        );
+        assert!(
+            f.quiet_window()
+                .is_some_and(|w| w.source == crate::quiet_window::Source::Forecast)
+        );
+
+        f.refresh(&schedule, at(61));
+        assert!(
+            f.quiet_window()
+                .is_none_or(|w| w.source == crate::quiet_window::Source::Averages)
+        );
+        assert!(!f.forecasts().is_empty(), "the line stays on the chart");
     }
 
     #[test]

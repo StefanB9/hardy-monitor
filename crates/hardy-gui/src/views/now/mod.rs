@@ -36,6 +36,8 @@ pub struct NowProps<'a> {
     pub forecast: &'a [PredictionWithConfidence],
     /// Name of the model behind the forecast, if one was published.
     pub forecast_source: Option<&'static str>,
+    /// Set when the forecast is old (the forecaster seems offline).
+    pub forecast_notice: Option<String>,
     /// Which forecast is shown, and the models it can be switched to.
     pub forecast_choice: ForecastChoice,
     pub forecast_picker: &'a combo_box::State<ForecastChoice>,

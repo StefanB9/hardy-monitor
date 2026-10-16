@@ -96,6 +96,10 @@ impl HardyMonitorApp {
             quiet_window: self.data.forecasting.quiet_window(),
             forecast: self.data.forecasting.forecasts(),
             forecast_source: self.data.forecasting.forecast_source(),
+            forecast_notice: self
+                .data
+                .forecasting
+                .forecast_notice(now, self.schedule.timezone()),
             forecast_choice: self.data.forecasting.choice(),
             forecast_picker: self.data.forecasting.forecast_picker(),
             compare_picker: self.data.forecasting.compare_picker(),

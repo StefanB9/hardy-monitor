@@ -4,7 +4,7 @@ Gym occupancy monitoring application built in Rust. Fetches real-time occupancy 
 
 ## Project Structure
 
-Cargo workspace with 4 members:
+Cargo workspace with 5 members:
 
 ```
 hardy-monitor/                         (workspace root)
@@ -17,7 +17,7 @@ hardy-monitor/                         (workspace root)
 ├── docs/plan/                         Approved plans
 │
 ├── crates/
-│   ├── hardy-core/                    (library — shared by daemon, ML and GUI)
+│   ├── hardy-core/                    (library — shared by daemon, forecaster, ML and GUI)
 │   │   ├── src/
 │   │   │   ├── lib.rs                 Module declarations + re-exports
 │   │   │   ├── accuracy.rs            Summaries of logged forecast accuracy
@@ -46,7 +46,7 @@ hardy-monitor/                         (workspace root)
 │   │                                  notifier, schedule_clock; common/mod.rs: TestDatabase and
 │   │                                  RawTestDatabase
 │   │
-│   ├── hardy-ml/                      (library — forecasting, shared by daemon and GUI)
+│   ├── hardy-ml/                      (library — forecasting, shared by forecaster and GUI)
 │   │   ├── src/                       grid (15-minute slots), history, profile, baseline; suite/ (model
 │   │   │                              interface + registry, baselines, profiles/, statistical/ (smoothing,
 │   │   │                              Theta, AR, Holt–Winters, Kalman; Nelder–Mead, faer OLS), packaged/
@@ -58,18 +58,28 @@ hardy-monitor/                         (workspace root)
 │   │   │                              refits in the backtest), legacy wrapper, linalg, safety);
 │   │   │                              benchmark/ (rolling-origin backtest, metrics + conformal
 │   │   │                              intervals, ensembles, selection); nightly, live,
-│   │   │                              service, retrain, confidence
+│   │   │                              service, retrain, confidence, progress (stage reporting)
 │   │   └── tests/service.rs           Nightly run and live publishing against a real database
 │   │
-│   ├── hardy-daemon/                  (binary — headless fetch loop; the only process that migrates)
+│   ├── hardy-daemon/                  (binary — headless fetch loop for a small cloud instance; the only
+│   │   │                              process that migrates; no forecasting)
 │   │   └── src/
 │   │       ├── main.rs                Startup and the fetch loop
 │   │       ├── cycle.rs               One fetch cycle: fetch, store, log (shutdown grace)
 │   │       ├── timing.rs              Minute alignment and drift correction
 │   │       ├── connect.rs             Database connect with retry, health and schema checks
-│   │       ├── upkeep.rs              Nightly repair + forecast run, schema check, live forecasts
-│   │       ├── forecasts.rs           Live forecasts every quarter hour, hourly accuracy log
+│   │       ├── upkeep.rs              Nightly repair, schema check
 │   │       └── logging.rs             tracing setup (console / rotated file)
+│   │
+│   ├── hardy-forecaster/              (binary — long-running forecasting on a stronger machine; one at a
+│   │   │                              time via an advisory lock; waits for the daemon's migrations)
+│   │   └── src/
+│   │       ├── main.rs                Startup (schema wait, lock) and the minute loop: nightly run,
+│   │       │                          quarter-hour publishing
+│   │       ├── forecasts.rs           Live forecasts every quarter hour while open, hourly accuracy log
+│   │       ├── status.rs              Status line between runs
+│   │       ├── progress.rs            Terminal progress bars (indicatif); log lines above the bars
+│   │       └── logging.rs             tracing setup (rotated file; console with --console / debug)
 │   │
 │   └── hardy-gui/                     (binary + library — iced desktop GUI)
 │       ├── assets/icon.png
@@ -95,7 +105,7 @@ hardy-monitor/                         (workspace root)
 │                                      components/ (cards, buttons, …)
 ```
 
-**Dependency boundary:** core ← ml ← daemon / gui. Core has zero GUI or ML dependencies; `hardy-ml` depends only on core plus ML crates; both binaries depend on core and ml. GUI-only crates stay in `hardy-gui`. Never reverse.
+**Dependency boundary:** core ← ml ← forecaster / gui; core ← daemon. Core has zero GUI or ML dependencies; `hardy-ml` depends only on core plus ML crates; the forecaster and the GUI depend on core and ml, the daemon on core only. GUI-only crates stay in `hardy-gui`. Never reverse.
 
 ## Planning Process
 
@@ -117,6 +127,7 @@ cargo clippy --workspace --all-targets        # Zero warnings required (includes
 cargo check --workspace --all-targets         # Type-check everything including tests
 cargo fmt --all -- --check                    # Format check
 cargo build -p hardy-daemon                   # Build daemon only
+cargo build -p hardy-forecaster               # Build forecaster only
 cargo build -p hardy-gui                      # Build GUI only
 ```
 
@@ -257,7 +268,7 @@ Minimum necessary. `pub(super)` or `pub(crate)` for internal types. Private fiel
 ## Database & sqlx
 
 - **Migrations:** Use `cargo sqlx migrate add -r <name>` to create reversible migration files. Run from the project root.
-- **Running migrations:** Only the daemon migrates: it connects with `Migrations::Apply`, the GUI with `Migrations::Verify` and waits (full-window notice) until `Database::schema_status()` is `Current`. A build older than the database refuses to run (`AppError::SchemaTooNew`). `Database::new()` (tests) applies migrations. `DATABASE_URL` is read from `.env`.
+- **Running migrations:** Only the daemon migrates: it connects with `Migrations::Apply`, the GUI and the forecaster with `Migrations::Verify` and wait (GUI: full-window notice) until `Database::schema_status()` is `Current`. A build older than the database refuses to run (`AppError::SchemaTooNew`). `Database::new()` (tests) applies migrations. `DATABASE_URL` is read from `.env`.
 - **Offline cache:** After adding or changing queries, regenerate with `cargo sqlx prepare --workspace` from the project root. Commit the `.sqlx/` directory.
 - **Compile-time checked queries:** Use `sqlx::query!` and `sqlx::query_as!` — never raw string queries without compile-time verification.
 - **Never hand-create migration files.** Always use the `cargo sqlx migrate add` command so timestamps are generated correctly.
@@ -270,7 +281,7 @@ Minimum necessary. `pub(super)` or `pub(crate)` for internal types. Private fiel
 - **Levels:** `error!` = failures requiring attention. `warn!` = degraded states. `info!` = lifecycle events. `debug!` = protocol detail.
 - **Default filter:** `hardy_core=DEBUG,hardy_daemon=DEBUG` / `hardy_gui=DEBUG` (debug), `INFO` (release). Noisy crates (fontdb, wgpu, naga, iced) filtered out in GUI.
 - **Override:** `RUST_LOG` env var via `EnvFilter::try_from_default_env()`.
-- **Release logging:** Writes to `logs/hardy-monitor.log` with daily rotation via `tracing-appender`; `--console` (daemon and GUI, parsed by `hardy_core::cli::Options`) also logs to the console.
+- **Release logging:** Writes to `logs/hardy-monitor.log` (forecaster: `logs/hardy-forecaster.log`) with daily rotation via `tracing-appender`; `--console` (all binaries, parsed by `hardy_core::cli::Options`) also logs to the console.
 
 ## Git Workflow
 

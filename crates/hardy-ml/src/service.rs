@@ -1,7 +1,10 @@
-//! Runs the forecasting suite for the daemon: the nightly fit and benchmark
+//! Runs the forecasting suite for the forecaster: the nightly fit and benchmark
 //! in the background, and live forecasts as new readings arrive.
 
-use std::collections::{HashMap, HashSet};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, TimeDelta, Utc};
@@ -18,6 +21,7 @@ use crate::{
     history::History,
     live::{HorizonIntervals, LiveForecasts, forecast_all},
     nightly::{self, FitResult, NightlyOutcome},
+    progress::{Progress, Silent},
     retrain::{RetrainReason, retrain_due},
     suite::{ARTIFACT_VERSION, AnyModel, ModelId},
 };
@@ -34,7 +38,7 @@ struct Running {
     handle: JoinHandle<Result<NightlyOutcome>>,
 }
 
-/// The suite as the daemon runs it.
+/// The suite as the forecaster runs it.
 pub struct ForecastService {
     config: MlConfig,
     schedule: GymSchedule,
@@ -53,6 +57,8 @@ pub struct ForecastService {
     run_at_once: Option<RetrainReason>,
     running: Option<Running>,
     history: History,
+    /// Told about the nightly run's stages.
+    progress: Arc<dyn Progress>,
 }
 
 impl ForecastService {
@@ -82,7 +88,15 @@ impl ForecastService {
             run_at_once: None,
             running: None,
             history: History::default(),
+            progress: Arc::new(Silent),
         }
+    }
+
+    /// Reports the nightly run's stages to `progress`.
+    #[must_use]
+    pub fn with_progress(mut self, progress: Arc<dyn Progress>) -> Self {
+        self.progress = progress;
+        self
     }
 
     /// Loads stored fits, intervals and the selection from the last run.
@@ -146,6 +160,16 @@ impl ForecastService {
         Ok(())
     }
 
+    /// When the last complete run finished.
+    pub fn last_run_at(&self) -> Option<DateTime<Utc>> {
+        self.last_run_at
+    }
+
+    /// Models with a usable fit.
+    pub fn fitted_count(&self) -> usize {
+        self.fitted.len()
+    }
+
     /// Whether a nightly run is in progress.
     pub fn is_running(&self) -> bool {
         self.running.is_some()
@@ -206,6 +230,7 @@ impl ForecastService {
         let models = self.models.clone();
         let settings = self.settings;
         let previous = self.selection.clone();
+        let progress = Arc::clone(&self.progress);
         let reach = settings.training_window + TimeDelta::days(i64::from(settings.days) + 1);
         tokio::spawn(async move {
             let logs = db
@@ -214,7 +239,15 @@ impl ForecastService {
                 .context("failed to load history for the nightly run")?;
             let history = History::from_logs(&logs);
             tokio::task::spawn_blocking(move || {
-                nightly::run(&models, &history, &schedule, now, &settings, &previous)
+                nightly::run_reporting(
+                    &models,
+                    &history,
+                    &schedule,
+                    now,
+                    &settings,
+                    &previous,
+                    progress.as_ref(),
+                )
             })
             .await
             .context("nightly computation panicked")

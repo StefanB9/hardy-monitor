@@ -16,7 +16,44 @@ pub struct MlState {
     pub last_error: Option<String>,
 }
 
+/// Advisory lock key held by the running forecaster ("HMFC").
+const FORECASTER_LOCK: i64 = 0x484D_4643;
+
+/// Held while a forecaster runs. The lock belongs to its own connection,
+/// so it is released when this is dropped (or the process dies).
+pub struct ForecasterLock {
+    _connection: sqlx::PgConnection,
+}
+
+impl std::fmt::Debug for ForecasterLock {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ForecasterLock").finish_non_exhaustive()
+    }
+}
+
 impl Database {
+    /// Takes the forecaster lock; `None` while another forecaster holds it.
+    #[tracing::instrument(skip_all, fields(db.operation = "lock_forecaster"))]
+    pub async fn lock_forecaster(&self) -> Result<Option<ForecasterLock>> {
+        // Detached: a pooled connection would keep the lock after release.
+        let mut connection = self
+            .pool
+            .acquire()
+            .await
+            .context("Failed to open a connection for the forecaster lock")?
+            .detach();
+        let locked = sqlx::query_scalar!(
+            r#"SELECT pg_try_advisory_lock($1) AS "locked!""#,
+            FORECASTER_LOCK
+        )
+        .fetch_one(&mut connection)
+        .await
+        .context("Failed to take the forecaster lock")?;
+        Ok(locked.then_some(ForecasterLock {
+            _connection: connection,
+        }))
+    }
+
     /// Training coordination state (retrain requests, last attempt).
     #[tracing::instrument(skip_all, fields(db.operation = "get_ml_state"))]
     pub async fn get_ml_state(&self) -> Result<MlState> {
