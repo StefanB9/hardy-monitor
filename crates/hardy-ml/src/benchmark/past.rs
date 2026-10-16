@@ -85,8 +85,8 @@ pub(super) fn day_defaults<L: Copy + PartialEq>(
             .and_then(|by_bucket| by_bucket[step.bucket.index()]);
         out.push(PastForecast {
             made_at,
-            step: step.step,
-            target: made_at + SLOT * i32::try_from(step.step).unwrap_or(i32::MAX),
+            step: step.horizon,
+            target: made_at + SLOT * i32::try_from(step.horizon).unwrap_or(i32::MAX),
             model,
             value: v,
             bounds: interval.map(|iv| iv.around(v)),
@@ -114,7 +114,7 @@ mod tests {
             .into_iter()
             .map(|(origin, step)| Step {
                 origin,
-                step,
+                horizon: step,
                 bucket: Bucket::of_step(step),
                 actual: 50.0,
             })
@@ -128,7 +128,7 @@ mod tests {
                     .iter()
                     .enumerate()
                     .map(|(s, step)| {
-                        (m != 1 || s != 3).then_some(10.0 * m as f64 + step.step as f64)
+                        (m != 1 || s != 3).then_some(10.0 * f64::from(m) + step.horizon as f64)
                     })
                     .collect(),
                 ..ModelDay::default()
@@ -193,6 +193,6 @@ mod tests {
             &Defaults::default(),
             &mut out,
         );
-        assert!(out.is_empty());
+        assert_eq!(out, Vec::new());
     }
 }

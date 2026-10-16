@@ -200,7 +200,7 @@ struct Step {
     /// Index of its origin within the day.
     origin: usize,
     /// Slots after the origin (1 = the first).
-    step: usize,
+    horizon: usize,
     bucket: Bucket,
     actual: f64,
 }
@@ -677,7 +677,7 @@ where
         let targets: Vec<(usize, f64)> = scored_steps(&data, grid, now).collect();
         steps.extend(targets.iter().map(|&(step, actual)| Step {
             origin: origins,
-            step,
+            horizon: step,
             bucket: Bucket::of_step(step),
             actual,
         }));
@@ -1157,7 +1157,7 @@ mod tests {
                         let step = 1 + (i * 7) % HORIZON_STEPS;
                         Step {
                             origin: i / 4,
-                            step,
+                            horizon: step,
                             bucket: Bucket::of_step(step),
                             actual,
                         }
@@ -1269,7 +1269,7 @@ mod tests {
         ]);
         for day in &mut days {
             for step in &mut day.steps {
-                step.step = 2;
+                step.horizon = 2;
                 step.bucket = Bucket::NextHour;
             }
         }
@@ -1316,7 +1316,7 @@ mod tests {
             },
             &Silent,
         );
-        assert!(!result.past.is_empty());
+        assert_ne!(result.past.len(), 0);
         let tz = GymSchedule::default().timezone();
         let day_of = |t: DateTime<Utc>| t.with_timezone(&tz).date_naive();
         let first_day = result.days.first().copied().context("no days")?;
