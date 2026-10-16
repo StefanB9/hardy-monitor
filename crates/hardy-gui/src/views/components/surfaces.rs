@@ -127,6 +127,13 @@ pub fn empty_state(message: &str) -> Element<'_, Message> {
 
 /// Vertical scroll area with a slim scrollbar beside the content.
 pub fn scroll<'a>(content: impl Into<Element<'a, Message>>) -> Element<'a, Message> {
+    scroll_area(content).into()
+}
+
+/// [`scroll`] as a widget, for callers that track or move its position.
+pub fn scroll_area<'a>(
+    content: impl Into<Element<'a, Message>>,
+) -> scrollable::Scrollable<'a, Message> {
     scrollable(content)
         .direction(scrollable::Direction::Vertical(
             scrollable::Scrollbar::new()
@@ -161,5 +168,4 @@ pub fn scroll<'a>(content: impl Into<Element<'a, Message>>) -> Element<'a, Messa
                 ..scrollable::default(theme, status)
             }
         })
-        .into()
 }

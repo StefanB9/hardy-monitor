@@ -14,7 +14,7 @@ use super::{ChartData, HardyMonitorApp, Message, loads::ErrorSource};
 use crate::{forecasting::SuiteStatus, time_range::AnalyticsRange};
 
 /// Wraps a database error with the failing operation.
-fn db_err(op: &'static str) -> impl Fn(anyhow::Error) -> AppError {
+pub(super) fn db_err(op: &'static str) -> impl Fn(anyhow::Error) -> AppError {
     move |e| AppError::from_anyhow_db(e, op)
 }
 

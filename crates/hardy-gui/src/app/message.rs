@@ -14,6 +14,7 @@ use hardy_ml::suite::Family;
 
 use super::loads::RequestId;
 use crate::{
+    data_table::DataPeriod,
     forecasting::{ForecastChoice, ModelOption, SuiteStatus},
     leaderboard::SortKey,
     time_range::{AnalyticsRange, ChartRange, Step},
@@ -33,15 +34,18 @@ pub enum ViewMode {
     #[default]
     Now,
     Week,
+    /// Every stored reading of a day or week, as a table.
+    Data,
     Insights,
     ModelData,
 }
 
 impl ViewMode {
     /// All views in sidebar order.
-    pub const ALL: [ViewMode; 4] = [
+    pub const ALL: [ViewMode; 5] = [
         ViewMode::Now,
         ViewMode::Week,
+        ViewMode::Data,
         ViewMode::Insights,
         ViewMode::ModelData,
     ];
@@ -51,6 +55,7 @@ impl ViewMode {
         match self {
             ViewMode::Now => "Now",
             ViewMode::Week => "Week",
+            ViewMode::Data => "Data",
             ViewMode::Insights => "Insights",
             ViewMode::ModelData => "Model & Data",
         }
@@ -61,6 +66,7 @@ impl ViewMode {
         match self {
             ViewMode::Now => "◉",
             ViewMode::Week => "▦",
+            ViewMode::Data => "≡",
             ViewMode::Insights => "✦",
             ViewMode::ModelData => "⚙",
         }
@@ -116,6 +122,18 @@ pub enum Message {
     /// Oldest reading, the limit for stepping back.
     FirstReadingLoaded(Result<Option<DateTime<Utc>>, AppError>),
 
+    /// The Data tab shows a day or a week.
+    DataPeriodSelected(DataPeriod),
+    /// The Data tab's table scrolled: offset from the top and visible
+    /// height, in logical pixels.
+    DataScrolled {
+        offset: f32,
+        height: f32,
+    },
+    /// Readings of the Data tab's period; applied only if `RequestId` is the
+    /// newest load.
+    DataLoaded(RequestId, Result<Vec<OccupancyLog>, AppError>),
+
     ExportCsv,
     ExportCompleted(Result<String, AppError>),
     ClearExportStatus,
@@ -163,7 +181,8 @@ impl Message {
             | Message::SuiteStatusLoaded(_)
             | Message::PublishedForecastLoaded(_)
             | Message::AccuracyLoaded(_)
-            | Message::FirstReadingLoaded(_) => true,
+            | Message::FirstReadingLoaded(_)
+            | Message::DataLoaded(..) => true,
             Message::Tick
             | Message::FetchTick
             | Message::FetchAlignmentComplete
@@ -182,6 +201,8 @@ impl Message {
             | Message::CustomEndChanged(_)
             | Message::ApplyCustomRange
             | Message::ChartStep(_)
+            | Message::DataPeriodSelected(_)
+            | Message::DataScrolled { .. }
             | Message::ExportCsv
             | Message::ClearExportStatus
             | Message::TrayCheck
@@ -228,6 +249,7 @@ mod tests {
             Message::PublishedForecastLoaded(failed()),
             Message::AccuracyLoaded(failed()),
             Message::FirstReadingLoaded(failed()),
+            Message::DataLoaded(RequestId::default(), failed()),
         ];
         assert!(results.iter().all(Message::finishes_load));
 
@@ -240,6 +262,11 @@ mod tests {
             Message::NotificationSent,
             Message::LeaderboardSorted(SortKey::Name),
             Message::LeaderboardFiltered(None),
+            Message::DataPeriodSelected(DataPeriod::Week),
+            Message::DataScrolled {
+                offset: 0.0,
+                height: 0.0,
+            },
         ];
         assert!(!others.iter().any(Message::finishes_load));
     }

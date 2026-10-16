@@ -8,9 +8,10 @@ use iced::{
 use super::{HardyMonitorApp, Message, ViewMode};
 use crate::{
     style::{self},
+    time_range::can_step_back,
     views::{
-        self, InsightsProps, ModelDataProps, NowProps, WeekProps, components::secondary_button,
-        schema_notice::SchemaGate,
+        self, DataProps, InsightsProps, ModelDataProps, NowProps, WeekProps,
+        components::secondary_button, schema_notice::SchemaGate,
     },
 };
 
@@ -31,6 +32,20 @@ impl HardyMonitorApp {
                 heatmap_cache: &self.ui.heatmap_cache,
                 heatmap_tooltip_cache: &self.ui.heatmap_tooltip_cache,
             }),
+            ViewMode::Data => {
+                let window = self.data_window();
+                views::data::view(DataProps {
+                    rows: &self.data.data_rows,
+                    period: self.ui.data_period,
+                    window,
+                    can_step_back: can_step_back(window.0, self.data.first_reading),
+                    can_step_forward: self.ui.data_offset > 0,
+                    scroll: self.ui.data_scroll,
+                    timezone: self.schedule.timezone(),
+                    low_threshold: self.config.thresholds.low_occupancy_percent,
+                    high_threshold: self.config.thresholds.high_occupancy_percent,
+                })
+            }
             ViewMode::Insights => views::insights::view(InsightsProps {
                 trend: self.data.trend,
                 stats: self.data.stats.as_ref(),
