@@ -13,7 +13,7 @@ hardy-monitor/                         (workspace root)
 ├── migrations/                        sqlx migrations: occupancy_logs (+ quarantine), alert_settings,
 │                                      ml_state, repair_state, forecast_log, forecast suite (forecast_models,
 │                                      benchmark_runs / _models / _scores, forecast_selection, live_forecasts),
-│                                      forecast_history
+│                                      forecast_history, forecaster_lease
 ├── .sqlx/                             sqlx offline query cache
 ├── docs/plan/                         Approved plans
 │
@@ -44,7 +44,7 @@ hardy-monitor/                         (workspace root)
 │   │   └── tests/                     Integration tests (TestDatabase / wiremock): api, api_errors,
 │   │                                  db_connect, db_readings, db_averages, db_alert_settings, db_models,
 │   │                                  schema, migrations, repair, forecast_log, forecast_history,
-│   │                                  forecaster_lock, alert_service, ntfy,
+│   │                                  forecaster_lease, alert_service, ntfy,
 │   │                                  notifier, schedule_clock; common/mod.rs: TestDatabase and
 │   │                                  RawTestDatabase
 │   │
@@ -75,11 +75,13 @@ hardy-monitor/                         (workspace root)
 │   │       └── logging.rs             tracing setup (console / rotated file)
 │   │
 │   ├── hardy-forecaster/              (binary — long-running forecasting on a stronger machine; one at a
-│   │   │                              time via an advisory lock; waits for the daemon's migrations)
+│   │   │                              time via a lease row (works through poolers); waits for the
+│   │   │                              daemon's migrations)
 │   │   └── src/
 │   │       ├── main.rs                Startup (schema wait, lock, history backfill) and the minute loop:
 │   │       │                          nightly run, quarter-hour publishing
 │   │       ├── args.rs                Command line: shared options plus --backfill
+│   │       ├── lease.rs               Lease holder id, renewal tracking (stop when lost)
 │   │       ├── forecasts.rs           Live forecasts every quarter hour while open, hourly accuracy log
 │   │       ├── status.rs              Status line between runs
 │   │       ├── progress.rs            Terminal progress bars (indicatif); log lines above the bars
@@ -298,6 +300,8 @@ The forecasting crates change forecasts silently, even in patch releases (anofox
 - **Compile-time checked queries:** Use `sqlx::query!` and `sqlx::query_as!` — never raw string queries without compile-time verification.
 - **Never hand-create migration files.** Always use the `cargo sqlx migrate add` command so timestamps are generated correctly.
 - **Test isolation:** Integration tests use `TestDatabase` (creates a unique `hardy_test_*` database per test, dropped on cleanup).
+- **Test database:** the tests create and drop databases on the server `DATABASE_URL` points at. Run them against the local Postgres from `docker-compose.dev.yaml`, never the production (Neon) database.
+- **Poolers:** production goes through Neon's `-pooler` endpoint (transaction pooling), which shares server sessions between clients: no session state may be relied on (advisory locks, `SET`, temporary tables). Use rows in tables instead, as the forecaster lease does.
 
 ## Tracing & Observability
 

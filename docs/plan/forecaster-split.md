@@ -11,7 +11,7 @@ both share the database.
 |---|---|
 | Cloud daemon | Fetches readings and runs the nightly data repair only (still the only process that migrates). All forecasting leaves it, including the hardy-ml dependency; no fallback switch |
 | Local program | New long-running binary `hardy-forecaster`: one-time history backfill at start-up (or with `--backfill`), live forecasts of all models every 15 minutes from the current fits, accuracy log every full hour, full refit + benchmark nightly; catches up at start-up when the last run is over a day old |
-| One at a time | A Postgres advisory lock: a second forecaster refuses to start |
+| One at a time | A lease row (`forecaster_lease`): the forecaster claims it and renews it every minute; a lease not renewed for 5 minutes is abandoned and may be taken over; a forecaster that loses its lease, or cannot renew it for 5 minutes, stops. Database time only. (Was a Postgres advisory lock, which a transaction pooler such as Neon's `-pooler` endpoint breaks: the lock is re-entrant per server session and the pooler shares sessions.) |
 | Schema | The forecaster verifies the schema like the GUI and waits while it is behind |
 | History ("as it would have been") | Backtest over all days with data; each day uses fits, ensemble weights, intervals and per-horizon winners from earlier days only |
 | History outputs | Accuracy log (default forecast 1–6 h ahead per hourly origin, band, slot-average baseline) and a new `forecast_history` table with the hour-ahead default forecast for every past slot (made at the last full hour at least an hour before) |
@@ -22,7 +22,7 @@ both share the database.
 
 ## Delivery
 
-1. Split: `hardy-forecaster`, daemon without forecasting, advisory lock,
+1. Split: `hardy-forecaster`, daemon without forecasting, one-forecaster lease,
    progress, retention removed, GUI stale handling.
 2. History: backfill, `forecast_history` (migration + queries), nightly
    append, chart line.

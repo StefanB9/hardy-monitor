@@ -2,7 +2,7 @@
 //! the outcome of the last attempt.
 
 use anyhow::{Context, Result};
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, TimeDelta, Utc};
 
 use super::Database;
 
@@ -16,42 +16,84 @@ pub struct MlState {
     pub last_error: Option<String>,
 }
 
-/// Advisory lock key held by the running forecaster ("HMFC").
-const FORECASTER_LOCK: i64 = 0x484D_4643;
-
-/// Held while a forecaster runs. The lock belongs to its own connection,
-/// so it is released when this is dropped (or the process dies).
-pub struct ForecasterLock {
-    _connection: sqlx::PgConnection,
+/// The running forecaster's claim on the database: only one forecaster may
+/// run at a time. It is a row, not an advisory lock, so it works through
+/// connection poolers (which share server sessions between clients).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ForecasterLease {
+    holder: String,
 }
 
-impl std::fmt::Debug for ForecasterLock {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ForecasterLock").finish_non_exhaustive()
+impl ForecasterLease {
+    /// Who holds it.
+    pub fn holder(&self) -> &str {
+        &self.holder
     }
 }
 
+/// `delta` as fractional seconds for an SQL interval.
+fn interval_secs(delta: TimeDelta) -> f64 {
+    #[allow(clippy::cast_precision_loss)] // milliseconds of a lease timeout
+    let secs = delta.num_milliseconds() as f64 / 1000.0;
+    secs
+}
+
 impl Database {
-    /// Takes the forecaster lock; `None` while another forecaster holds it.
-    #[tracing::instrument(skip_all, fields(db.operation = "lock_forecaster"))]
-    pub async fn lock_forecaster(&self) -> Result<Option<ForecasterLock>> {
-        // Detached: a pooled connection would keep the lock after release.
-        let mut connection = self
-            .pool
-            .acquire()
-            .await
-            .context("Failed to open a connection for the forecaster lock")?
-            .detach();
-        let locked = sqlx::query_scalar!(
-            r#"SELECT pg_try_advisory_lock($1) AS "locked!""#,
-            FORECASTER_LOCK
+    /// Claims the forecaster lease for `holder`: free, already `holder`'s,
+    /// or not renewed for longer than `stale_after` (its holder crashed).
+    /// `None` while another forecaster holds it. Database time only, so the
+    /// machines' clocks do not matter.
+    #[tracing::instrument(skip(self), fields(db.operation = "claim_forecaster_lease"))]
+    pub async fn claim_forecaster_lease(
+        &self,
+        holder: &str,
+        stale_after: TimeDelta,
+    ) -> Result<Option<ForecasterLease>> {
+        let claimed = sqlx::query_scalar!(
+            r#"
+            INSERT INTO forecaster_lease (id, holder, renewed_at)
+            VALUES (1, $1, clock_timestamp())
+            ON CONFLICT (id) DO UPDATE
+                SET holder = EXCLUDED.holder, renewed_at = EXCLUDED.renewed_at
+                WHERE forecaster_lease.holder = EXCLUDED.holder
+                   OR forecaster_lease.renewed_at
+                      < clock_timestamp() - make_interval(secs => $2)
+            RETURNING holder
+            "#,
+            holder,
+            interval_secs(stale_after)
         )
-        .fetch_one(&mut connection)
+        .fetch_optional(&self.pool)
         .await
-        .context("Failed to take the forecaster lock")?;
-        Ok(locked.then_some(ForecasterLock {
-            _connection: connection,
-        }))
+        .context("Failed to claim the forecaster lease")?;
+        Ok(claimed.map(|holder| ForecasterLease { holder }))
+    }
+
+    /// Renews `lease`; `false` if another forecaster has taken it over.
+    #[tracing::instrument(skip_all, fields(db.operation = "renew_forecaster_lease"))]
+    pub async fn renew_forecaster_lease(&self, lease: &ForecasterLease) -> Result<bool> {
+        let result = sqlx::query!(
+            "UPDATE forecaster_lease SET renewed_at = clock_timestamp() WHERE id = 1 AND holder = \
+             $1",
+            lease.holder
+        )
+        .execute(&self.pool)
+        .await
+        .context("Failed to renew the forecaster lease")?;
+        Ok(result.rows_affected() == 1)
+    }
+
+    /// Gives `lease` up, unless another forecaster has taken it over.
+    #[tracing::instrument(skip_all, fields(db.operation = "release_forecaster_lease"))]
+    pub async fn release_forecaster_lease(&self, lease: ForecasterLease) -> Result<()> {
+        sqlx::query!(
+            "DELETE FROM forecaster_lease WHERE id = 1 AND holder = $1",
+            lease.holder
+        )
+        .execute(&self.pool)
+        .await
+        .context("Failed to release the forecaster lease")?;
+        Ok(())
     }
 
     /// Training coordination state (retrain requests, last attempt).

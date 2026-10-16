@@ -11,6 +11,7 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 mod args;
 mod forecasts;
+mod lease;
 mod logging;
 mod progress;
 mod status;
@@ -61,9 +62,18 @@ async fn run(config: &AppConfig, terminal: &Arc<Terminal>, backfill: bool) -> Re
     if !wait_for_schema(&database, terminal, shutdown.as_mut()).await? {
         return Ok(());
     }
-    let Some(_lock) = database.lock_forecaster().await? else {
-        bail!("another hardy-forecaster is already running against this database");
+    let holder = lease::holder_id(Utc::now());
+    let Some(lease) = database
+        .claim_forecaster_lease(&holder, lease::STALE_AFTER)
+        .await?
+    else {
+        bail!(
+            "another hardy-forecaster is already running against this database (one that crashed \
+             frees it within 5 minutes)"
+        );
     };
+    let mut keeper = lease::Keeper::new(Utc::now());
+    tracing::info!(holder = lease.holder(), "forecaster lease claimed");
 
     let schedule = GymSchedule::new(&config.schedule);
     let log_hours = u32::try_from(config.ml.prediction_horizon_hours)
@@ -100,6 +110,14 @@ async fn run(config: &AppConfig, terminal: &Arc<Terminal>, backfill: bool) -> Re
             () = &mut shutdown => break,
         }
         let now = Utc::now();
+        let renewal = database.renew_forecaster_lease(&lease).await.map_err(|e| {
+            tracing::warn!(error = %format!("{e:#}"), "could not renew the forecaster lease");
+        });
+        if let Err(lost) = keeper.renewed(now, renewal) {
+            // SAFETY: the lease is gone or may be, so another forecaster can
+            // be running; stopping keeps them from both publishing.
+            bail!("stopping: {}", lost.reason());
+        }
         let busy = |s: &ForecastService| s.is_running() || s.is_backfilling();
         let was_busy = busy(&service);
         if let Err(e) = service.tick(&database, now).await {
@@ -119,6 +137,9 @@ async fn run(config: &AppConfig, terminal: &Arc<Terminal>, backfill: bool) -> Re
         .await;
     }
     tracing::info!("forecaster stopped");
+    if let Err(e) = database.release_forecaster_lease(lease).await {
+        tracing::warn!(error = %format!("{e:#}"), "could not release the forecaster lease");
+    }
     database.close().await;
     Ok(())
 }
