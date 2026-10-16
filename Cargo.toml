@@ -28,11 +28,11 @@ missing_panics_doc = "allow"
 
 [workspace.dependencies]
 # --- Shared across multiple crates ---
-anofox-forecast = { version = "=0.16.0", default-features = false }
+anofox-forecast = { version = "0.16.2", default-features = false }
 anyhow = { version = "1.0.104", default-features = false, features = ["std"] }
 argmin = { version = "0.11.0", default-features = false }
 argmin-math = { version = "0.5.1", default-features = false, features = ["vec"] }
-burn = { version = "=0.22.0", default-features = false, features = ["std", "autodiff", "optim", "flex", "store"] }
+burn = { version = "0.22.0", default-features = false, features = ["std", "autodiff", "optim", "flex", "store"] }
 chrono-tz = { version = "0.10.4", default-features = false, features = ["serde"] }
 
 # --- GUI-only ---
@@ -45,7 +45,7 @@ csv = { version = "1.4.0", default-features = false }
 dirs = { version = "7.0.0", default-features = false }
 dotenvy = { version = "0.15.7", default-features = false }
 faer = { version = "0.24.4", default-features = false, features = ["linalg", "std"] }
-forust-ml = { version = "=0.7.0", default-features = false }
+forust-ml = { version = "0.8.0", default-features = false }
 futures = { version = "0.3.34", default-features = false }
 iced = { version = "0.14.0", default-features = false, features = ["advanced", "canvas", "crisp", "tokio", "wgpu"] }
 indicatif = { version = "0.18.6", default-features = false }
@@ -61,13 +61,13 @@ rayon = { version = "1.12.0", default-features = false }
 reqwest = { version = "0.13.5", default-features = false, features = ["json", "native-tls"] }
 serde = { version = "1.0.229", default-features = false, features = ["derive", "rc"] }
 serde_json = { version = "1.0.154", default-features = false, features = ["std"] }
-smartcore = { version = "0.6.15", default-features = false, features = ["serde"] }
+smartcore = { version = "0.6.16", default-features = false, features = ["serde"] }
 sqlx = { version = "0.9.0", default-features = false, features = ["chrono", "macros", "migrate", "postgres", "runtime-tokio", "tls-rustls"] }
 stlrs = { version = "0.4.0", default-features = false, features = ["alloc"] }
 temp-env = { version = "0.3.6" }
 tempfile = { version = "3.27.0" }
 thiserror = { version = "2.0.21", default-features = false }
-tokio = { version = "1.53.2", default-features = false, features = ["macros", "rt-multi-thread"] }
+tokio = { version = "1.53.3", default-features = false, features = ["macros", "rt-multi-thread"] }
 toml = { version = "1.1.8", default-features = false, features = ["parse", "serde"] }
 tracing = { version = "0.1.44", default-features = false, features = ["attributes", "std"] }
 tracing-appender = { version = "0.2.5", default-features = false }
