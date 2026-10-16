@@ -28,11 +28,11 @@ missing_panics_doc = "allow"
 
 [workspace.dependencies]
 # --- Shared across multiple crates ---
-anofox-forecast = { version = "0.16.2", default-features = false }
+anofox-forecast = { version = "=0.16.2", default-features = false }
 anyhow = { version = "1.0.104", default-features = false, features = ["std"] }
 argmin = { version = "0.11.0", default-features = false }
 argmin-math = { version = "0.5.1", default-features = false, features = ["vec"] }
-burn = { version = "0.22.0", default-features = false, features = ["std", "autodiff", "optim", "flex", "store"] }
+burn = { version = "=0.22.0", default-features = false, features = ["std", "autodiff", "optim", "flex", "store"] }
 chrono-tz = { version = "0.10.4", default-features = false, features = ["serde"] }
 
 # --- GUI-only ---
@@ -45,7 +45,7 @@ csv = { version = "1.4.0", default-features = false }
 dirs = { version = "7.0.0", default-features = false }
 dotenvy = { version = "0.15.7", default-features = false }
 faer = { version = "0.24.4", default-features = false, features = ["linalg", "std"] }
-forust-ml = { version = "0.8.0", default-features = false }
+forust-ml = { version = "=0.8.0", default-features = false }
 futures = { version = "0.3.34", default-features = false }
 iced = { version = "0.14.0", default-features = false, features = ["advanced", "canvas", "crisp", "tokio", "wgpu"] }
 indicatif = { version = "0.18.6", default-features = false }

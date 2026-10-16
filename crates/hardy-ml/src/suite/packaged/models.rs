@@ -401,9 +401,10 @@ mod tests {
     }
 
     /// Forecasts at steps 1, 8 and 40 from Tuesday noon after 15 days of
-    /// the weekly curve, as anofox-forecast 0.16.0 and stlrs 0.4.0 produce
+    /// the weekly curve, as anofox-forecast 0.16.2 and stlrs 0.4.0 produce
     /// them. A dependency update that changes any of them must be checked
-    /// against the benchmark before the values here are updated.
+    /// against the benchmark before the values here are updated (0.16.0 to
+    /// 0.16.2: the ARIMA models' 28-day error fell 6–24%).
     #[allow(clippy::unreadable_literal)]
     const GOLDEN: [(Kind, [f64; 3]); 11] = [
         (
@@ -424,7 +425,7 @@ mod tests {
         ),
         (
             Kind::StlArima,
-            [19.994644493129464, 20.193381164859968, 17.315906965835076],
+            [20.02719885528378, 20.160109495409504, 17.114829011194594],
         ),
         (
             Kind::MstlEts,
@@ -432,7 +433,7 @@ mod tests {
         ),
         (
             Kind::MstlArima,
-            [20.023188330619366, 20.172876665956043, 21.012270951037692],
+            [20.025108452706924, 20.184913480970927, 21.025202666958354],
         ),
         (
             Kind::AutoTbats,
@@ -448,7 +449,7 @@ mod tests {
         ),
         (
             Kind::FourierArima,
-            [19.992123533899118, 20.040798163899392, 20.46852271649901],
+            [20.028599207146442, 20.426040363503642, 20.87517985499386],
         ),
     ];
 

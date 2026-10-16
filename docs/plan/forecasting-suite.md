@@ -247,9 +247,9 @@ the baseline and its replacements.
 |---|---|---|---|
 | argmin, argmin-math (`vec`) | 0.11, 0.5 | 4 | Nelder–Mead / L-BFGS fits (already in the lock file via linfa) |
 | faer | 0.24 | 4/6 | Pure-Rust linear algebra (ndarray-linalg needs LAPACK) |
-| anofox-forecast (`serde`) | =0.16.0 | 5 | AutoETS, ARIMA, SARIMA, TBATS, MFLES, AutoTheta — no other Rust crate has them |
+| anofox-forecast (`serde`) | =0.16.2 (was =0.16.0; 0.16.1 fits AutoARIMA the way R does, benchmark-checked) | 5 | AutoETS, ARIMA, SARIMA, TBATS, MFLES, AutoTheta — no other Rust crate has them |
 | stlrs | 0.4 | 5 | f64 STL / MSTL |
-| forust-ml | 0.7 | 6 | Fastest, most accurate pure-Rust boosted trees measured |
+| forust-ml | =0.8.0 (was 0.7) | 6 | Fastest, most accurate pure-Rust boosted trees measured |
 | burn (`std`, `autodiff`, `optim`, `flex`, `store`) | =0.22.0 | 7 | Every layer built in, pure-Rust CPU backend, weights to bytes |
 
 serde_json moves into hardy-ml for forust-ml's artifacts. linfa / linfa-linear
