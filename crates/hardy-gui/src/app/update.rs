@@ -22,9 +22,9 @@ impl HardyMonitorApp {
         }
         match message {
             Message::Tick => {
+                // The chart's "now" marker is drawn per frame, so the cached
+                // chart is only redrawn if its lines changed.
                 self.refresh_forecasts();
-                // The "now" marker moves.
-                self.ui.chart_cache.clear();
                 self.update_tray();
                 Task::none()
             }

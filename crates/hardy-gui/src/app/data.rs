@@ -133,8 +133,9 @@ impl HardyMonitorApp {
 
     pub(super) fn refresh_forecasts(&mut self) {
         let now = self.clock.now_utc();
-        self.data.forecasting.refresh(&self.schedule, now);
-        self.ui.chart_cache.clear();
+        if self.data.forecasting.refresh(&self.schedule, now) {
+            self.ui.chart_cache.clear();
+        }
         self.refresh_plan();
     }
 

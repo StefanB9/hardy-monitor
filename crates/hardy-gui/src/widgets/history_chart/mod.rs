@@ -132,11 +132,11 @@ impl<Message> canvas::Program<Message> for HistoryChart<'_> {
             self.draw_markers(frame, &plot);
         });
 
-        let mut layers = vec![base];
+        let mut frame = Frame::new(renderer, bounds.size());
+        self.draw_now(&mut frame, &plot);
         if let Some(pos) = cursor.position_in(bounds)
             && let Some((point, label, color)) = self.hovered(&plot, pos.x)
         {
-            let mut frame = Frame::new(renderer, bounds.size());
             frame.stroke(
                 &Path::line(
                     Point::new(point.x, plot.top),
@@ -173,8 +173,7 @@ impl<Message> canvas::Program<Message> for HistoryChart<'_> {
                 align_y: Vertical::Center,
                 ..Default::default()
             });
-            layers.push(frame.into_geometry());
         }
-        layers
+        vec![base, frame.into_geometry()]
     }
 }

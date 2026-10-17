@@ -85,6 +85,8 @@ impl std::fmt::Display for ModelOption {
 #[derive(Debug)]
 pub(crate) struct Forecasting {
     history: History,
+    /// Typical occupancy from `history`; rebuilt only when it grows.
+    profile: Option<SlotProfile>,
     status: SuiteStatus,
     leaderboard: Leaderboard,
     /// Every published forecast (all models and the default).
@@ -114,6 +116,7 @@ impl Forecasting {
     pub(crate) fn new(max_hours_ahead: u32, opening_grace: TimeDelta) -> Self {
         Self {
             history: History::default(),
+            profile: None,
             leaderboard: leaderboard::build(&SuiteStatus::default()),
             status: SuiteStatus::default(),
             published: Vec::new(),
@@ -143,6 +146,10 @@ impl Forecasting {
 
     /// Adds newly fetched rows (only observed, only newer ones).
     pub(crate) fn add_history(&mut self, logs: &[OccupancyLog]) {
+        if logs.is_empty() {
+            return;
+        }
+        self.profile = None;
         if self.history.is_empty() {
             self.history = History::from_logs(logs);
         } else {
@@ -236,8 +243,11 @@ impl Forecasting {
     }
 
     /// Recomputes the upcoming forecast, the overlays and the next quiet
-    /// window.
-    pub(crate) fn refresh(&mut self, schedule: &GymSchedule, now: DateTime<Utc>) {
+    /// window. Returns whether the charted lines (forecast within the
+    /// horizon, overlays) changed, i.e. the chart must be redrawn.
+    pub(crate) fn refresh(&mut self, schedule: &GymSchedule, now: DateTime<Utc>) -> bool {
+        let charted_before = self.forecasts().to_vec();
+        let overlays_before = std::mem::take(&mut self.overlay_lines);
         let key = self.choice.key();
         let horizon = now + TimeDelta::hours(i64::from(self.max_hours_ahead));
         self.overlay_lines = self
@@ -277,17 +287,18 @@ impl Forecasting {
             })
             .collect();
         self.charted = self.upcoming.partition_point(|p| p.timestamp <= horizon);
-        let profile = SlotProfile::from_history(self.history.view(), schedule.timezone());
         self.usable = self
             .made_at()
             .is_some_and(|made| now - made <= IGNORED_AFTER);
-        self.quiet_window = next_quiet_window(
-            now,
-            schedule,
-            self.plan_forecast(),
-            &profile,
-            self.opening_grace,
-        );
+        let tz = schedule.timezone();
+        let history = &self.history;
+        let profile = self
+            .profile
+            .get_or_insert_with(|| SlotProfile::from_history(history.view(), tz));
+        let forecasts: &[PredictionWithConfidence] = if self.usable { &self.upcoming } else { &[] };
+        self.quiet_window =
+            next_quiet_window(now, schedule, forecasts, profile, self.opening_grace);
+        self.forecasts() != charted_before.as_slice() || self.overlay_lines != overlays_before
     }
 
     /// When the default forecast was made.
@@ -491,6 +502,25 @@ mod tests {
         assert_eq!(f.forecasts()[0].confidence_high, 20.0, "no upper bound");
         assert_eq!(f.forecast_source(), Some("Persistence"));
         assert!(f.quiet_window().is_some());
+    }
+
+    #[test]
+    fn test_refresh_says_when_the_charted_lines_change() {
+        let schedule = GymSchedule::default();
+        let mut f = Forecasting::new(1, TimeDelta::hours(1));
+        let rows = vec![
+            published(30, 20.0),
+            published(60, 30.0),
+            published(90, 40.0),
+        ];
+        f.set_published(rows.clone());
+        assert!(f.refresh(&schedule, at(15)), "first forecast");
+        assert!(!f.refresh(&schedule, at(16)), "same points");
+        f.set_published(rows);
+        assert!(!f.refresh(&schedule, at(17)), "same forecast again");
+        assert!(f.refresh(&schedule, at(31)), "a point passed");
+        f.set_published(vec![published(60, 35.0), published(90, 40.0)]);
+        assert!(f.refresh(&schedule, at(32)), "new values");
     }
 
     fn row(model: &str, minute: i64, value: f64) -> LiveForecast {
