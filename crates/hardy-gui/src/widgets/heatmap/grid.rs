@@ -5,20 +5,29 @@ use std::ops::Range;
 use chrono::NaiveDate;
 use hardy_core::{db::HourlyAverage, schedule::GymSchedule};
 
+/// An hour's average and how far to trust it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CellValue {
+    pub value: f64,
+    /// Days the hour was seen on.
+    pub days: i64,
+    /// How much those days differ, in points.
+    pub spread: f64,
+}
+
 /// One grid cell.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Cell {
     Closed,
     NoData,
-    /// Average occupancy and the number of readings behind it.
-    Value(f64, i64),
+    Value(CellValue),
 }
 
 /// Averages per gym-local weekday (0 = Monday) and hour, with the regular
 /// opening hours of each weekday.
 #[derive(Debug, Clone, PartialEq)]
 pub struct WeekGrid {
-    values: [[Option<(f64, i64)>; 24]; 7],
+    values: [[Option<CellValue>; 24]; 7],
     open: [Range<u32>; 7],
 }
 
@@ -39,7 +48,11 @@ impl WeekGrid {
                 && hour < 24
                 && avg.sample_count > 0
             {
-                values[day][hour] = Some((avg.avg_percentage, avg.sample_count));
+                values[day][hour] = Some(CellValue {
+                    value: avg.avg_percentage,
+                    days: avg.days,
+                    spread: avg.std_dev,
+                });
             }
         }
         // SAFETY: 2024-07-01 is a Monday and that week has no Bavarian
@@ -67,7 +80,7 @@ impl WeekGrid {
         let open = self.open.get(day)?;
         let hours = (open.start + skip_hours)..open.end;
         let values = hours.filter_map(|h| match self.cell(day, h) {
-            Cell::Value(v, _) => Some((h, v)),
+            Cell::Value(cell) => Some((h, cell.value)),
             Cell::Closed | Cell::NoData => None,
         });
         let mut extremes: Option<((u32, f64), (u32, f64))> = None;
@@ -92,7 +105,7 @@ impl WeekGrid {
             return Cell::Closed;
         }
         match self.values[day].get(hour as usize).copied().flatten() {
-            Some((value, samples)) => Cell::Value(value, samples),
+            Some(cell) => Cell::Value(cell),
             None => Cell::NoData,
         }
     }
@@ -109,6 +122,7 @@ mod tests {
             avg_percentage: value,
             sample_count: 60,
             days: 1,
+            std_dev: 0.0,
         }
     }
 
@@ -117,7 +131,14 @@ mod tests {
         // Default schedule: weekdays 06–23, weekends 09–21.
         let schedule = GymSchedule::default();
         let grid = WeekGrid::new(&[avg(0, 10, 25.0), avg(5, 7, 40.0)], &schedule);
-        assert_eq!(grid.cell(0, 10), Cell::Value(25.0, 60));
+        assert_eq!(
+            grid.cell(0, 10),
+            Cell::Value(CellValue {
+                value: 25.0,
+                days: 1,
+                spread: 0.0
+            })
+        );
         assert_eq!(grid.cell(0, 11), Cell::NoData);
         // Saturday 07:00 is before weekend opening: closed despite a value.
         assert_eq!(grid.cell(5, 7), Cell::Closed);

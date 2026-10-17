@@ -131,6 +131,11 @@ fn range_badge(range: &SlotRange) -> String {
     }
 }
 
+/// "varies" after a range whose hours differ a lot between days.
+fn varies_label(range: &SlotRange) -> Option<&'static str> {
+    range.varies().then_some("varies")
+}
+
 fn range_list<'a>(
     title: &'a str,
     ranges: &[SlotRange],
@@ -150,11 +155,15 @@ fn range_list<'a>(
                     .size(style::TEXT_BODY)
                     .color(style::TEXT_PRIMARY)
                     .width(Length::Fill),
+                text(varies_label(range).unwrap_or_default())
+                    .size(style::TEXT_CAPTION)
+                    .color(style::WARNING),
                 badge(
                     range_badge(range),
                     OccupancyLevel::from_percentage(range.average, low, high).color()
                 ),
             ]
+            .spacing(style::SPACE_S)
             .align_y(Alignment::Center),
         );
     }
@@ -244,15 +253,36 @@ mod tests {
             average: 6.2,
             min: 5.4,
             max: 7.3,
+            max_spread: 0.0,
         };
         assert_eq!(range_badge(&range), "~6% (5–7%)");
         let single = SlotRange {
             end_hour: 17,
             min: 6.2,
             max: 6.2,
+            max_spread: 0.0,
             ..range
         };
         assert_eq!(range_badge(&single), "6%");
+    }
+
+    #[test]
+    fn test_varies_label_only_on_unpredictable_ranges() {
+        let range = SlotRange {
+            weekday: 6,
+            start_hour: 17,
+            end_hour: 20,
+            average: 17.0,
+            min: 15.0,
+            max: 19.0,
+            max_spread: 25.8,
+        };
+        assert_eq!(varies_label(&range), Some("varies"));
+        let calm = SlotRange {
+            max_spread: 4.0,
+            ..range
+        };
+        assert_eq!(varies_label(&calm), None);
     }
 
     #[test]

@@ -3,7 +3,10 @@
 use chrono::{DateTime, NaiveDate, Utc};
 use hardy_core::{
     Tz,
-    analytics::visit::{DayPart, EstimateSource, Expected, QUARTER, VisitWindow},
+    analytics::{
+        is_unpredictable,
+        visit::{DayPart, EstimateSource, Expected, QUARTER, VisitWindow},
+    },
 };
 
 use crate::{plan_settings::VisitLength, planner::DayPlan};
@@ -33,12 +36,18 @@ pub(super) fn window_text(window: &VisitWindow, tz: Tz) -> String {
     )
 }
 
-/// "~8% expected (5–11%)".
+/// "~8% expected (5–11%)", plus "· unpredictable" when the range is wider
+/// than ±[`hardy_core::analytics::UNPREDICTABLE_SPREAD`] points.
 pub(super) fn expected_text(expected: Expected) -> String {
-    format!(
+    let text = format!(
         "~{:.0}% expected ({:.0}–{:.0}%)",
         expected.mean, expected.low, expected.high
-    )
+    );
+    if is_unpredictable((expected.high - expected.low) / 2.0) {
+        format!("{text} · unpredictable")
+    } else {
+        text
+    }
 }
 
 /// Where the day's estimate comes from, e.g. "Typical Monday, last 4 weeks".
@@ -158,6 +167,12 @@ mod tests {
         };
         assert_eq!(window_text(&window, BERLIN), "18:00 – 19:30");
         assert_eq!(expected_text(window.expected), "~8% expected (5–11%)");
+        let wide = Expected {
+            mean: 19.0,
+            low: 0.0,
+            high: 45.0,
+        };
+        assert_eq!(expected_text(wide), "~19% expected (0–45%) · unpredictable");
         Ok(())
     }
 

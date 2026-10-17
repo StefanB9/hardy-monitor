@@ -255,6 +255,7 @@ mod tests {
             avg_percentage: pct,
             sample_count: samples,
             days: samples,
+            std_dev: 0.0,
         }
     }
 
@@ -266,6 +267,7 @@ mod tests {
             avg_percentage: pct,
             sample_count: 60 * days,
             days,
+            std_dev: 0.0,
         }
     }
 

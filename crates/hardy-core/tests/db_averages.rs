@@ -225,3 +225,36 @@ async fn test_get_averages_range_counts_distinct_local_days() -> Result<()> {
     assert_eq!(averages[0].days, 2, "distinct gym-local days");
     Ok(())
 }
+
+#[tokio::test]
+async fn test_get_averages_range_spread_is_between_days() -> Result<()> {
+    let tdb = common::TestDatabase::new().await?;
+    // Monday 10:xx Berlin: 20 and 30 on the first day (day average 25), 35
+    // on the second.
+    for (day, minute, pct) in [(17, 0, 20.0), (17, 10, 30.0), (24, 0, 35.0)] {
+        tdb.db
+            .insert_record(utc(2024, 6, day, 8, minute)?, pct)
+            .await?;
+    }
+    // Tuesday 10:xx, seen once.
+    tdb.db.insert_record(utc(2024, 6, 18, 8, 0)?, 12.0).await?;
+    let averages = tdb
+        .db
+        .get_averages_range(utc(2024, 6, 16, 0, 0)?, utc(2024, 6, 30, 0, 0)?, Berlin)
+        .await?;
+    tdb.cleanup().await;
+
+    assert_eq!(averages.len(), 2);
+    let monday = &averages[0];
+    // The average stays over readings; the spread is between the days.
+    assert!(
+        (monday.avg_percentage - 85.0 / 3.0).abs() < 1e-9,
+        "{monday:?}"
+    );
+    assert!(
+        (monday.std_dev - 50.0_f64.sqrt()).abs() < 1e-9,
+        "{monday:?}"
+    );
+    assert!(averages[1].std_dev.abs() < 1e-12, "one day: no spread");
+    Ok(())
+}

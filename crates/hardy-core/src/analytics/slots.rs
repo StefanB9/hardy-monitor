@@ -14,6 +14,16 @@ pub struct TimePeriod {
 /// Days an hour must have been seen on before its average counts.
 pub const MIN_DAYS: i64 = 2;
 
+/// Spread between days, in points, above which an hour's average is a poor
+/// guide.
+pub const UNPREDICTABLE_SPREAD: f64 = 10.0;
+
+/// Whether days differing by `spread` points (standard deviation) make an
+/// average unpredictable.
+pub fn is_unpredictable(spread: f64) -> bool {
+    spread > UNPREDICTABLE_SPREAD
+}
+
 /// Whether `slot` was seen on enough days for its average to count.
 pub(super) fn is_reliable(slot: &HourlyAverage) -> bool {
     slot.days >= MIN_DAYS
@@ -101,6 +111,7 @@ mod tests {
             avg_percentage: pct,
             sample_count: samples,
             days: samples,
+            std_dev: 0.0,
         }
     }
 
@@ -112,7 +123,16 @@ mod tests {
             avg_percentage: pct,
             sample_count: 60 * days,
             days,
+            std_dev: 0.0,
         }
+    }
+
+    #[test]
+    fn test_unpredictable_above_ten_points() {
+        assert!(!is_unpredictable(0.0));
+        assert!(!is_unpredictable(UNPREDICTABLE_SPREAD));
+        assert!(is_unpredictable(10.1));
+        assert!(is_unpredictable(25.8));
     }
 
     #[test]
