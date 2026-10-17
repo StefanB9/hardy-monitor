@@ -1,8 +1,9 @@
 //! Human-readable findings derived from the other analyses.
 
 use super::{
-    ComparisonMode, MIN_DAYS, PeriodComparison, TrendDirection, analyze_days, calculate_stats,
-    compare_periods, find_peak_hours, find_quiet_windows, weekday_short,
+    ComparisonMode, MIN_DAYS, PeriodComparison, SlotRange, TOP_HOURS, TrendDirection, analyze_days,
+    busiest_ranges, calculate_stats, compare_periods, find_quiet_windows, quietest_ranges,
+    weekday_short,
 };
 use crate::db::HourlyAverage;
 
@@ -62,6 +63,12 @@ pub fn generate_insights(
         });
     }
 
+    let busy_ranges = busiest_ranges(current, TOP_HOURS);
+    let quiet_ranges = quietest_ranges(current, TOP_HOURS);
+    // A day's strongest range among the week's (the lists are sorted).
+    let day_range =
+        |ranges: &[SlotRange], weekday| ranges.iter().find(|r| r.weekday == weekday).copied();
+
     let day_analysis = analyze_days(current);
     if let Some(busiest_day) = day_analysis
         .iter()
@@ -72,13 +79,22 @@ pub fn generate_insights(
             category: InsightCategory::DayPattern,
             importance: 3,
             title: format!("{} is the busiest day", busiest_day.day_name),
-            description: format!(
-                "Average occupancy on {} is {:.1}%, peaking at {:.1}% around {:02}:00.",
-                busiest_day.day_name,
-                busiest_day.avg_occupancy,
-                busiest_day.peak_occupancy,
-                busiest_day.peak_hour.unwrap_or(0)
-            ),
+            description: match day_range(&busy_ranges, busiest_day.weekday) {
+                Some(range) => format!(
+                    "Average occupancy on {} is {:.1}%, busiest {} (~{:.0}%).",
+                    busiest_day.day_name,
+                    busiest_day.avg_occupancy,
+                    range.hours_text(),
+                    range.average
+                ),
+                None => format!(
+                    "Average occupancy on {} is {:.1}%, peaking at {:.1}% around {:02}:00.",
+                    busiest_day.day_name,
+                    busiest_day.avg_occupancy,
+                    busiest_day.peak_occupancy,
+                    busiest_day.peak_hour.unwrap_or(0)
+                ),
+            },
             data: Some((
                 busiest_day.weekday,
                 busiest_day.peak_hour.unwrap_or(0),
@@ -96,13 +112,22 @@ pub fn generate_insights(
             category: InsightCategory::QuietTime,
             importance: 4,
             title: format!("{} is the quietest day", quietest_day.day_name),
-            description: format!(
-                "Average occupancy on {} is only {:.1}%. Best time: around {:02}:00 ({:.1}%).",
-                quietest_day.day_name,
-                quietest_day.avg_occupancy,
-                quietest_day.quietest_hour.unwrap_or(0),
-                quietest_day.quietest_occupancy
-            ),
+            description: match day_range(&quiet_ranges, quietest_day.weekday) {
+                Some(range) => format!(
+                    "Average occupancy on {} is only {:.1}%. Best time: {} (~{:.0}%).",
+                    quietest_day.day_name,
+                    quietest_day.avg_occupancy,
+                    range.hours_text(),
+                    range.average
+                ),
+                None => format!(
+                    "Average occupancy on {} is only {:.1}%. Best time: around {:02}:00 ({:.1}%).",
+                    quietest_day.day_name,
+                    quietest_day.avg_occupancy,
+                    quietest_day.quietest_hour.unwrap_or(0),
+                    quietest_day.quietest_occupancy
+                ),
+            },
             data: Some((
                 quietest_day.weekday,
                 quietest_day.quietest_hour.unwrap_or(0),
@@ -111,19 +136,19 @@ pub fn generate_insights(
         });
     }
 
-    let peaks = find_peak_hours(current, 3);
-    if !peaks.is_empty() {
-        let peak_desc: Vec<String> = peaks
+    if let Some(top) = busy_ranges.first() {
+        let peak_desc: Vec<String> = busy_ranges
             .iter()
-            .map(|(w, h, p)| format!("{} {h:02}:00 ({p:.0}%)", weekday_short(*w)))
+            .take(3)
+            .map(|r| format!("{} (~{:.0}%)", r.label(), r.average))
             .collect();
 
         insights.push(Insight {
             category: InsightCategory::Peak,
             importance: 3,
             title: "Busiest times to avoid".to_string(),
-            description: format!("Peak hours: {}", peak_desc.join(", ")),
-            data: Some(peaks[0]),
+            description: format!("Peak times: {}", peak_desc.join(", ")),
+            data: Some((top.weekday, top.start_hour, top.average)),
         });
     }
 
@@ -230,6 +255,7 @@ mod tests {
             avg_percentage: pct,
             sample_count: samples,
             days: samples,
+            std_dev: 0.0,
         }
     }
 
@@ -241,6 +267,7 @@ mod tests {
             avg_percentage: pct,
             sample_count: 60 * days,
             days,
+            std_dev: 0.0,
         }
     }
 
@@ -301,7 +328,7 @@ mod tests {
         let insights = generate_insights(&data, None);
         let peak = find(&insights, InsightCategory::Peak)?;
         assert!(
-            peak.description.contains("Mon 09:00 (90%)"),
+            peak.description.contains("Mon 09:00–11:00 (~70%)"),
             "{}",
             peak.description
         );
@@ -313,6 +340,92 @@ mod tests {
             window.description.starts_with("Sat 18:00–21:00"),
             "{}",
             window.description
+        );
+        Ok(())
+    }
+
+    /// A full week, 9:00–21:00, at 15–16% except: evening peaks on
+    /// weekdays (Monday 17–20 the strongest, Tuesday 18:00 the single
+    /// busiest hour), late mornings on Wednesday to Friday, a quiet
+    /// Saturday 16–21 and Sunday 18–21, and some quiet first and last
+    /// hours.
+    fn ranged_week() -> Vec<HourlyAverage> {
+        let special = |weekday: i32, hour: i32| match (weekday, hour) {
+            (0, 17 | 19) => Some(45.0),
+            (0, 18) => Some(58.0),
+            (1, 18) => Some(50.0),
+            (2, 17 | 19) => Some(35.0),
+            (2, 18) => Some(36.0),
+            (3, 17 | 19) => Some(33.0),
+            (3, 18) => Some(34.0),
+            (4, 17) => Some(31.0),
+            (4, 18) => Some(32.0),
+            (2, 10) => Some(30.0),
+            (3, 10) => Some(30.5),
+            (4, 10) => Some(29.0),
+            (5, 16..=20) => Some(6.0),
+            (6, 18..=20) => Some(8.0),
+            (4, 20) => Some(9.0),
+            (3, 20) => Some(9.5),
+            (2, 20) => Some(9.6),
+            (1, 20) => Some(9.7),
+            (0, 9) => Some(9.8),
+            (1, 9) => Some(9.9),
+            (2, 9) => Some(9.95),
+            _ => None,
+        };
+        (0..7)
+            .flat_map(|weekday| {
+                (9..21).map(move |hour| {
+                    let base = 15.0 + f64::from(weekday * 12 + hour) * 0.01;
+                    seen(weekday, hour, special(weekday, hour).unwrap_or(base), 4)
+                })
+            })
+            .collect()
+    }
+
+    #[test]
+    fn test_busiest_times_quote_ranges() -> anyhow::Result<()> {
+        let insights = generate_insights(&ranged_week(), None);
+        let peak = find(&insights, InsightCategory::Peak)?;
+        assert!(
+            peak.description.starts_with(
+                "Peak times: Tue 18:00–19:00 (~50%), Mon 17:00–20:00 (~49%), Wed 17:00–20:00 \
+                 (~35%)"
+            ),
+            "{}",
+            peak.description
+        );
+        assert_eq!(peak.data, Some((1, 18, 50.0)));
+        Ok(())
+    }
+
+    #[test]
+    fn test_busiest_day_quotes_its_busiest_range() -> anyhow::Result<()> {
+        let insights = generate_insights(&ranged_week(), None);
+        let busiest = find(&insights, InsightCategory::DayPattern)?;
+        assert_eq!(busiest.title, "Monday is the busiest day");
+        assert!(
+            busiest.description.ends_with("busiest 17:00–20:00 (~49%)."),
+            "{}",
+            busiest.description
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_quietest_day_best_time_is_a_range() -> anyhow::Result<()> {
+        let insights = generate_insights(&ranged_week(), None);
+        let quietest = insights
+            .iter()
+            .find(|i| i.title == "Saturday is the quietest day")
+            .ok_or_else(|| anyhow::anyhow!("no quietest day in {insights:?}"))?;
+        assert!(
+            quietest
+                .description
+                .ends_with("Best time: 16:00–21:00 (~6%)."),
+            "{}",
+            quietest.description
         );
         Ok(())
     }

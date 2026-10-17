@@ -1,9 +1,10 @@
 //! Historical occupancy analytics: period comparison and trend, summary
-//! statistics, busiest and quietest slots, insights, visit planning, and
-//! gym-local time helpers.
+//! statistics, busiest and quietest ranges, quiet windows, insights, visit
+//! planning, and gym-local time helpers.
 
 mod comparison;
 mod insights;
+mod ranges;
 mod slots;
 mod stats;
 mod time;
@@ -14,7 +15,8 @@ pub use comparison::{
     ComparisonMode, HourlyComparison, PeriodComparison, build_hourly_comparisons, compare_periods,
 };
 pub use insights::{Insight, InsightCategory, generate_insights};
-pub use slots::{MIN_DAYS, TimePeriod, find_peak_hours, find_quiet_hours, find_quiet_windows};
+pub use ranges::{LISTED_RANGES, SlotRange, TOP_HOURS, busiest_ranges, quietest_ranges};
+pub use slots::{MIN_DAYS, TimePeriod, UNPREDICTABLE_SPREAD, find_quiet_windows, is_unpredictable};
 pub use stats::{DayAnalysis, OccupancyStats, analyze_days, calculate_stats};
 pub use time::{midnight_local_as_utc, weekday_name, weekday_short};
 pub use trend::{TrendDirection, determine_trend, mean_point_change, trend_from_points};

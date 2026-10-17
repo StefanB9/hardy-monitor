@@ -1,11 +1,12 @@
-//! Weekday × hour grid of average occupancy, limited to opening hours.
+//! Weekday × hour grid of average occupancy, limited to opening hours, with
+//! the busiest and quietest ranges outlined.
 
 mod grid;
 
 use std::ops::Range;
 
-pub use grid::{Cell, WeekGrid};
-use hardy_core::analytics::weekday_short;
+pub use grid::{Cell, CellValue, WeekGrid};
+use hardy_core::analytics::{SlotRange, is_unpredictable, weekday_short};
 use iced::{
     Point, Rectangle, Renderer, Size, Theme,
     alignment::{Horizontal, Vertical},
@@ -22,11 +23,24 @@ pub struct HeatmapWidget<'a> {
     pub high_threshold: f64,
     pub cache: &'a canvas::Cache,
     pub tooltip_cache: &'a canvas::Cache,
+    /// Outlined in [`BUSY_OUTLINE`].
+    pub busy_ranges: &'a [SlotRange],
+    /// Outlined in [`QUIET_OUTLINE`].
+    pub quiet_ranges: &'a [SlotRange],
 }
+
+/// Outline of the busiest ranges: cells there are warm, so white stands out.
+pub const BUSY_OUTLINE: iced::Color = style::TEXT_PRIMARY;
+/// Outline of the quietest ranges: cells there are green, so blue stands out.
+pub const QUIET_OUTLINE: iced::Color = style::ACCENT;
+/// Dot on hours that vary a lot between days.
+pub const UNPREDICTABLE_DOT: iced::Color = style::TEXT_PRIMARY;
 
 const PAD_LEFT: f32 = 44.0;
 const PAD_BOTTOM: f32 = 24.0;
 const GAP: f32 = 3.0;
+/// Outlines sit just outside the cells' fill (inset by half the gap).
+const OUTLINE_INSET: f32 = 1.0;
 
 struct Layout {
     hours: Range<u32>,
@@ -36,6 +50,23 @@ struct Layout {
 }
 
 impl HeatmapWidget<'_> {
+    /// Outlines the busiest and quietest ranges.
+    fn draw_outlines(&self, frame: &mut canvas::Frame, layout: &Layout) {
+        for (ranges, color) in [
+            (self.busy_ranges, BUSY_OUTLINE),
+            (self.quiet_ranges, QUIET_OUTLINE),
+        ] {
+            for range in ranges {
+                if let Some(b) = outline_bounds(layout, range) {
+                    frame.stroke(
+                        &Path::rounded_rectangle(b.position(), b.size(), 5.0.into()),
+                        Stroke::default().with_color(color).with_width(2.0),
+                    );
+                }
+            }
+        }
+    }
+
     fn layout(&self, bounds: Rectangle) -> Layout {
         let hours = self.grid.hour_span();
         #[allow(clippy::cast_precision_loss)]
@@ -73,11 +104,7 @@ impl HeatmapWidget<'_> {
         day: usize,
         hour: u32,
     ) {
-        let detail = match self.grid.cell(day, hour) {
-            Cell::Closed => "Closed".to_string(),
-            Cell::NoData => "No data yet".to_string(),
-            Cell::Value(value, samples) => format!("{value:.0}% · {samples} readings"),
-        };
+        let detail = cell_detail(self.grid.cell(day, hour));
         let label = format!(
             "{} {hour:02}:00–{:02}:00\n{detail}",
             day_label(day),
@@ -100,7 +127,7 @@ impl HeatmapWidget<'_> {
                 .with_width(2.0),
         );
 
-        let size = Size::new(170.0, 44.0);
+        let size = Size::new(250.0, 44.0);
         let x = (cx + layout.cell_w + 8.0).min(bounds.width - size.width);
         let x = if x < cx + layout.cell_w {
             cx - size.width - 8.0
@@ -124,6 +151,56 @@ impl HeatmapWidget<'_> {
             ..Default::default()
         });
     }
+}
+
+/// The tooltip's second line, e.g. "28% · seen on 3 days · varies ±19 pts".
+fn cell_detail(cell: Cell) -> String {
+    let CellValue {
+        value,
+        days,
+        spread,
+    } = match cell {
+        Cell::Closed => return "Closed".to_string(),
+        Cell::NoData => return "No data yet".to_string(),
+        Cell::Value(cell) => cell,
+    };
+    let seen = if days == 1 {
+        "seen on 1 day".to_string()
+    } else {
+        format!("seen on {days} days")
+    };
+    if days < 2 {
+        format!("{value:.0}% · {seen}")
+    } else if is_unpredictable(spread) {
+        format!("{value:.0}% · {seen} · varies ±{spread:.0} pts")
+    } else {
+        format!("{value:.0}% · {seen} · ±{spread:.0} pts")
+    }
+}
+
+/// The cells `range` covers, clipped to the hours shown; `None` if it lies
+/// outside them or on no day.
+fn outline_bounds(layout: &Layout, range: &SlotRange) -> Option<Rectangle> {
+    let day = u32::try_from(range.weekday).ok().filter(|d| *d < 7)?;
+    let start = u32::try_from(range.start_hour)
+        .ok()?
+        .max(layout.hours.start);
+    let end = u32::try_from(range.end_hour).ok()?.min(layout.hours.end);
+    if start >= end {
+        return None;
+    }
+    #[allow(clippy::cast_precision_loss)] // at most 24 hours and 7 days
+    let (col, cols, row) = (
+        (start - layout.hours.start) as f32,
+        (end - start) as f32,
+        day as f32,
+    );
+    Some(Rectangle {
+        x: PAD_LEFT + col * layout.cell_w + OUTLINE_INSET,
+        y: row * layout.cell_h + OUTLINE_INSET,
+        width: cols * layout.cell_w - 2.0 * OUTLINE_INSET,
+        height: layout.cell_h - 2.0 * OUTLINE_INSET,
+    })
 }
 
 fn day_label(day: usize) -> &'static str {
@@ -197,7 +274,7 @@ impl<Message> canvas::Program<Message> for HeatmapWidget<'_> {
                                 Stroke::default().with_color(style::BORDER).with_width(1.0),
                             );
                         }
-                        Cell::Value(value, _) => {
+                        Cell::Value(CellValue { value, spread, .. }) => {
                             frame.fill(
                                 &rect,
                                 style::occupancy_color(
@@ -217,6 +294,18 @@ impl<Message> canvas::Program<Message> for HeatmapWidget<'_> {
                                     ..Default::default()
                                 });
                             }
+                            if is_unpredictable(spread) {
+                                frame.fill(
+                                    &Path::circle(
+                                        Point::new(
+                                            x + layout.cell_w - GAP / 2.0 - 5.0,
+                                            y + GAP / 2.0 + 5.0,
+                                        ),
+                                        2.5,
+                                    ),
+                                    UNPREDICTABLE_DOT,
+                                );
+                            }
                         }
                     }
 
@@ -233,6 +322,7 @@ impl<Message> canvas::Program<Message> for HeatmapWidget<'_> {
                     }
                 }
             }
+            self.draw_outlines(frame, &layout);
         });
 
         let tooltip = self.tooltip_cache.draw(renderer, bounds.size(), |frame| {
@@ -242,5 +332,76 @@ impl<Message> canvas::Program<Message> for HeatmapWidget<'_> {
         });
 
         vec![grid, tooltip]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn layout() -> Layout {
+        // 06:00–23:00 in 20 px columns, 30 px rows.
+        Layout {
+            hours: 6..23,
+            cell_w: 20.0,
+            cell_h: 30.0,
+            grid_h: 210.0,
+        }
+    }
+
+    fn range(weekday: i32, start_hour: i32, end_hour: i32) -> SlotRange {
+        SlotRange {
+            weekday,
+            start_hour,
+            end_hour,
+            average: 10.0,
+            min: 10.0,
+            max: 10.0,
+            max_spread: 0.0,
+        }
+    }
+
+    #[test]
+    fn test_cell_details() {
+        let value = |days, spread| {
+            Cell::Value(CellValue {
+                value: 28.4,
+                days,
+                spread,
+            })
+        };
+        assert_eq!(cell_detail(Cell::Closed), "Closed");
+        assert_eq!(cell_detail(Cell::NoData), "No data yet");
+        assert_eq!(cell_detail(value(1, 0.0)), "28% · seen on 1 day");
+        assert_eq!(cell_detail(value(3, 4.2)), "28% · seen on 3 days · ±4 pts");
+        assert_eq!(
+            cell_detail(value(3, 19.3)),
+            "28% · seen on 3 days · varies ±19 pts"
+        );
+    }
+
+    #[test]
+    fn test_outline_covers_the_ranges_cells() {
+        // Tuesday 17–20: columns 11–13 of row 1.
+        let bounds = outline_bounds(&layout(), &range(1, 17, 20));
+        assert_eq!(
+            bounds,
+            Some(Rectangle {
+                x: PAD_LEFT + 11.0 * 20.0 + 1.0,
+                y: 30.0 + 1.0,
+                width: 3.0 * 20.0 - 2.0,
+                height: 30.0 - 2.0,
+            })
+        );
+    }
+
+    #[test]
+    fn test_outline_is_clipped_to_the_hours_shown() {
+        let clipped = outline_bounds(&layout(), &range(0, 4, 8));
+        assert_eq!(clipped.map(|r| r.x), Some(PAD_LEFT + 1.0));
+        assert_eq!(clipped.map(|r| r.width), Some(2.0 * 20.0 - 2.0));
+        assert_eq!(outline_bounds(&layout(), &range(0, 23, 24)), None);
+        assert_eq!(outline_bounds(&layout(), &range(7, 10, 12)), None);
+        assert_eq!(outline_bounds(&layout(), &range(-1, 10, 12)), None);
     }
 }

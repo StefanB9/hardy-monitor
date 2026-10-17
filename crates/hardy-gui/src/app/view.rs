@@ -31,6 +31,8 @@ impl HardyMonitorApp {
                 high_threshold: self.config.thresholds.high_occupancy_percent,
                 heatmap_cache: &self.ui.heatmap_cache,
                 heatmap_tooltip_cache: &self.ui.heatmap_tooltip_cache,
+                busy_ranges: &self.data.week_busy,
+                quiet_ranges: &self.data.week_quiet,
             }),
             ViewMode::Data => {
                 let window = self.data_window();
@@ -49,8 +51,8 @@ impl HardyMonitorApp {
             ViewMode::Insights => views::insights::view(InsightsProps {
                 trend: self.data.trend,
                 stats: self.data.stats.as_ref(),
-                peak_hours: &self.data.peak_hours,
-                quiet_hours: &self.data.quiet_hours,
+                busy_ranges: &self.data.busy_ranges,
+                quiet_ranges: &self.data.quiet_ranges,
                 insights: &self.data.insights,
                 low_threshold: self.config.thresholds.low_occupancy_percent,
                 high_threshold: self.config.thresholds.high_occupancy_percent,
