@@ -33,6 +33,8 @@ use iced::{Subscription, Task, Theme, widget::canvas::Cache, window};
 pub use loads::RequestId;
 use loads::{Errors, LatestOnly, PendingLoads};
 pub use message::{ChartData, Message, RepairPreset, ViewMode};
+use muda::MenuEvent;
+use tray_icon::TrayIconEvent;
 
 pub use crate::time_range::{AnalyticsRange, ChartRange};
 use crate::{
@@ -45,7 +47,7 @@ use crate::{
     planner::Planner,
     style::{self, OccupancyLevel},
     time_range::Step,
-    tray::{Tray, TrayStatus, quiet_label, rgba8, tooltip_text},
+    tray::{Tray, TrayStatus, menu_action, quiet_label, rgba8, tooltip_text, tray_action},
     views::{opening::opening_status, schema_notice::SchemaGate},
     widgets::heatmap::WeekGrid,
 };
@@ -239,17 +241,16 @@ impl HardyMonitorApp {
         (app, Task::batch([initial, alignment]))
     }
 
-    /// UI tick, aligned data polling, tray polling and window-close events.
+    /// UI tick, aligned data polling, tray clicks and window-close events.
     pub fn subscription(&self) -> Subscription<Message> {
         let ui_interval = Duration::from_secs(self.config.refresh.ui_interval_secs);
         let data_interval = Duration::from_secs(self.config.refresh.data_fetch_interval_secs);
-        let tray_interval = Duration::from_millis(self.config.refresh.tray_poll_interval_ms);
 
         let mut subs = vec![iced::time::every(ui_interval).map(|_| Message::Tick)];
         if self.ui.is_poll_aligned {
             subs.push(iced::time::every(data_interval).map(|_| Message::FetchTick));
         }
-        subs.push(iced::time::every(tray_interval).map(|_| Message::TrayCheck));
+        subs.push(Subscription::run(tray_events));
         subs.push(iced::event::listen_with(|event, status, _window_id| {
             use iced::keyboard::{self, key::Named};
             match event {
@@ -348,4 +349,22 @@ impl HardyMonitorApp {
     fn is_updating(&self) -> bool {
         self.ui.pending.is_visible(Instant::now())
     }
+}
+
+/// Tray clicks and menu entries as messages, sent when they happen (no
+/// polling: every message rebuilds the view).
+fn tray_events() -> iced::futures::channel::mpsc::UnboundedReceiver<Message> {
+    let (tx, rx) = iced::futures::channel::mpsc::unbounded();
+    let menu_tx = tx.clone();
+    TrayIconEvent::set_event_handler(Some(move |event: TrayIconEvent| {
+        if let Some(action) = tray_action(&event) {
+            let _ = tx.unbounded_send(Message::Tray(action));
+        }
+    }));
+    MenuEvent::set_event_handler(Some(move |event: MenuEvent| {
+        if let Some(action) = menu_action(&event.id.0) {
+            let _ = menu_tx.unbounded_send(Message::Tray(action));
+        }
+    }));
+    rx
 }

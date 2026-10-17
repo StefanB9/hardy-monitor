@@ -2,13 +2,12 @@
 
 use hardy_core::{accuracy::summarize, db::SchemaStatus, error::AppError};
 use iced::{Task, window};
-use muda::MenuEvent;
-use tray_icon::TrayIconEvent;
 
 use super::{HardyMonitorApp, Message, ViewMode, loads::ErrorSource};
 use crate::{
     forecasting::ModelOption,
     time_range::{ChartRange, Step, can_step_back, shift_custom},
+    tray::TrayAction,
     views::schema_notice::SchemaGate,
 };
 
@@ -69,7 +68,7 @@ impl HardyMonitorApp {
                 self.ui.is_window_visible = false;
                 window::latest().and_then(|id| window::minimize(id, true))
             }
-            Message::TrayCheck => self.handle_tray(),
+            Message::Tray(action) => self.handle_tray(action),
             Message::NotificationThresholdChanged(_)
             | Message::NotificationThresholdReleased
             | Message::NotificationToggled(_)
@@ -384,7 +383,7 @@ impl HardyMonitorApp {
                 self.ui.is_poll_aligned = true;
                 Task::none()
             }
-            Message::TrayCheck => self.handle_tray(),
+            Message::Tray(action) => self.handle_tray(action),
             Message::WindowCloseRequested => {
                 self.ui.is_window_visible = false;
                 window::latest().and_then(|id| window::minimize(id, true))
@@ -393,22 +392,9 @@ impl HardyMonitorApp {
         }
     }
 
-    fn handle_tray(&mut self) -> Task<Message> {
-        let mut should_toggle = false;
-        while let Ok(event) = TrayIconEvent::receiver().try_recv() {
-            if let TrayIconEvent::Click { .. } = event {
-                should_toggle = true;
-            }
-        }
-        while let Ok(event) = MenuEvent::receiver().try_recv() {
-            if event.id.0 == "quit" {
-                std::process::exit(0);
-            } else if event.id.0 == "show" {
-                should_toggle = true;
-            }
-        }
-        if !should_toggle {
-            return Task::none();
+    fn handle_tray(&mut self, action: TrayAction) -> Task<Message> {
+        if action == TrayAction::Quit {
+            std::process::exit(0);
         }
         self.ui.is_window_visible = !self.ui.is_window_visible;
         let target = self.ui.is_window_visible;

@@ -20,6 +20,7 @@ use crate::{
     plan_settings::VisitLength,
     planner::{RangeEnd, RangeKind},
     time_range::{AnalyticsRange, ChartRange, Step},
+    tray::TrayAction,
 };
 
 /// What the chart shows of one range.
@@ -144,7 +145,8 @@ pub enum Message {
     ExportCsv,
     ExportCompleted(Result<String, AppError>),
     ClearExportStatus,
-    TrayCheck,
+    /// A tray click or menu entry.
+    Tray(TrayAction),
     WindowCloseRequested,
 
     RepairStartDateChanged(String),
@@ -221,7 +223,7 @@ impl Message {
             | Message::DataScrolled { .. }
             | Message::ExportCsv
             | Message::ClearExportStatus
-            | Message::TrayCheck
+            | Message::Tray(_)
             | Message::WindowCloseRequested
             | Message::RepairStartDateChanged(_)
             | Message::RepairEndDateChanged(_)

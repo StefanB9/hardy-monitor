@@ -22,12 +22,11 @@ impl Default for WindowConfig {
     }
 }
 
-/// How often the GUI redraws, fetches and polls the tray.
+/// How often the GUI redraws and fetches.
 #[derive(Debug, Deserialize, Clone)]
 pub struct RefreshConfig {
     pub ui_interval_secs: u64,
     pub data_fetch_interval_secs: u64,
-    pub tray_poll_interval_ms: u64,
 }
 
 impl Default for RefreshConfig {
@@ -35,7 +34,6 @@ impl Default for RefreshConfig {
         Self {
             ui_interval_secs: 30,
             data_fetch_interval_secs: 60,
-            tray_poll_interval_ms: 50,
         }
     }
 }
@@ -77,7 +75,6 @@ mod tests {
         let config = RefreshConfig::default();
         assert_eq!(config.ui_interval_secs, 30);
         assert_eq!(config.data_fetch_interval_secs, 60);
-        assert_eq!(config.tray_poll_interval_ms, 50);
     }
 
     #[test]
