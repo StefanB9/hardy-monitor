@@ -16,7 +16,7 @@ pub mod traits;
 pub use api::{GymApiClient, GymResponse};
 pub use chrono_tz::Tz;
 pub use config::{AppConfig, MlConfig};
-pub use db::{DataSource, Database, HourlyAverage, OccupancyLog};
+pub use db::{DataSource, Database, HourlyAverage, OccupancyLog, QuarterHourAverage};
 pub use error::{AppError, DatabaseError, NetworkErrorKind};
 pub use repair::{DataRepairer, RepairProgress, RepairSummary};
 pub use retry::{RetryPolicy, retry};
