@@ -3962,6 +3962,8 @@ dependencies = [
  "muda",
  "notify-rust",
  "proptest",
+ "serde",
+ "serde_json",
  "tokio",
  "tracing",
  "tracing-appender",
