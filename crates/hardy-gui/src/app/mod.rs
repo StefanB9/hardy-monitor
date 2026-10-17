@@ -20,7 +20,7 @@ pub(crate) use data_tab::TABLE_ID as DATA_TABLE_ID;
 use hardy_core::{
     accuracy::AccuracySummary,
     alert::AlertRules,
-    analytics::{DayAnalysis, Insight, OccupancyStats, TrendDirection},
+    analytics::{DayAnalysis, Insight, OccupancyStats, SlotRange, TrendDirection},
     config::AppConfig,
     db::{Database, ForecastHistoryEntry, OccupancyLog},
     error::AppError,
@@ -72,8 +72,12 @@ struct MonitorState {
     week_days: Vec<DayAnalysis>,
     insights: Vec<Insight>,
     stats: Option<OccupancyStats>,
-    peak_hours: Vec<(i32, i32, f64)>,
-    quiet_hours: Vec<(i32, i32, f64)>,
+    /// Busiest and quietest ranges of the Insights period.
+    busy_ranges: Vec<SlotRange>,
+    quiet_ranges: Vec<SlotRange>,
+    /// Busiest and quietest ranges of the heatmap's period.
+    week_busy: Vec<SlotRange>,
+    week_quiet: Vec<SlotRange>,
     trend: Option<TrendDirection>,
     forecasting: Forecasting,
     /// Live accuracy of the daemon's logged forecasts.
@@ -174,8 +178,10 @@ impl HardyMonitorApp {
                 week_days: Vec::new(),
                 insights: Vec::new(),
                 stats: None,
-                peak_hours: Vec::new(),
-                quiet_hours: Vec::new(),
+                busy_ranges: Vec::new(),
+                quiet_ranges: Vec::new(),
+                week_busy: Vec::new(),
+                week_quiet: Vec::new(),
                 trend: None,
                 forecasting: Forecasting::new(horizon_hours, grace),
                 accuracy: None,

@@ -1,11 +1,12 @@
-//! Weekday × hour grid of average occupancy, limited to opening hours.
+//! Weekday × hour grid of average occupancy, limited to opening hours, with
+//! the busiest and quietest ranges outlined.
 
 mod grid;
 
 use std::ops::Range;
 
 pub use grid::{Cell, WeekGrid};
-use hardy_core::analytics::weekday_short;
+use hardy_core::analytics::{SlotRange, weekday_short};
 use iced::{
     Point, Rectangle, Renderer, Size, Theme,
     alignment::{Horizontal, Vertical},
@@ -22,11 +23,22 @@ pub struct HeatmapWidget<'a> {
     pub high_threshold: f64,
     pub cache: &'a canvas::Cache,
     pub tooltip_cache: &'a canvas::Cache,
+    /// Outlined in [`BUSY_OUTLINE`].
+    pub busy_ranges: &'a [SlotRange],
+    /// Outlined in [`QUIET_OUTLINE`].
+    pub quiet_ranges: &'a [SlotRange],
 }
+
+/// Outline of the busiest ranges: cells there are warm, so white stands out.
+pub const BUSY_OUTLINE: iced::Color = style::TEXT_PRIMARY;
+/// Outline of the quietest ranges: cells there are green, so blue stands out.
+pub const QUIET_OUTLINE: iced::Color = style::ACCENT;
 
 const PAD_LEFT: f32 = 44.0;
 const PAD_BOTTOM: f32 = 24.0;
 const GAP: f32 = 3.0;
+/// Outlines sit just outside the cells' fill (inset by half the gap).
+const OUTLINE_INSET: f32 = 1.0;
 
 struct Layout {
     hours: Range<u32>,
@@ -124,6 +136,31 @@ impl HeatmapWidget<'_> {
             ..Default::default()
         });
     }
+}
+
+/// The cells `range` covers, clipped to the hours shown; `None` if it lies
+/// outside them or on no day.
+fn outline_bounds(layout: &Layout, range: &SlotRange) -> Option<Rectangle> {
+    let day = u32::try_from(range.weekday).ok().filter(|d| *d < 7)?;
+    let start = u32::try_from(range.start_hour)
+        .ok()?
+        .max(layout.hours.start);
+    let end = u32::try_from(range.end_hour).ok()?.min(layout.hours.end);
+    if start >= end {
+        return None;
+    }
+    #[allow(clippy::cast_precision_loss)] // at most 24 hours and 7 days
+    let (col, cols, row) = (
+        (start - layout.hours.start) as f32,
+        (end - start) as f32,
+        day as f32,
+    );
+    Some(Rectangle {
+        x: PAD_LEFT + col * layout.cell_w + OUTLINE_INSET,
+        y: row * layout.cell_h + OUTLINE_INSET,
+        width: cols * layout.cell_w - 2.0 * OUTLINE_INSET,
+        height: layout.cell_h - 2.0 * OUTLINE_INSET,
+    })
 }
 
 fn day_label(day: usize) -> &'static str {
@@ -233,6 +270,19 @@ impl<Message> canvas::Program<Message> for HeatmapWidget<'_> {
                     }
                 }
             }
+            for (ranges, color) in [
+                (self.busy_ranges, BUSY_OUTLINE),
+                (self.quiet_ranges, QUIET_OUTLINE),
+            ] {
+                for range in ranges {
+                    if let Some(b) = outline_bounds(&layout, range) {
+                        frame.stroke(
+                            &Path::rounded_rectangle(b.position(), b.size(), 5.0.into()),
+                            Stroke::default().with_color(color).with_width(2.0),
+                        );
+                    }
+                }
+            }
         });
 
         let tooltip = self.tooltip_cache.draw(renderer, bounds.size(), |frame| {
@@ -242,5 +292,56 @@ impl<Message> canvas::Program<Message> for HeatmapWidget<'_> {
         });
 
         vec![grid, tooltip]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn layout() -> Layout {
+        // 06:00–23:00 in 20 px columns, 30 px rows.
+        Layout {
+            hours: 6..23,
+            cell_w: 20.0,
+            cell_h: 30.0,
+            grid_h: 210.0,
+        }
+    }
+
+    fn range(weekday: i32, start_hour: i32, end_hour: i32) -> SlotRange {
+        SlotRange {
+            weekday,
+            start_hour,
+            end_hour,
+            average: 10.0,
+            min: 10.0,
+            max: 10.0,
+        }
+    }
+
+    #[test]
+    fn test_outline_covers_the_ranges_cells() {
+        // Tuesday 17–20: columns 11–13 of row 1.
+        let bounds = outline_bounds(&layout(), &range(1, 17, 20));
+        assert_eq!(
+            bounds,
+            Some(Rectangle {
+                x: PAD_LEFT + 11.0 * 20.0 + 1.0,
+                y: 30.0 + 1.0,
+                width: 3.0 * 20.0 - 2.0,
+                height: 30.0 - 2.0,
+            })
+        );
+    }
+
+    #[test]
+    fn test_outline_is_clipped_to_the_hours_shown() {
+        let clipped = outline_bounds(&layout(), &range(0, 4, 8));
+        assert_eq!(clipped.map(|r| r.x), Some(PAD_LEFT + 1.0));
+        assert_eq!(clipped.map(|r| r.width), Some(2.0 * 20.0 - 2.0));
+        assert_eq!(outline_bounds(&layout(), &range(0, 23, 24)), None);
+        assert_eq!(outline_bounds(&layout(), &range(7, 10, 12)), None);
+        assert_eq!(outline_bounds(&layout(), &range(-1, 10, 12)), None);
     }
 }

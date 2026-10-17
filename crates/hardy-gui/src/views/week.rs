@@ -1,6 +1,6 @@
 //! "Week": the weekday × hour heatmap and per-day summaries.
 
-use hardy_core::analytics::{DayAnalysis, weekday_short};
+use hardy_core::analytics::{DayAnalysis, SlotRange, weekday_short};
 use iced::{
     Alignment, Border, Element, Length,
     widget::{Canvas, Space, canvas::Cache, column, container, row, text},
@@ -11,7 +11,7 @@ use crate::{
     style,
     time_range::AnalyticsRange,
     views::components::{card, card_with_actions, empty_state, legend_item, segmented},
-    widgets::heatmap::{HeatmapWidget, WeekGrid},
+    widgets::heatmap::{BUSY_OUTLINE, HeatmapWidget, QUIET_OUTLINE, WeekGrid},
 };
 
 const RANGES: [(&str, AnalyticsRange); 4] = [
@@ -35,6 +35,9 @@ pub struct WeekProps<'a> {
     pub high_threshold: f64,
     pub heatmap_cache: &'a Cache,
     pub heatmap_tooltip_cache: &'a Cache,
+    /// Outlined on the heatmap.
+    pub busy_ranges: &'a [SlotRange],
+    pub quiet_ranges: &'a [SlotRange],
 }
 
 fn swatch<'a>(color: iced::Color, width: f32) -> Element<'a, Message> {
@@ -47,6 +50,26 @@ fn swatch<'a>(color: iced::Color, width: f32) -> Element<'a, Message> {
 }
 
 /// Gradient strip matching the cell colours, plus the special cells.
+/// A hollow swatch: how a range is outlined on the heatmap.
+fn outline_item(color: iced::Color, label: &str) -> Element<'_, Message> {
+    row![
+        container(Space::new().width(12).height(10)).style(move |_| container::Style {
+            border: Border {
+                color,
+                width: 2.0,
+                radius: 3.0.into(),
+            },
+            ..Default::default()
+        }),
+        text(label)
+            .size(style::TEXT_CAPTION)
+            .color(style::TEXT_SECONDARY),
+    ]
+    .spacing(6)
+    .align_y(Alignment::Center)
+    .into()
+}
+
 fn legend<'a>(low: f64, high: f64) -> Element<'a, Message> {
     let mut strip = row![].spacing(0);
     for step in 0..=20 {
@@ -70,6 +93,9 @@ fn legend<'a>(low: f64, high: f64) -> Element<'a, Message> {
         caption("100%"),
         Space::new().width(style::SPACE_L),
         legend_item(style::NO_DATA, "No data yet"),
+        Space::new().width(style::SPACE_L),
+        outline_item(BUSY_OUTLINE, "Busiest times"),
+        outline_item(QUIET_OUTLINE, "Quietest times"),
     ]
     .spacing(style::SPACE_S)
     .align_y(Alignment::Center)
@@ -174,6 +200,8 @@ pub fn view(props: WeekProps<'_>) -> Element<'_, Message> {
         high_threshold: high,
         cache: props.heatmap_cache,
         tooltip_cache: props.heatmap_tooltip_cache,
+        busy_ranges: props.busy_ranges,
+        quiet_ranges: props.quiet_ranges,
     })
     .width(Length::Fill)
     .height(Length::Fill);
