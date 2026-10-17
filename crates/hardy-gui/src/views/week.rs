@@ -11,7 +11,7 @@ use crate::{
     style,
     time_range::AnalyticsRange,
     views::components::{card, card_with_actions, empty_state, legend_item, segmented},
-    widgets::heatmap::{BUSY_OUTLINE, HeatmapWidget, QUIET_OUTLINE, WeekGrid},
+    widgets::heatmap::{BUSY_OUTLINE, HeatmapWidget, QUIET_OUTLINE, UNPREDICTABLE_DOT, WeekGrid},
 };
 
 const RANGES: [(&str, AnalyticsRange); 4] = [
@@ -96,6 +96,14 @@ fn legend<'a>(low: f64, high: f64) -> Element<'a, Message> {
         Space::new().width(style::SPACE_L),
         outline_item(BUSY_OUTLINE, "Busiest times"),
         outline_item(QUIET_OUTLINE, "Quietest times"),
+        row![
+            text("●").size(8).color(UNPREDICTABLE_DOT),
+            text("Varies a lot")
+                .size(style::TEXT_CAPTION)
+                .color(style::TEXT_SECONDARY),
+        ]
+        .spacing(6)
+        .align_y(Alignment::Center),
     ]
     .spacing(style::SPACE_S)
     .align_y(Alignment::Center)

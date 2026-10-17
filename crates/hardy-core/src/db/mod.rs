@@ -92,6 +92,9 @@ pub struct HourlyAverage {
     /// Distinct gym-local days with readings in this hour: how many times
     /// the hour was actually seen.
     pub days: i64,
+    /// How much the days differ: sample standard deviation of each day's
+    /// average, in points; 0 with one day.
+    pub std_dev: f64,
 }
 
 /// Average occupancy of one gym-local weekday (0 = Monday) and quarter hour
@@ -309,6 +312,7 @@ mod tests {
             avg_percentage: 45.5,
             sample_count: 100,
             days: 2,
+            std_dev: 0.0,
         };
         assert_eq!(avg.weekday, 0);
         assert_eq!(avg.hour, 10);
@@ -324,6 +328,7 @@ mod tests {
             avg_percentage: 0.0,
             sample_count: 1,
             days: 1,
+            std_dev: 0.0,
         };
         assert_eq!(avg.weekday, 6);
         assert_eq!(avg.hour, 23);

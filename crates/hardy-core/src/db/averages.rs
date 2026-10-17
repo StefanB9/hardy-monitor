@@ -8,7 +8,7 @@ use super::{Database, HourlyAverage, QuarterHourAverage};
 
 impl Database {
     /// Average occupancy per (weekday, hour) slot for records in `[start,
-    /// end)`.
+    /// end)`, with the number of days seen and the spread between them.
     ///
     /// Data Repair's artificial opening/closing (`boundary`) rows are
     /// excluded. Slots are wall-clock time in `tz` (weekday 0 = Monday),
@@ -29,20 +29,30 @@ impl Database {
             SELECT
                 weekday as "weekday!: i32",
                 hour as "hour!: i32",
-                AVG(percentage) as "avg_percentage!: f64",
-                COUNT(*) as "sample_count!: i64",
-                COUNT(DISTINCT local_date) as "days!: i64"
+                SUM(day_sum) / SUM(day_n)::FLOAT8 as "avg_percentage!: f64",
+                SUM(day_n)::BIGINT as "sample_count!: i64",
+                COUNT(*) as "days!: i64",
+                COALESCE(STDDEV_SAMP(day_sum / day_n), 0) as "std_dev!: f64"
             FROM (
                 SELECT
-                    (EXTRACT(ISODOW FROM timestamp AT TIME ZONE $3)::INTEGER - 1) as weekday,
-                    EXTRACT(HOUR FROM timestamp AT TIME ZONE $3)::INTEGER as hour,
-                    (timestamp AT TIME ZONE $3)::DATE as local_date,
-                    percentage
-                FROM occupancy_logs
-                WHERE timestamp >= $1 AND timestamp < $2
-                  -- Repair's 0% opening/closing entries are not observations.
-                  AND source <> 'boundary'
-            ) AS subquery
+                    weekday,
+                    hour,
+                    local_date,
+                    SUM(percentage) as day_sum,
+                    COUNT(*)::FLOAT8 as day_n
+                FROM (
+                    SELECT
+                        (EXTRACT(ISODOW FROM timestamp AT TIME ZONE $3)::INTEGER - 1) as weekday,
+                        EXTRACT(HOUR FROM timestamp AT TIME ZONE $3)::INTEGER as hour,
+                        (timestamp AT TIME ZONE $3)::DATE as local_date,
+                        percentage
+                    FROM occupancy_logs
+                    WHERE timestamp >= $1 AND timestamp < $2
+                      -- Repair's 0% opening/closing entries are not observations.
+                      AND source <> 'boundary'
+                ) AS readings
+                GROUP BY weekday, hour, local_date
+            ) AS days
             GROUP BY weekday, hour
             ORDER BY weekday, hour
             "#,

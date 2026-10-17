@@ -1,7 +1,10 @@
 //! Busiest and quietest times as ranges: the top hours of the week, with
 //! neighbouring hours of a weekday joined.
 
-use super::{slots::is_reliable, weekday_short};
+use super::{
+    slots::{is_reliable, is_unpredictable},
+    weekday_short,
+};
 use crate::db::HourlyAverage;
 
 /// Hours taken before joining: about the top seventh of a week's open
@@ -20,12 +23,19 @@ pub struct SlotRange {
     pub average: f64,
     pub min: f64,
     pub max: f64,
+    /// The largest spread between days among its hours, in points.
+    pub max_spread: f64,
 }
 
 impl SlotRange {
     /// "17:00–20:00".
     pub fn hours_text(&self) -> String {
         format!("{:02}:00–{:02}:00", self.start_hour, self.end_hour)
+    }
+
+    /// Whether any of its hours varies a lot between days.
+    pub fn varies(&self) -> bool {
+        is_unpredictable(self.max_spread)
     }
 
     /// "Mon 17:00–20:00".
@@ -89,6 +99,7 @@ fn range_of(run: &[&HourlyAverage]) -> Option<SlotRange> {
         average,
         min: values.clone().fold(f64::INFINITY, f64::min),
         max: values.fold(f64::NEG_INFINITY, f64::max),
+        max_spread: run.iter().map(|h| h.std_dev).fold(0.0, f64::max),
     })
 }
 
@@ -106,6 +117,7 @@ mod tests {
             avg_percentage: pct,
             sample_count: 60 * days,
             days,
+            std_dev: 0.0,
         }
     }
 
@@ -182,6 +194,21 @@ mod tests {
     }
 
     #[test]
+    fn test_range_varies_when_any_hour_does() {
+        let spread = |weekday, hour, std_dev| HourlyAverage {
+            std_dev,
+            ..seen(weekday, hour, 6.0, 4)
+        };
+        let data = vec![spread(6, 17, 2.0), spread(6, 18, 25.8), spread(6, 19, 3.0)];
+        let ranges = quietest_ranges(&data, 3);
+        assert_eq!(ranges.len(), 1);
+        assert_relative_eq!(ranges[0].max_spread, 25.8);
+        assert!(ranges[0].varies());
+        let calm = quietest_ranges(&[spread(2, 21, 4.0), spread(2, 22, 9.0)], 2);
+        assert!(!calm[0].varies());
+    }
+
+    #[test]
     fn test_range_labels() {
         let range = SlotRange {
             weekday: 5,
@@ -190,6 +217,7 @@ mod tests {
             average: 6.0,
             min: 5.0,
             max: 7.0,
+            max_spread: 0.0,
         };
         assert_eq!(range.hours_text(), "09:00–21:00");
         assert_eq!(range.label(), "Sat 09:00–21:00");

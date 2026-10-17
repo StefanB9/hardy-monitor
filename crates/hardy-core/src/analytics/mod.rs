@@ -16,7 +16,7 @@ pub use comparison::{
 };
 pub use insights::{Insight, InsightCategory, generate_insights};
 pub use ranges::{LISTED_RANGES, SlotRange, TOP_HOURS, busiest_ranges, quietest_ranges};
-pub use slots::{MIN_DAYS, TimePeriod, find_quiet_windows};
+pub use slots::{MIN_DAYS, TimePeriod, UNPREDICTABLE_SPREAD, find_quiet_windows, is_unpredictable};
 pub use stats::{DayAnalysis, OccupancyStats, analyze_days, calculate_stats};
 pub use time::{midnight_local_as_utc, weekday_name, weekday_short};
 pub use trend::{TrendDirection, determine_trend, mean_point_change, trend_from_points};
