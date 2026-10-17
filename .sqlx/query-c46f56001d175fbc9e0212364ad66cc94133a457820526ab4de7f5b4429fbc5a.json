@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM forecaster_lease WHERE id = 1 AND holder = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "c46f56001d175fbc9e0212364ad66cc94133a457820526ab4de7f5b4429fbc5a"
+}

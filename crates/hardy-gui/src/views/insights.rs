@@ -1,5 +1,5 @@
 //! "Insights": summary statistics, busiest and quietest slots, and findings
-//! over the last four weeks.
+//! over the last 28 days.
 
 use hardy_core::analytics::{
     Insight, InsightCategory, OccupancyStats, TrendDirection, weekday_short,
@@ -29,14 +29,19 @@ pub struct InsightsProps<'a> {
     pub high_threshold: f64,
 }
 
-fn trend_tile(trend: Option<TrendDirection>) -> (String, Color) {
-    let (label, color) = match trend {
-        Some(TrendDirection::Increasing) => ("▲ Getting busier", style::OCC_BUSY),
-        Some(TrendDirection::Decreasing) => ("▼ Getting quieter", style::OCC_QUIET),
-        Some(TrendDirection::Stable) => ("● Stable", style::TEXT_PRIMARY),
-        Some(TrendDirection::Insufficient) | None => ("Not enough data", style::TEXT_TERTIARY),
+/// Value, its colour and the caption of the trend tile. The value stays one
+/// word so it fits a quarter-width tile at title size without wrapping.
+fn trend_tile(trend: Option<TrendDirection>) -> (String, Color, &'static str) {
+    const COMPARED: &str = "vs. the 28 days before";
+    let (label, color, caption) = match trend {
+        Some(TrendDirection::Increasing) => ("▲ Busier", style::OCC_BUSY, COMPARED),
+        Some(TrendDirection::Decreasing) => ("▼ Quieter", style::OCC_QUIET, COMPARED),
+        Some(TrendDirection::Stable) => ("● Stable", style::TEXT_PRIMARY, COMPARED),
+        Some(TrendDirection::Insufficient) | None => {
+            ("–", style::TEXT_TERTIARY, "not enough data yet")
+        }
     };
-    (label.to_string(), color)
+    (label.to_string(), color, caption)
 }
 
 /// How much occupancy differs between hours of the week, i.e. how much
@@ -63,7 +68,7 @@ fn category_icon(category: InsightCategory) -> (&'static str, Color) {
 }
 
 fn tiles<'a>(props: &InsightsProps<'a>) -> Element<'a, Message> {
-    let (trend, trend_color) = trend_tile(props.trend);
+    let (trend, trend_color, trend_caption) = trend_tile(props.trend);
     let tile = |content: Element<'a, Message>| {
         container(content)
             .padding(style::CARD_PADDING)
@@ -82,7 +87,7 @@ fn tiles<'a>(props: &InsightsProps<'a>) -> Element<'a, Message> {
         "Trend",
         trend,
         trend_color,
-        Some("vs. the 4 weeks before".to_string()),
+        Some(trend_caption.to_string()),
     ))]
     .spacing(style::SPACE_L);
 
@@ -226,11 +231,25 @@ mod tests {
 
     #[test]
     fn test_trend_tile_labels() {
-        assert_eq!(
-            trend_tile(Some(TrendDirection::Increasing)).0,
-            "▲ Getting busier"
-        );
-        assert_eq!(trend_tile(None).0, "Not enough data");
+        assert_eq!(trend_tile(Some(TrendDirection::Increasing)).0, "▲ Busier");
+        assert_eq!(trend_tile(Some(TrendDirection::Decreasing)).0, "▼ Quieter");
+        assert_eq!(trend_tile(Some(TrendDirection::Stable)).0, "● Stable");
+        assert_eq!(trend_tile(None).2, "not enough data yet");
+    }
+
+    #[test]
+    fn test_trend_tile_values_fit_one_line() {
+        // A quarter-width tile fits about ten characters at title size.
+        for trend in [
+            Some(TrendDirection::Increasing),
+            Some(TrendDirection::Decreasing),
+            Some(TrendDirection::Stable),
+            Some(TrendDirection::Insufficient),
+            None,
+        ] {
+            let (value, _, _) = trend_tile(trend);
+            assert!(value.chars().count() <= 10, "{value} is too long");
+        }
     }
 
     #[test]

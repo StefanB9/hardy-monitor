@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO forecaster_lease (id, holder, renewed_at)\n            VALUES (1, $1, clock_timestamp())\n            ON CONFLICT (id) DO UPDATE\n                SET holder = EXCLUDED.holder, renewed_at = EXCLUDED.renewed_at\n                WHERE forecaster_lease.holder = EXCLUDED.holder\n                   OR forecaster_lease.renewed_at\n                      < clock_timestamp() - make_interval(secs => $2)\n            RETURNING holder\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "holder",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "forecaster_lease",
+            "name": "holder"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Float8"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "60333d525ddcaa903b64485cffd6d2f5bd75f7284f8e0ec3ca5b92734dff1887"
+}

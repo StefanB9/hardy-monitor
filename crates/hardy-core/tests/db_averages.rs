@@ -203,3 +203,25 @@ async fn test_get_averages_range_ignores_repair_boundary_rows() -> Result<()> {
     tdb.cleanup().await;
     Ok(())
 }
+
+#[tokio::test]
+async fn test_get_averages_range_counts_distinct_local_days() -> Result<()> {
+    let tdb = common::TestDatabase::new().await?;
+    // Monday 10:xx Berlin (08:xx UTC) on two dates a week apart: three
+    // readings on the first day, one on the second.
+    for (day, minute) in [(17, 0), (17, 10), (17, 20), (24, 0)] {
+        tdb.db
+            .insert_record(utc(2024, 6, day, 8, minute)?, 30.0)
+            .await?;
+    }
+    let averages = tdb
+        .db
+        .get_averages_range(utc(2024, 6, 16, 0, 0)?, utc(2024, 6, 30, 0, 0)?, Berlin)
+        .await?;
+    tdb.cleanup().await;
+
+    assert_eq!(averages.len(), 1);
+    assert_eq!(averages[0].sample_count, 4, "readings");
+    assert_eq!(averages[0].days, 2, "distinct gym-local days");
+    Ok(())
+}

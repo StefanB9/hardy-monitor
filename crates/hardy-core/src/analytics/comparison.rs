@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeSet, HashMap};
 
-use super::{TrendDirection, determine_trend};
+use super::{MIN_DAYS, TrendDirection, mean_point_change, trend_from_points};
 use crate::db::HourlyAverage;
 
 /// Slots quieter than this (percent) are not reported as significant changes.
@@ -28,23 +28,20 @@ pub struct HourlyComparison {
     pub current_avg: f64,
     pub absolute_change: f64,
     pub percent_change: f64,
-    pub baseline_samples: i64,
-    pub current_samples: i64,
+    /// Distinct days the slot was seen on in each period.
+    pub baseline_days: i64,
+    pub current_days: i64,
 }
 
 impl HourlyComparison {
-    /// Direction of this slot's change.
+    /// Whether the slot was seen on enough days in both periods.
+    pub fn is_reliable(&self) -> bool {
+        self.baseline_days >= MIN_DAYS && self.current_days >= MIN_DAYS
+    }
+
+    /// Direction of this slot's change, by the overall trend's rule.
     pub fn trend(&self) -> TrendDirection {
-        if self.baseline_samples < 2 || self.current_samples < 2 {
-            return TrendDirection::Insufficient;
-        }
-        if self.percent_change > 5.0 {
-            TrendDirection::Increasing
-        } else if self.percent_change < -5.0 {
-            TrendDirection::Decreasing
-        } else {
-            TrendDirection::Stable
-        }
+        trend_from_points(self.is_reliable().then_some(self.absolute_change))
     }
 }
 
@@ -54,11 +51,16 @@ pub struct PeriodComparison {
     pub mode: ComparisonMode,
     pub baseline_overall_avg: f64,
     pub current_overall_avg: f64,
+    /// Relative change of the overall average, in percent.
     pub overall_change_percent: f64,
+    /// Average change in points per hour, the number behind
+    /// `overall_trend`.
+    pub mean_point_change: Option<f64>,
     pub overall_trend: TrendDirection,
     pub hourly_comparisons: Vec<HourlyComparison>,
-    pub biggest_increases: Vec<(i32, i32, f64)>,
-    pub biggest_decreases: Vec<(i32, i32, f64)>,
+    /// The largest rises and falls in points, largest first.
+    pub biggest_increases: Vec<HourlyComparison>,
+    pub biggest_decreases: Vec<HourlyComparison>,
 }
 
 /// Pairs the slots present in either period.
@@ -87,8 +89,8 @@ pub fn build_hourly_comparisons(
 
         let baseline_avg = baseline_data.map_or(0.0, |d| d.avg_percentage);
         let current_avg = current_data.map_or(0.0, |d| d.avg_percentage);
-        let baseline_samples = baseline_data.map_or(0, |d| d.sample_count);
-        let current_samples = current_data.map_or(0, |d| d.sample_count);
+        let baseline_days = baseline_data.map_or(0, |d| d.days);
+        let current_days = current_data.map_or(0, |d| d.days);
 
         let absolute_change = current_avg - baseline_avg;
         let percent_change = if baseline_avg > 0.0 {
@@ -106,8 +108,8 @@ pub fn build_hourly_comparisons(
             current_avg,
             absolute_change,
             percent_change,
-            baseline_samples,
-            current_samples,
+            baseline_days,
+            current_days,
         });
     }
 
@@ -175,34 +177,34 @@ pub fn compare_periods(
         0.0
     };
 
-    let overall_trend = determine_trend(&hourly_comparisons);
+    let mean_point_change = mean_point_change(&hourly_comparisons);
+    let overall_trend = trend_from_points(mean_point_change);
 
     // Relative changes on near-empty slots (1% -> 7% = +600%) and changes of
     // a few points are noise, not something worth avoiding.
-    let mut sorted_by_increase: Vec<_> = hourly_comparisons
+    let mut significant: Vec<&HourlyComparison> = hourly_comparisons
         .iter()
         .filter(|c| {
-            c.baseline_samples >= 2
-                && c.current_samples >= 2
+            c.is_reliable()
                 && c.baseline_avg >= SIGNIFICANT_CHANGE_MIN_LEVEL
                 && c.absolute_change.abs() >= SIGNIFICANT_CHANGE_MIN_POINTS
         })
         .collect();
-    sorted_by_increase.sort_by(|a, b| b.percent_change.total_cmp(&a.percent_change));
+    significant.sort_by(|a, b| b.absolute_change.total_cmp(&a.absolute_change));
 
-    let biggest_increases: Vec<(i32, i32, f64)> = sorted_by_increase
+    let biggest_increases: Vec<HourlyComparison> = significant
         .iter()
-        .filter(|c| c.percent_change > 0.0)
+        .filter(|c| c.absolute_change > 0.0)
         .take(3)
-        .map(|c| (c.weekday, c.hour, c.percent_change))
+        .map(|&c| c.clone())
         .collect();
 
-    let biggest_decreases: Vec<(i32, i32, f64)> = sorted_by_increase
+    let biggest_decreases: Vec<HourlyComparison> = significant
         .iter()
         .rev()
-        .filter(|c| c.percent_change < 0.0)
+        .filter(|c| c.absolute_change < 0.0)
         .take(3)
-        .map(|c| (c.weekday, c.hour, c.percent_change))
+        .map(|&c| c.clone())
         .collect();
 
     PeriodComparison {
@@ -210,6 +212,7 @@ pub fn compare_periods(
         baseline_overall_avg,
         current_overall_avg,
         overall_change_percent,
+        mean_point_change,
         overall_trend,
         hourly_comparisons,
         biggest_increases,
@@ -230,7 +233,65 @@ mod tests {
             hour,
             avg_percentage: pct,
             sample_count: samples,
+            days: samples,
         }
+    }
+
+    /// An hour seen on `days` days, with an hour's worth of readings each.
+    fn seen(weekday: i32, hour: i32, pct: f64, days: i64) -> HourlyAverage {
+        HourlyAverage {
+            weekday,
+            hour,
+            avg_percentage: pct,
+            sample_count: 60 * days,
+            days,
+        }
+    }
+
+    #[test]
+    fn test_biggest_changes_are_ranked_by_points() {
+        // Mon 10:00 10% -> 15% (+50%, +5 points); Tue 18:00 40% -> 52%
+        // (+30%, +12 points).
+        let baseline = vec![seen(0, 10, 10.0, 4), seen(1, 18, 40.0, 4)];
+        let current = vec![seen(0, 10, 15.0, 4), seen(1, 18, 52.0, 4)];
+        let result = compare_periods(&baseline, &current, ComparisonMode::CustomRange);
+        let ranked: Vec<(i32, i32)> = result
+            .biggest_increases
+            .iter()
+            .map(|c| (c.weekday, c.hour))
+            .collect();
+        assert_eq!(ranked, vec![(1, 18), (0, 10)]);
+
+        let result = compare_periods(&current, &baseline, ComparisonMode::CustomRange);
+        let ranked: Vec<(i32, i32)> = result
+            .biggest_decreases
+            .iter()
+            .map(|c| (c.weekday, c.hour))
+            .collect();
+        assert_eq!(ranked, vec![(1, 18), (0, 10)]);
+    }
+
+    #[test]
+    fn test_comparison_needs_two_days_not_two_readings() {
+        // 60 readings before, but all on one day.
+        let baseline = vec![seen(2, 18, 30.0, 1)];
+        let current = vec![seen(2, 18, 45.0, 4)];
+        let result = compare_periods(&baseline, &current, ComparisonMode::CustomRange);
+        assert!(result.biggest_increases.is_empty());
+        assert!(!result.hourly_comparisons[0].is_reliable());
+    }
+
+    #[test]
+    fn test_comparison_reports_the_trend_number() -> anyhow::Result<()> {
+        let baseline: Vec<_> = (8..20).map(|h| seen(3, h, 30.0, 4)).collect();
+        let current: Vec<_> = (8..20).map(|h| seen(3, h, 32.0, 4)).collect();
+        let result = compare_periods(&baseline, &current, ComparisonMode::CustomRange);
+        let change = result
+            .mean_point_change
+            .ok_or_else(|| anyhow::anyhow!("no change"))?;
+        assert_relative_eq!(change, 2.0, epsilon = 1e-9);
+        assert_eq!(result.overall_trend, TrendDirection::Increasing);
+        Ok(())
     }
 
     #[test]
@@ -250,7 +311,7 @@ mod tests {
         let slots: Vec<(i32, i32)> = result
             .biggest_increases
             .iter()
-            .map(|&(w, h, _)| (w, h))
+            .map(|c| (c.weekday, c.hour))
             .collect();
         assert_eq!(slots, vec![(2, 18)]);
     }
@@ -339,8 +400,8 @@ mod tests {
             current_avg: 50.0,
             absolute_change: 10.0,
             percent_change: 25.0,
-            baseline_samples: 10,
-            current_samples: 10,
+            baseline_days: 10,
+            current_days: 10,
         };
         assert_eq!(increasing.trend(), TrendDirection::Increasing);
 
@@ -351,8 +412,8 @@ mod tests {
             current_avg: 40.0,
             absolute_change: -10.0,
             percent_change: -20.0,
-            baseline_samples: 10,
-            current_samples: 10,
+            baseline_days: 10,
+            current_days: 10,
         };
         assert_eq!(decreasing.trend(), TrendDirection::Decreasing);
 
@@ -363,8 +424,8 @@ mod tests {
             current_avg: 51.0,
             absolute_change: 1.0,
             percent_change: 2.0,
-            baseline_samples: 10,
-            current_samples: 10,
+            baseline_days: 10,
+            current_days: 10,
         };
         assert_eq!(stable.trend(), TrendDirection::Stable);
     }

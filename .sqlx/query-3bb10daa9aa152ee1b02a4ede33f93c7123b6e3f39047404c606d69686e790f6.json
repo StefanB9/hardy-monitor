@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE forecaster_lease SET renewed_at = clock_timestamp() WHERE id = 1 AND holder = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "3bb10daa9aa152ee1b02a4ede33f93c7123b6e3f39047404c606d69686e790f6"
+}
