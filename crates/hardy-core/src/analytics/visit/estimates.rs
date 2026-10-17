@@ -67,8 +67,11 @@ pub fn with_forecast(
     estimates: &mut [SlotEstimate],
     points: impl IntoIterator<Item = (DateTime<Utc>, Expected)>,
 ) {
+    // `estimates` are in time order, one per quarter hour.
     for (time, expected) in points {
-        if let Some(slot) = estimates.iter_mut().find(|e| e.start == time) {
+        if let Ok(i) = estimates.binary_search_by_key(&time, |e| e.start)
+            && let Some(slot) = estimates.get_mut(i)
+        {
             slot.expected = Some(expected);
             slot.source = EstimateSource::Forecast;
         }

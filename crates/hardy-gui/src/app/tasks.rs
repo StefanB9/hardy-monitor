@@ -157,9 +157,11 @@ impl HardyMonitorApp {
         let db = self.db.clone();
         self.load(
             async move {
-                let current = db.get_averages_range(current.0, current.1, tz).await;
-                let baseline = db.get_averages_range(baseline.0, baseline.1, tz).await;
-                (current, baseline)
+                // Independent queries: run side by side.
+                tokio::join!(
+                    db.get_averages_range(current.0, current.1, tz),
+                    db.get_averages_range(baseline.0, baseline.1, tz)
+                )
             },
             |(current, baseline)| Message::InsightsDataLoaded {
                 current: current.map_err(db_err("get_insights_current")),
