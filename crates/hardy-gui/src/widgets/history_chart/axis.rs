@@ -6,7 +6,7 @@ use hardy_core::{Tz, analytics::midnight_local_as_utc};
 /// Upper end of the value axis: the data maximum plus headroom, rounded up to
 /// a multiple of 20, at least 40 and at most 100. Occupancy rarely reaches
 /// 100%, so a fixed 0–100 axis wastes most of the chart.
-pub(super) fn value_axis_max(values: impl IntoIterator<Item = f64>) -> f64 {
+pub(crate) fn value_axis_max(values: impl IntoIterator<Item = f64>) -> f64 {
     let max = values
         .into_iter()
         .filter(|v| v.is_finite())
@@ -16,7 +16,7 @@ pub(super) fn value_axis_max(values: impl IntoIterator<Item = f64>) -> f64 {
 
 /// Labelled time ticks in the gym's wall clock: every two hours for ranges
 /// up to a day, every midnight up to ~10 days, every Monday beyond.
-pub(super) fn time_ticks(
+pub(crate) fn time_ticks(
     start: DateTime<Utc>,
     end: DateTime<Utc>,
     tz: Tz,

@@ -100,6 +100,8 @@ pub(crate) struct Forecasting {
     upcoming: Vec<PredictionWithConfidence>,
     /// How many of `upcoming` lie within the chart's horizon.
     charted: usize,
+    /// Whether `upcoming` is recent enough for suggestions.
+    usable: bool,
     quiet_window: Option<QuietWindow>,
     /// The forecast picker's options: the default, then every published
     /// model.
@@ -122,6 +124,7 @@ impl Forecasting {
             opening_grace,
             upcoming: Vec::new(),
             charted: 0,
+            usable: false,
             quiet_window: None,
             forecast_picker: combo_box::State::new(vec![ForecastChoice::Best]),
             compare_picker: combo_box::State::new(Vec::new()),
@@ -275,12 +278,16 @@ impl Forecasting {
             .collect();
         self.charted = self.upcoming.partition_point(|p| p.timestamp <= horizon);
         let profile = SlotProfile::from_history(self.history.view(), schedule.timezone());
-        let usable = self
+        self.usable = self
             .made_at()
             .is_some_and(|made| now - made <= IGNORED_AFTER);
-        let forecasts: &[PredictionWithConfidence] = if usable { &self.upcoming } else { &[] };
-        self.quiet_window =
-            next_quiet_window(now, schedule, forecasts, &profile, self.opening_grace);
+        self.quiet_window = next_quiet_window(
+            now,
+            schedule,
+            self.plan_forecast(),
+            &profile,
+            self.opening_grace,
+        );
     }
 
     /// When the default forecast was made.
@@ -304,6 +311,12 @@ impl Forecasting {
     /// The forecast within the chart's horizon.
     pub(crate) fn forecasts(&self) -> &[PredictionWithConfidence] {
         &self.upcoming[..self.charted]
+    }
+
+    /// The whole upcoming forecast for planning, while it is recent enough
+    /// to use (empty otherwise).
+    pub(crate) fn plan_forecast(&self) -> &[PredictionWithConfidence] {
+        if self.usable { &self.upcoming } else { &[] }
     }
 
     pub(crate) fn quiet_window(&self) -> Option<&QuietWindow> {
@@ -407,6 +420,21 @@ mod tests {
                 .is_none_or(|w| w.source == crate::quiet_window::Source::Averages)
         );
         assert!(!f.forecasts().is_empty(), "the line stays on the chart");
+    }
+
+    #[test]
+    fn test_plan_forecast_is_the_whole_day_while_usable() {
+        let schedule = GymSchedule::default();
+        // Six hours ahead on the chart, 15 hours published.
+        let mut f = Forecasting::new(6, TimeDelta::hours(1));
+        f.set_published((1..60).map(|k| published(15 * k, 10.0)).collect());
+        f.refresh(&schedule, at(20));
+        assert_eq!(f.plan_forecast().len(), 58);
+        assert!(f.plan_forecast().iter().all(|p| p.timestamp > at(20)));
+
+        // An hour after it was made, the plan stops using it.
+        f.refresh(&schedule, at(61));
+        assert_eq!(f.plan_forecast().len(), 0);
     }
 
     #[test]

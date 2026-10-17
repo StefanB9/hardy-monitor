@@ -114,7 +114,7 @@ pub fn legend_item(color: Color, label: &str) -> Element<'_, Message> {
 }
 
 /// Muted centred message for sections without data.
-pub fn empty_state(message: &str) -> Element<'_, Message> {
+pub fn empty_state<'a>(message: impl text::IntoFragment<'a>) -> Element<'a, Message> {
     container(
         text(message)
             .size(style::TEXT_BODY)
