@@ -3,7 +3,10 @@
 use hardy_core::{accuracy::summarize, db::SchemaStatus, error::AppError};
 use iced::{Task, window};
 
-use super::{HardyMonitorApp, Message, ViewMode, loads::ErrorSource};
+use super::{
+    HardyMonitorApp, Message, ViewMode,
+    loads::{ErrorSource, Reload},
+};
 use crate::{
     forecasting::ModelOption,
     time_range::{ChartRange, Step, can_step_back, shift_custom},
@@ -143,8 +146,8 @@ impl HardyMonitorApp {
             self.load_analytics(),
             self.load_insights_data(),
             self.load_plan_averages(),
-            self.load_suite_status(),
-            self.load_published_forecast(),
+            self.load_suite_status(Reload::Always),
+            self.load_published_forecast(Reload::Always),
             self.load_forecast_history(),
             self.load_first_reading(),
             data,
@@ -326,13 +329,19 @@ impl HardyMonitorApp {
                 Task::none()
             }
             Message::SuiteStatusLoaded(result) => {
-                if let Some(status) = self.errors.record(ErrorSource::SuiteStatus, result) {
+                if let Some(Some((version, status))) =
+                    self.errors.record(ErrorSource::SuiteStatus, result)
+                {
+                    self.data.suite_version = Some(version);
                     self.data.forecasting.set_status(status);
                 }
                 Task::none()
             }
             Message::PublishedForecastLoaded(result) => {
-                if let Some(forecast) = self.errors.record(ErrorSource::PublishedForecast, result) {
+                if let Some(Some((version, forecast))) =
+                    self.errors.record(ErrorSource::PublishedForecast, result)
+                {
+                    self.data.published_version = Some(version);
                     self.data.forecasting.set_published(forecast);
                     self.refresh_forecasts();
                 }

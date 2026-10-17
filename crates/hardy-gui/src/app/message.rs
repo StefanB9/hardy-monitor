@@ -4,8 +4,8 @@ use chrono::{DateTime, Utc};
 use hardy_core::{
     alert::{AlertDuration, AlertSettings},
     db::{
-        ForecastHistoryEntry, HorizonAccuracy, HourlyAverage, LiveForecast, OccupancyLog,
-        QuarterHourAverage, SchemaStatus,
+        ForecastHistoryEntry, HorizonAccuracy, HourlyAverage, LiveForecast, LiveForecastsVersion,
+        OccupancyLog, QuarterHourAverage, SchemaStatus, SuiteVersion,
     },
     error::AppError,
     repair::RepairSummary,
@@ -157,10 +157,12 @@ pub enum Message {
 
     /// New rows for the forecasting history.
     ForecastHistoryLoaded(Result<Vec<OccupancyLog>, AppError>),
-    /// The forecast models' states, benchmark and selection.
-    SuiteStatusLoaded(Result<SuiteStatus, AppError>),
-    /// Every forecast the daemon published.
-    PublishedForecastLoaded(Result<Vec<LiveForecast>, AppError>),
+    /// The forecast models' states, benchmark and selection with their
+    /// version; `None` if unchanged since the version held.
+    SuiteStatusLoaded(Result<Option<(SuiteVersion, SuiteStatus)>, AppError>),
+    /// Every forecast the forecaster published, with its version; `None` if
+    /// unchanged since the version held.
+    PublishedForecastLoaded(Result<Option<(LiveForecastsVersion, Vec<LiveForecast>)>, AppError>),
     ForecastRunRequested,
     /// Which forecast the chart and the quiet hour use.
     ForecastChoiceSelected(ForecastChoice),

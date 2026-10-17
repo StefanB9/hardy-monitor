@@ -22,6 +22,7 @@ mod readings;
 mod repair_state;
 mod schema;
 mod suite;
+mod versions;
 
 pub use benchmark::{BenchmarkModel, BenchmarkRun, BenchmarkScore};
 pub use forecast_history::ForecastHistoryEntry;
@@ -31,6 +32,7 @@ pub use ml::{ForecasterLease, MlState};
 pub use repair_state::RepairState;
 pub use schema::{Migrations, SchemaStatus, app_schema_version};
 pub use suite::{FitStatus, ModelRecord, ModelUpdate};
+pub use versions::{LiveForecastsVersion, SuiteVersion};
 
 /// Where a stored value came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, sqlx::Type)]

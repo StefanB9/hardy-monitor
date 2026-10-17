@@ -22,7 +22,7 @@ use hardy_core::{
     alert::AlertRules,
     analytics::{DayAnalysis, Insight, OccupancyStats, SlotRange, TrendDirection},
     config::AppConfig,
-    db::{Database, ForecastHistoryEntry, OccupancyLog},
+    db::{Database, ForecastHistoryEntry, LiveForecastsVersion, OccupancyLog, SuiteVersion},
     error::AppError,
     repair::RepairSummary,
     schedule::GymSchedule,
@@ -31,7 +31,7 @@ use hardy_core::{
 use hardy_ml::suite::Family;
 use iced::{Subscription, Task, Theme, widget::canvas::Cache, window};
 pub use loads::RequestId;
-use loads::{Errors, LatestOnly, PendingLoads};
+use loads::{Errors, LatestOnly, PendingLoads, Reload};
 pub use message::{ChartData, Message, RepairPreset, ViewMode};
 use muda::MenuEvent;
 use tray_icon::TrayIconEvent;
@@ -90,6 +90,10 @@ struct MonitorState {
     data_rows: Vec<OccupancyLog>,
     /// The Plan tab's choices and days.
     plan: Planner,
+    /// Versions of the published forecasts and suite status held, so
+    /// unchanged ones are not reloaded.
+    published_version: Option<LiveForecastsVersion>,
+    suite_version: Option<SuiteVersion>,
 }
 
 struct UiState {
@@ -190,6 +194,8 @@ impl HardyMonitorApp {
                 first_reading: None,
                 data_rows: Vec::new(),
                 plan: Planner::new(plan_settings::default_path()),
+                published_version: None,
+                suite_version: None,
             },
             ui: UiState {
                 pending: PendingLoads::default(),
@@ -284,8 +290,8 @@ impl HardyMonitorApp {
         Task::batch([
             self.load_alert_settings(),
             self.load_forecast_history(),
-            self.load_suite_status(),
-            self.load_published_forecast(),
+            self.load_suite_status(Reload::Always),
+            self.load_published_forecast(Reload::Always),
             self.load_chart_history(),
             self.load_analytics(),
             self.load_insights_data(),

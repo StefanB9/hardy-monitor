@@ -200,10 +200,12 @@ impl Forecasting {
 
     /// Models with a published forecast, family by family, best first.
     pub(crate) fn available_models(&self) -> Vec<ModelId> {
+        let published: std::collections::HashSet<&str> =
+            self.published.iter().map(|f| f.model.as_str()).collect();
         self.leaderboard
             .model_order()
             .into_iter()
-            .filter(|id| self.published.iter().any(|f| f.model == id.key()))
+            .filter(|id| published.contains(id.key()))
             .collect()
     }
 

@@ -1,0 +1,85 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT\n                s.retrain_requested_at,\n                s.last_attempt_at,\n                s.last_error,\n                (SELECT MAX(updated_at) FROM forecast_models) AS models_updated_at,\n                (SELECT COUNT(*) FROM forecast_models) AS \"models!\",\n                (SELECT MAX(id) FROM benchmark_runs) AS latest_run,\n                (SELECT MAX(selected_at) FROM forecast_selection) AS selected_at,\n                (SELECT COUNT(*) FROM forecast_selection) AS \"selections!\"\n            FROM ml_state s\n            WHERE s.id = 1\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "retrain_requested_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "ml_state",
+            "name": "retrain_requested_at"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "last_attempt_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "ml_state",
+            "name": "last_attempt_at"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "last_error",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "ml_state",
+            "name": "last_error"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "models_updated_at",
+        "type_info": "Timestamptz",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 4,
+        "name": "models!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 5,
+        "name": "latest_run",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 6,
+        "name": "selected_at",
+        "type_info": "Timestamptz",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 7,
+        "name": "selections!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      true,
+      true,
+      true,
+      null,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "a73bad8df40683effc47fdd14d7fb400ed658125bc8728d9db2bdf4b7adff673"
+}
