@@ -1,5 +1,5 @@
 //! "Insights": summary statistics, busiest and quietest slots, and findings
-//! over the last four weeks.
+//! over the last 28 days.
 
 use hardy_core::analytics::{
     Insight, InsightCategory, OccupancyStats, TrendDirection, weekday_short,
@@ -82,7 +82,7 @@ fn tiles<'a>(props: &InsightsProps<'a>) -> Element<'a, Message> {
         "Trend",
         trend,
         trend_color,
-        Some("vs. the 4 weeks before".to_string()),
+        Some("vs. the 28 days before".to_string()),
     ))]
     .spacing(style::SPACE_L);
 

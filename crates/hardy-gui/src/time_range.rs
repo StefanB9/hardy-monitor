@@ -150,6 +150,20 @@ impl AnalyticsRange {
     }
 }
 
+/// Length of each period Insights compares: every weekday four times.
+const INSIGHTS_DAYS: i64 = 28;
+
+/// `[start, end)` of a period.
+pub type Period = (DateTime<Utc>, DateTime<Utc>);
+
+/// The last 28 days up to `now` and the 28 days before, the periods
+/// Insights compares.
+pub fn insights_periods(now: DateTime<Utc>) -> (Period, Period) {
+    let period = TimeDelta::days(INSIGHTS_DAYS);
+    let split = now - period;
+    ((split, now), (split - period, split))
+}
+
 /// Parses `YYYY-MM-DD`.
 pub fn parse_date(s: &str) -> Option<NaiveDate> {
     NaiveDate::parse_from_str(s.trim(), "%Y-%m-%d").ok()
@@ -244,6 +258,19 @@ mod tests {
         assert_eq!(
             AnalyticsRange::Last4Weeks.start(now, tz),
             local(17, 0)? - TimeDelta::weeks(3)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_insights_periods_are_the_last_28_days_and_the_28_before() -> Result<()> {
+        // Wednesday midday: every weekday is in each period four times.
+        let now = local(19, 12)?;
+        let (current, baseline) = insights_periods(now);
+        assert_eq!(current, (now - TimeDelta::days(28), now));
+        assert_eq!(
+            baseline,
+            (now - TimeDelta::days(56), now - TimeDelta::days(28))
         );
         Ok(())
     }
