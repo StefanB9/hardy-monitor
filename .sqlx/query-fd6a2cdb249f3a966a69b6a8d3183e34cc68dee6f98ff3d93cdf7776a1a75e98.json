@@ -1,0 +1,53 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT\n                weekday as \"weekday!: i32\",\n                quarter as \"quarter!: i32\",\n                AVG(day_mean) as \"avg_percentage!: f64\",\n                COALESCE(STDDEV_SAMP(day_mean), 0) as \"std_dev!: f64\",\n                COUNT(*) as \"days!: i64\"\n            FROM (\n                SELECT\n                    (EXTRACT(ISODOW FROM local)::INTEGER - 1) as weekday,\n                    (EXTRACT(HOUR FROM local)::INTEGER * 4\n                        + EXTRACT(MINUTE FROM local)::INTEGER / 15) as quarter,\n                    local::DATE as local_date,\n                    AVG(percentage) as day_mean\n                FROM (\n                    SELECT timestamp AT TIME ZONE $3 as local, percentage\n                    FROM occupancy_logs\n                    WHERE timestamp >= $1 AND timestamp < $2\n                      -- Repair's 0% opening/closing entries are not observations.\n                      AND source <> 'boundary'\n                ) AS readings\n                GROUP BY weekday, quarter, local_date\n            ) AS days\n            GROUP BY weekday, quarter\n            ORDER BY weekday, quarter\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "weekday!: i32",
+        "type_info": "Int4",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 1,
+        "name": "quarter!: i32",
+        "type_info": "Int4",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 2,
+        "name": "avg_percentage!: f64",
+        "type_info": "Float8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 3,
+        "name": "std_dev!: f64",
+        "type_info": "Float8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 4,
+        "name": "days!: i64",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Timestamptz",
+        "Timestamptz",
+        "Text"
+      ]
+    },
+    "nullable": [
+      null,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "fd6a2cdb249f3a966a69b6a8d3183e34cc68dee6f98ff3d93cdf7776a1a75e98"
+}

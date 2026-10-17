@@ -1,6 +1,6 @@
 //! Historical occupancy analytics: period comparison and trend, summary
-//! statistics, busiest and quietest slots, insights, and gym-local time
-//! helpers.
+//! statistics, busiest and quietest slots, insights, visit planning, and
+//! gym-local time helpers.
 
 mod comparison;
 mod insights;
@@ -8,6 +8,7 @@ mod slots;
 mod stats;
 mod time;
 mod trend;
+pub mod visit;
 
 pub use comparison::{
     ComparisonMode, HourlyComparison, PeriodComparison, build_hourly_comparisons, compare_periods,
