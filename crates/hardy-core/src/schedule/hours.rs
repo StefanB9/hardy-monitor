@@ -45,6 +45,11 @@ impl GymSchedule {
         self.local_hour_on(date, self.get_open_hour(date))
     }
 
+    /// The instant the gym closes on `date` (a gym-local calendar day).
+    pub fn closing_time_on(&self, date: NaiveDate) -> DateTime<Utc> {
+        self.local_hour_on(date, self.get_close_hour(date))
+    }
+
     /// The first closing instant strictly after `now`: today's closing time,
     /// or tomorrow's once today's has passed.
     pub fn next_closing_after(&self, now: DateTime<Utc>) -> DateTime<Utc> {
@@ -129,6 +134,22 @@ mod tests {
         assert_eq!(
             schedule.opening_time_on(saturday),
             make_utc(2024, 6, 15, 7, 0)
+        );
+    }
+
+    #[test]
+    fn test_closing_time_on_uses_the_days_hours() {
+        let schedule = GymSchedule::default();
+        let monday = NaiveDate::from_ymd_opt(2024, 6, 17).unwrap_or_default();
+        let saturday = NaiveDate::from_ymd_opt(2024, 6, 15).unwrap_or_default();
+        // 23:00 / 21:00 CEST.
+        assert_eq!(
+            schedule.closing_time_on(monday),
+            make_utc(2024, 6, 17, 21, 0)
+        );
+        assert_eq!(
+            schedule.closing_time_on(saturday),
+            make_utc(2024, 6, 15, 19, 0)
         );
     }
 

@@ -15,6 +15,8 @@ image = { workspace = true }
 mimalloc = { workspace = true }
 muda = { workspace = true }
 notify-rust = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-appender = { workspace = true }

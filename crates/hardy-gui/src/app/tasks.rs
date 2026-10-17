@@ -162,6 +162,19 @@ impl HardyMonitorApp {
         )
     }
 
+    /// Quarter-hour averages of the last 28 days for the Plan tab.
+    pub(super) fn load_plan_averages(&mut self) -> Task<Message> {
+        let tz = self.schedule.timezone();
+        let (recent, _) = insights_periods(self.clock.now_utc());
+        let db = self.db.clone();
+        self.load(
+            async move { db.get_quarter_hour_averages(recent.0, recent.1, tz).await },
+            |r: anyhow::Result<Vec<hardy_core::db::QuarterHourAverage>>| {
+                Message::PlanAveragesLoaded(r.map_err(db_err("get_quarter_hour_averages")))
+            },
+        )
+    }
+
     /// Scores of the daemon's logged forecasts over the last days.
     pub(super) fn load_accuracy(&mut self) -> Task<Message> {
         let now = self.clock.now_utc();

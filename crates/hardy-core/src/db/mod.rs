@@ -94,6 +94,20 @@ pub struct HourlyAverage {
     pub days: i64,
 }
 
+/// Average occupancy of one gym-local weekday (0 = Monday) and quarter hour
+/// (0 = 00:00–00:15), averaged over days: every day counts once.
+#[derive(Debug, Clone)]
+pub struct QuarterHourAverage {
+    pub weekday: i32,
+    pub quarter: i32,
+    /// Mean of the days' averages.
+    pub avg_percentage: f64,
+    /// Sample standard deviation of the days' averages; 0 with one day.
+    pub std_dev: f64,
+    /// Distinct gym-local days with readings in this quarter hour.
+    pub days: i64,
+}
+
 /// Connection pool to the occupancy database.
 #[derive(Clone, Debug)]
 pub struct Database {

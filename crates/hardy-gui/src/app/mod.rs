@@ -41,6 +41,8 @@ use crate::{
     forecasting::Forecasting,
     freshness::{Freshness, freshness},
     leaderboard::Sort,
+    plan_settings,
+    planner::Planner,
     style::{self, OccupancyLevel},
     time_range::Step,
     tray::{Tray, TrayStatus, quiet_label, rgba8, tooltip_text},
@@ -80,6 +82,8 @@ struct MonitorState {
     first_reading: Option<DateTime<Utc>>,
     /// Readings of the Data tab's period.
     data_rows: Vec<OccupancyLog>,
+    /// The Plan tab's choices and days.
+    plan: Planner,
 }
 
 struct UiState {
@@ -92,6 +96,8 @@ struct UiState {
     gauge_cache: Cache,
     heatmap_cache: Cache,
     heatmap_tooltip_cache: Cache,
+    /// The Plan tab's day curve.
+    plan_cache: Cache,
     current_view: ViewMode,
     analytics_range: AnalyticsRange,
     chart_range: ChartRange,
@@ -175,6 +181,7 @@ impl HardyMonitorApp {
                 accuracy: None,
                 first_reading: None,
                 data_rows: Vec::new(),
+                plan: Planner::new(plan_settings::default_path()),
             },
             ui: UiState {
                 pending: PendingLoads::default(),
@@ -186,6 +193,7 @@ impl HardyMonitorApp {
                 gauge_cache: Cache::new(),
                 heatmap_cache: Cache::new(),
                 heatmap_tooltip_cache: Cache::new(),
+                plan_cache: Cache::new(),
                 current_view: ViewMode::default(),
                 analytics_range: AnalyticsRange::default(),
                 chart_range: ChartRange::default(),
@@ -274,6 +282,7 @@ impl HardyMonitorApp {
             self.load_chart_history(),
             self.load_analytics(),
             self.load_insights_data(),
+            self.load_plan_averages(),
             self.load_accuracy(),
             self.load_first_reading(),
             self.fetch_latest(),
