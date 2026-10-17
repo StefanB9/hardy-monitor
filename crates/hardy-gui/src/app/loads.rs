@@ -76,6 +76,8 @@ pub(crate) enum ErrorSource {
     PublishedForecast,
     AlertSettings,
     FirstReading,
+    /// The Plan tab's averages.
+    Plan,
     /// The Data tab's readings.
     DataTable,
     Export,

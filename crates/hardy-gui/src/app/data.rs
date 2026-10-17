@@ -130,9 +130,20 @@ impl HardyMonitorApp {
     }
 
     pub(super) fn refresh_forecasts(&mut self) {
-        self.data
-            .forecasting
-            .refresh(&self.schedule, self.clock.now_utc());
+        let now = self.clock.now_utc();
+        self.data.forecasting.refresh(&self.schedule, now);
         self.ui.chart_cache.clear();
+        self.refresh_plan();
+    }
+
+    /// Recomputes the Plan tab's days from the current time, averages,
+    /// forecast and settings.
+    pub(super) fn refresh_plan(&mut self) {
+        self.data.plan.refresh(
+            self.clock.now_utc(),
+            &self.schedule,
+            self.data.forecasting.plan_forecast(),
+        );
+        self.ui.plan_cache.clear();
     }
 }

@@ -10,7 +10,7 @@ use crate::{
     style::{self},
     time_range::can_step_back,
     views::{
-        self, DataProps, InsightsProps, ModelDataProps, NowProps, WeekProps,
+        self, DataProps, InsightsProps, ModelDataProps, NowProps, PlanProps, WeekProps,
         components::secondary_button, schema_notice::SchemaGate,
     },
 };
@@ -54,6 +54,14 @@ impl HardyMonitorApp {
                 insights: &self.data.insights,
                 low_threshold: self.config.thresholds.low_occupancy_percent,
                 high_threshold: self.config.thresholds.high_occupancy_percent,
+            }),
+            ViewMode::Plan => views::plan::view(PlanProps {
+                planner: &self.data.plan,
+                now: self.clock.now_utc(),
+                schedule: &self.schedule,
+                low_threshold: self.config.thresholds.low_occupancy_percent,
+                high_threshold: self.config.thresholds.high_occupancy_percent,
+                curve_cache: &self.ui.plan_cache,
             }),
             ViewMode::ModelData => views::model_data::view(ModelDataProps {
                 timezone: self.schedule.timezone(),

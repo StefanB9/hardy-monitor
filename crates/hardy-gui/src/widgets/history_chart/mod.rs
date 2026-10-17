@@ -7,6 +7,7 @@ mod layers;
 mod past;
 mod plot;
 
+pub(crate) use axis::{time_ticks, value_axis_max};
 use chrono::{DateTime, TimeDelta, Utc};
 use hardy_core::{
     Tz,

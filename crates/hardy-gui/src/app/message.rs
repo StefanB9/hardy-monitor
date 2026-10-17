@@ -5,7 +5,7 @@ use hardy_core::{
     alert::{AlertDuration, AlertSettings},
     db::{
         ForecastHistoryEntry, HorizonAccuracy, HourlyAverage, LiveForecast, OccupancyLog,
-        SchemaStatus,
+        QuarterHourAverage, SchemaStatus,
     },
     error::AppError,
     repair::RepairSummary,
@@ -17,6 +17,8 @@ use crate::{
     data_table::DataPeriod,
     forecasting::{ForecastChoice, ModelOption, SuiteStatus},
     leaderboard::SortKey,
+    plan_settings::VisitLength,
+    planner::{RangeEnd, RangeKind},
     time_range::{AnalyticsRange, ChartRange, Step},
 };
 
@@ -28,7 +30,7 @@ pub struct ChartData {
     pub past_forecasts: Vec<ForecastHistoryEntry>,
 }
 
-/// The four top-level views.
+/// The top-level views.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ViewMode {
     #[default]
@@ -37,16 +39,19 @@ pub enum ViewMode {
     /// Every stored reading of a day or week, as a table.
     Data,
     Insights,
+    /// When to go on one of the next seven days.
+    Plan,
     ModelData,
 }
 
 impl ViewMode {
     /// All views in sidebar order.
-    pub const ALL: [ViewMode; 5] = [
+    pub const ALL: [ViewMode; 6] = [
         ViewMode::Now,
         ViewMode::Week,
         ViewMode::Data,
         ViewMode::Insights,
+        ViewMode::Plan,
         ViewMode::ModelData,
     ];
 
@@ -57,6 +62,7 @@ impl ViewMode {
             ViewMode::Week => "Week",
             ViewMode::Data => "Data",
             ViewMode::Insights => "Insights",
+            ViewMode::Plan => "Plan",
             ViewMode::ModelData => "Model & Data",
         }
     }
@@ -68,6 +74,7 @@ impl ViewMode {
             ViewMode::Week => "▦",
             ViewMode::Data => "≡",
             ViewMode::Insights => "✦",
+            ViewMode::Plan => "◷",
             ViewMode::ModelData => "⚙",
         }
     }
@@ -160,6 +167,14 @@ pub enum Message {
     OverlayRemoved(ModelOption),
     AccuracyLoaded(Result<Vec<HorizonAccuracy>, AppError>),
 
+    /// Quarter-hour averages of the last 28 days, for the Plan tab.
+    PlanAveragesLoaded(Result<Vec<QuarterHourAverage>, AppError>),
+    /// A day chip clicked (0: today).
+    PlanDaySelected(usize),
+    PlanLengthSelected(VisitLength),
+    /// One end of the workday or weekend time range moved to an hour.
+    PlanRangeChanged(RangeKind, RangeEnd, u32),
+
     /// Result of comparing the database schema with this build.
     SchemaChecked(Result<SchemaStatus, AppError>),
     RetrySchemaCheck,
@@ -182,6 +197,7 @@ impl Message {
             | Message::PublishedForecastLoaded(_)
             | Message::AccuracyLoaded(_)
             | Message::FirstReadingLoaded(_)
+            | Message::PlanAveragesLoaded(_)
             | Message::DataLoaded(..) => true,
             Message::Tick
             | Message::FetchTick
@@ -215,6 +231,9 @@ impl Message {
             | Message::ForecastChoiceSelected(_)
             | Message::OverlayAdded(_)
             | Message::OverlayRemoved(_)
+            | Message::PlanDaySelected(_)
+            | Message::PlanLengthSelected(_)
+            | Message::PlanRangeChanged(..)
             | Message::SchemaChecked(_)
             | Message::RetrySchemaCheck => false,
         }
@@ -249,6 +268,7 @@ mod tests {
             Message::PublishedForecastLoaded(failed()),
             Message::AccuracyLoaded(failed()),
             Message::FirstReadingLoaded(failed()),
+            Message::PlanAveragesLoaded(failed()),
             Message::DataLoaded(RequestId::default(), failed()),
         ];
         assert!(results.iter().all(Message::finishes_load));
@@ -267,7 +287,20 @@ mod tests {
                 offset: 0.0,
                 height: 0.0,
             },
+            Message::PlanDaySelected(1),
+            Message::PlanLengthSelected(VisitLength::OneHour),
+            Message::PlanRangeChanged(RangeKind::Workday, RangeEnd::Earliest, 17),
         ];
         assert!(!others.iter().any(Message::finishes_load));
+    }
+
+    #[test]
+    fn test_plan_sits_between_insights_and_model_data() {
+        let titles: Vec<_> = ViewMode::ALL.iter().map(|m| m.title()).collect();
+        assert_eq!(
+            titles,
+            vec!["Now", "Week", "Data", "Insights", "Plan", "Model & Data"]
+        );
+        assert_eq!(ViewMode::Plan.icon(), "◷");
     }
 }

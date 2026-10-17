@@ -103,7 +103,30 @@ impl HardyMonitorApp {
             | Message::ForecastChoiceSelected(_)
             | Message::OverlayAdded(_)
             | Message::OverlayRemoved(_) => self.update_model(message),
+            Message::PlanAveragesLoaded(_)
+            | Message::PlanDaySelected(_)
+            | Message::PlanLengthSelected(_)
+            | Message::PlanRangeChanged(..) => self.update_plan(message),
         }
+    }
+
+    /// The Plan tab: its averages and choices.
+    fn update_plan(&mut self, message: Message) -> Task<Message> {
+        match message {
+            Message::PlanAveragesLoaded(result) => {
+                if let Some(averages) = self.errors.record(ErrorSource::Plan, result) {
+                    self.data.plan.set_averages(averages);
+                }
+            }
+            Message::PlanDaySelected(index) => self.data.plan.select_day(index),
+            Message::PlanLengthSelected(length) => self.data.plan.set_length(length),
+            Message::PlanRangeChanged(kind, end, hour) => {
+                self.data.plan.set_range(kind, end, hour);
+            }
+            _ => return Task::none(),
+        }
+        self.refresh_plan();
+        Task::none()
     }
 
     /// Reloads everything shown; the Data tab's readings only while it is
@@ -120,6 +143,7 @@ impl HardyMonitorApp {
             self.load_chart_history(),
             self.load_analytics(),
             self.load_insights_data(),
+            self.load_plan_averages(),
             self.load_suite_status(),
             self.load_published_forecast(),
             self.load_forecast_history(),
@@ -173,6 +197,7 @@ impl HardyMonitorApp {
                     ViewMode::Week => self.load_analytics(),
                     ViewMode::Data => self.load_data_table(),
                     ViewMode::Insights => self.load_insights_data(),
+                    ViewMode::Plan => self.load_plan_averages(),
                     ViewMode::ModelData => self.load_accuracy(),
                     ViewMode::Now => Task::none(),
                 }
@@ -238,6 +263,11 @@ impl HardyMonitorApp {
         match self.ui.current_view {
             ViewMode::Now => {}
             ViewMode::Data => return self.step_data(step),
+            ViewMode::Plan => {
+                self.data.plan.step_day(step);
+                self.ui.plan_cache.clear();
+                return Task::none();
+            }
             ViewMode::Week | ViewMode::Insights | ViewMode::ModelData => return Task::none(),
         }
         let now = self.clock.now_utc();
