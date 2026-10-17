@@ -6,6 +6,9 @@ use super::{
 };
 use crate::db::HourlyAverage;
 
+/// Longest quiet window suggested: a workout plus some slack.
+const QUIET_WINDOW_MAX_HOURS: usize = 3;
+
 /// A finding worth showing, e.g. "Saturday is the quietest day".
 #[derive(Debug, Clone)]
 pub struct Insight {
@@ -124,7 +127,7 @@ pub fn generate_insights(
         });
     }
 
-    let quiet_windows = find_quiet_windows(current, 40.0, 2);
+    let quiet_windows = find_quiet_windows(current, 40.0, 2, QUIET_WINDOW_MAX_HOURS);
     if !quiet_windows.is_empty() {
         let best_window = &quiet_windows[0];
         insights.push(Insight {
@@ -294,7 +297,7 @@ mod tests {
     #[test]
     fn test_insights_write_hours_with_two_digits() -> anyhow::Result<()> {
         let mut data = vec![seen(0, 9, 90.0, 4), seen(0, 10, 50.0, 4)];
-        data.extend((17..21).map(|h| seen(5, h, 6.0, 4)));
+        data.extend((18..21).map(|h| seen(5, h, 6.0, 4)));
         let insights = generate_insights(&data, None);
         let peak = find(&insights, InsightCategory::Peak)?;
         assert!(
@@ -307,7 +310,7 @@ mod tests {
             .find(|i| i.title == "Best workout window")
             .ok_or_else(|| anyhow::anyhow!("no window in {insights:?}"))?;
         assert!(
-            window.description.starts_with("Sat 17:00–21:00"),
+            window.description.starts_with("Sat 18:00–21:00"),
             "{}",
             window.description
         );
