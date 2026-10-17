@@ -1,4 +1,4 @@
-//! Busiest and quietest slots, and longer quiet windows.
+//! Whether a slot has enough data, and longer quiet windows.
 
 use crate::db::HourlyAverage;
 
@@ -17,30 +17,6 @@ pub const MIN_DAYS: i64 = 2;
 /// Whether `slot` was seen on enough days for its average to count.
 pub(super) fn is_reliable(slot: &HourlyAverage) -> bool {
     slot.days >= MIN_DAYS
-}
-
-/// The `top_n` busiest `(weekday, hour, average)` slots.
-pub fn find_peak_hours(data: &[HourlyAverage], top_n: usize) -> Vec<(i32, i32, f64)> {
-    let mut sorted: Vec<_> = data
-        .iter()
-        .filter(|h| is_reliable(h))
-        .map(|h| (h.weekday, h.hour, h.avg_percentage))
-        .collect();
-    sorted.sort_by(|a, b| b.2.total_cmp(&a.2));
-    sorted.truncate(top_n);
-    sorted
-}
-
-/// The `top_n` quietest `(weekday, hour, average)` slots.
-pub fn find_quiet_hours(data: &[HourlyAverage], top_n: usize) -> Vec<(i32, i32, f64)> {
-    let mut sorted: Vec<_> = data
-        .iter()
-        .filter(|h| is_reliable(h) && h.avg_percentage > 0.0)
-        .map(|h| (h.weekday, h.hour, h.avg_percentage))
-        .collect();
-    sorted.sort_by(|a, b| a.2.total_cmp(&b.2));
-    sorted.truncate(top_n);
-    sorted
 }
 
 /// Runs of at least `min_hours` consecutive hours at or below `threshold`,
@@ -142,9 +118,6 @@ mod tests {
     #[test]
     fn test_slots_need_two_days_not_two_readings() {
         // 60 readings, but all from one day.
-        let data = vec![seen(0, 10, 90.0, 1), seen(0, 11, 50.0, 2)];
-        assert_eq!(find_peak_hours(&data, 5), vec![(0, 11, 50.0)]);
-        assert_eq!(find_quiet_hours(&data, 5), vec![(0, 11, 50.0)]);
         let windows = find_quiet_windows(&[seen(1, 9, 5.0, 1), seen(1, 10, 5.0, 1)], 40.0, 2, 24);
         assert!(windows.is_empty(), "{windows:?}");
     }
@@ -170,38 +143,6 @@ mod tests {
         let windows = find_quiet_windows(&data, 40.0, 2, 24);
         let spans: Vec<(i32, i32)> = windows.iter().map(|w| (w.start_hour, w.end_hour)).collect();
         assert_eq!(spans, vec![(9, 11), (12, 14)]);
-    }
-
-    #[test]
-    fn test_find_peak_hours() {
-        let data = vec![
-            make_hourly_avg(0, 10, 30.0, 5),
-            make_hourly_avg(0, 11, 80.0, 5),
-            make_hourly_avg(1, 10, 70.0, 5),
-            make_hourly_avg(2, 15, 90.0, 5),
-        ];
-
-        let result = find_peak_hours(&data, 2);
-
-        assert_eq!(result.len(), 2);
-        assert_eq!(result[0], (2, 15, 90.0));
-        assert_eq!(result[1], (0, 11, 80.0));
-    }
-
-    #[test]
-    fn test_find_quiet_hours() {
-        let data = vec![
-            make_hourly_avg(0, 10, 10.0, 5),
-            make_hourly_avg(0, 11, 80.0, 5),
-            make_hourly_avg(1, 10, 20.0, 5),
-            make_hourly_avg(2, 15, 90.0, 5),
-        ];
-
-        let result = find_quiet_hours(&data, 2);
-
-        assert_eq!(result.len(), 2);
-        assert_eq!(result[0], (0, 10, 10.0));
-        assert_eq!(result[1], (1, 10, 20.0));
     }
 
     #[test]

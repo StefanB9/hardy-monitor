@@ -4,8 +4,8 @@ use chrono::{DateTime, Utc};
 use hardy_core::{
     alert::Alert,
     analytics::{
-        ComparisonMode, analyze_days, calculate_stats, compare_periods, find_peak_hours,
-        find_quiet_hours, generate_insights,
+        ComparisonMode, TOP_HOURS, analyze_days, busiest_ranges, calculate_stats, compare_periods,
+        generate_insights, quietest_ranges,
     },
     db::HourlyAverage,
     error::AppError,
@@ -84,6 +84,8 @@ impl HardyMonitorApp {
     pub(super) fn set_week_data(&mut self, data: &[HourlyAverage]) {
         self.data.week_grid = WeekGrid::new(data, &self.schedule);
         self.data.week_days = analyze_days(data);
+        self.data.week_busy = busiest_ranges(data, TOP_HOURS);
+        self.data.week_quiet = quietest_ranges(data, TOP_HOURS);
         self.ui.heatmap_cache.clear();
         self.ui.heatmap_tooltip_cache.clear();
     }
@@ -97,8 +99,8 @@ impl HardyMonitorApp {
             return;
         };
         self.data.stats = calculate_stats(&current);
-        self.data.peak_hours = find_peak_hours(&current, 5);
-        self.data.quiet_hours = find_quiet_hours(&current, 5);
+        self.data.busy_ranges = busiest_ranges(&current, TOP_HOURS);
+        self.data.quiet_ranges = quietest_ranges(&current, TOP_HOURS);
         match baseline {
             Ok(baseline) => {
                 let comparison = compare_periods(&baseline, &current, ComparisonMode::WeekOverWeek);

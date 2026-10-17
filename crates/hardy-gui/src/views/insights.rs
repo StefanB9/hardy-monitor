@@ -1,8 +1,8 @@
-//! "Insights": summary statistics, busiest and quietest slots, and findings
+//! "Insights": summary statistics, busiest and quietest times, and findings
 //! over the last 28 days.
 
 use hardy_core::analytics::{
-    Insight, InsightCategory, OccupancyStats, TrendDirection, weekday_short,
+    Insight, InsightCategory, LISTED_RANGES, OccupancyStats, SlotRange, TrendDirection,
 };
 use iced::{
     Alignment, Border, Color, Element, Length,
@@ -20,10 +20,10 @@ use crate::{
 pub struct InsightsProps<'a> {
     pub trend: Option<TrendDirection>,
     pub stats: Option<&'a OccupancyStats>,
-    /// `(weekday, hour, average)` of the busiest slots.
-    pub peak_hours: &'a [(i32, i32, f64)],
-    /// `(weekday, hour, average)` of the quietest slots.
-    pub quiet_hours: &'a [(i32, i32, f64)],
+    /// Busiest ranges, busiest first.
+    pub busy_ranges: &'a [SlotRange],
+    /// Quietest ranges, quietest first.
+    pub quiet_ranges: &'a [SlotRange],
     pub insights: &'a [Insight],
     pub low_threshold: f64,
     pub high_threshold: f64,
@@ -118,28 +118,41 @@ fn tiles<'a>(props: &InsightsProps<'a>) -> Element<'a, Message> {
     tiles.into()
 }
 
-fn slot_list<'a>(
+/// "~6% (5–7%)": the range's average and its quietest and busiest hour;
+/// a one-hour range shows its value only.
+fn range_badge(range: &SlotRange) -> String {
+    if range.end_hour - range.start_hour <= 1 {
+        format!("{:.0}%", range.average)
+    } else {
+        format!(
+            "~{:.0}% ({:.0}–{:.0}%)",
+            range.average, range.min, range.max
+        )
+    }
+}
+
+fn range_list<'a>(
     title: &'a str,
-    slots: &[(i32, i32, f64)],
+    ranges: &[SlotRange],
     low: f64,
     high: f64,
 ) -> Element<'a, Message> {
-    if slots.is_empty() {
+    if ranges.is_empty() {
         return card(title, empty_state("Not enough data yet"))
             .width(Length::FillPortion(1))
             .into();
     }
     let mut list = column![].spacing(style::SPACE_S);
-    for &(weekday, hour, value) in slots.iter().take(5) {
+    for range in ranges.iter().take(LISTED_RANGES) {
         list = list.push(
             row![
-                text(format!("{} {hour:02}:00", weekday_short(weekday)))
+                text(range.label())
                     .size(style::TEXT_BODY)
                     .color(style::TEXT_PRIMARY)
                     .width(Length::Fill),
                 badge(
-                    format!("{value:.0}%"),
-                    OccupancyLevel::from_percentage(value, low, high).color()
+                    range_badge(range),
+                    OccupancyLevel::from_percentage(range.average, low, high).color()
                 ),
             ]
             .align_y(Alignment::Center),
@@ -195,8 +208,8 @@ pub fn view(props: InsightsProps<'_>) -> Element<'_, Message> {
     let content = column![
         tiles(&props),
         row![
-            slot_list("Busiest times", props.peak_hours, low, high),
-            slot_list("Quietest times", props.quiet_hours, low, high),
+            range_list("Busiest times", props.busy_ranges, low, high),
+            range_list("Quietest times", props.quiet_ranges, low, high),
         ]
         .spacing(style::SPACE_L),
         card("Findings", findings).width(Length::Fill),
@@ -220,6 +233,26 @@ mod tests {
             sample_count: 100,
             coefficient_of_variation: cv,
         }
+    }
+
+    #[test]
+    fn test_range_badge_shows_average_and_span() {
+        let range = SlotRange {
+            weekday: 5,
+            start_hour: 16,
+            end_hour: 21,
+            average: 6.2,
+            min: 5.4,
+            max: 7.3,
+        };
+        assert_eq!(range_badge(&range), "~6% (5–7%)");
+        let single = SlotRange {
+            end_hour: 17,
+            min: 6.2,
+            max: 6.2,
+            ..range
+        };
+        assert_eq!(range_badge(&single), "6%");
     }
 
     #[test]
