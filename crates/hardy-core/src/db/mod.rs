@@ -87,7 +87,11 @@ pub struct HourlyAverage {
     pub weekday: i32,
     pub hour: i32,
     pub avg_percentage: f64,
+    /// Readings averaged (one per minute).
     pub sample_count: i64,
+    /// Distinct gym-local days with readings in this hour: how many times
+    /// the hour was actually seen.
+    pub days: i64,
 }
 
 /// Connection pool to the occupancy database.
@@ -290,6 +294,7 @@ mod tests {
             hour: 10,
             avg_percentage: 45.5,
             sample_count: 100,
+            days: 2,
         };
         assert_eq!(avg.weekday, 0);
         assert_eq!(avg.hour, 10);
@@ -304,6 +309,7 @@ mod tests {
             hour: 23,
             avg_percentage: 0.0,
             sample_count: 1,
+            days: 1,
         };
         assert_eq!(avg.weekday, 6);
         assert_eq!(avg.hour, 23);

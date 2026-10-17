@@ -11,7 +11,7 @@ use hardy_core::{
 use iced::Task;
 
 use super::{ChartData, HardyMonitorApp, Message, loads::ErrorSource};
-use crate::{forecasting::SuiteStatus, time_range::AnalyticsRange};
+use crate::{forecasting::SuiteStatus, time_range::insights_periods};
 
 /// Wraps a database error with the failing operation.
 pub(super) fn db_err(op: &'static str) -> impl Fn(anyhow::Error) -> AppError {
@@ -144,19 +144,15 @@ impl HardyMonitorApp {
         )
     }
 
-    /// The last four weeks and the four before them, for insights.
+    /// The last 28 days and the 28 before them, for insights.
     pub(super) fn load_insights_data(&mut self) -> Task<Message> {
-        let now = self.clock.now_utc();
         let tz = self.schedule.timezone();
-        let current_start = AnalyticsRange::Last4Weeks.start(now, tz);
-        let baseline_start = current_start - chrono::TimeDelta::weeks(4);
+        let (current, baseline) = insights_periods(self.clock.now_utc());
         let db = self.db.clone();
         self.load(
             async move {
-                let current = db.get_averages_range(current_start, now, tz).await;
-                let baseline = db
-                    .get_averages_range(baseline_start, current_start, tz)
-                    .await;
+                let current = db.get_averages_range(current.0, current.1, tz).await;
+                let baseline = db.get_averages_range(baseline.0, baseline.1, tz).await;
                 (current, baseline)
             },
             |(current, baseline)| Message::InsightsDataLoaded {

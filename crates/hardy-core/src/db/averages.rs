@@ -30,11 +30,13 @@ impl Database {
                 weekday as "weekday!: i32",
                 hour as "hour!: i32",
                 AVG(percentage) as "avg_percentage!: f64",
-                COUNT(*) as "sample_count!: i64"
+                COUNT(*) as "sample_count!: i64",
+                COUNT(DISTINCT local_date) as "days!: i64"
             FROM (
                 SELECT
                     (EXTRACT(ISODOW FROM timestamp AT TIME ZONE $3)::INTEGER - 1) as weekday,
                     EXTRACT(HOUR FROM timestamp AT TIME ZONE $3)::INTEGER as hour,
+                    (timestamp AT TIME ZONE $3)::DATE as local_date,
                     percentage
                 FROM occupancy_logs
                 WHERE timestamp >= $1 AND timestamp < $2

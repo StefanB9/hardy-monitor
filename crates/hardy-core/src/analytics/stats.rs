@@ -26,6 +26,8 @@ pub struct DayAnalysis {
     pub quietest_hour: Option<i32>,
     pub quietest_occupancy: f64,
     pub sample_count: i64,
+    /// Most distinct days any of its hours was seen on.
+    pub days: i64,
 }
 
 /// Statistics over all slots; `None` without data.
@@ -116,6 +118,7 @@ pub fn analyze_days(data: &[HourlyAverage]) -> Vec<DayAnalysis> {
                 quietest_hour: quietest.map(|h| h.hour),
                 quietest_occupancy: quietest.map_or(0.0, |h| h.avg_percentage),
                 sample_count: total_samples,
+                days: day_data.iter().map(|h| h.days).max().unwrap_or(0),
             }
         })
         .collect()
@@ -135,6 +138,7 @@ mod tests {
             hour,
             avg_percentage: pct,
             sample_count: samples,
+            days: samples,
         }
     }
 
@@ -176,6 +180,19 @@ mod tests {
         assert_eq!(result.sample_count, 4);
         assert!(result.std_dev > 0.0);
         Ok(())
+    }
+
+    #[test]
+    fn test_analyze_days_counts_the_days_a_weekday_was_seen() {
+        let mut data = vec![
+            make_hourly_avg(0, 9, 20.0, 3),
+            make_hourly_avg(0, 10, 30.0, 4),
+        ];
+        data[0].days = 3;
+        data[1].days = 4;
+        let days = analyze_days(&data);
+        assert_eq!(days[0].days, 4);
+        assert_eq!(days[1].days, 0);
     }
 
     #[test]
