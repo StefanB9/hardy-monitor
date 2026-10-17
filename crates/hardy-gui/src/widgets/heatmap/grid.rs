@@ -108,6 +108,7 @@ mod tests {
             hour,
             avg_percentage: value,
             sample_count: 60,
+            days: 1,
         }
     }
 
