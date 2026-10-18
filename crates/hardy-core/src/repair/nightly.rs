@@ -59,7 +59,58 @@ pub async fn run_nightly_repair(
     budget: Duration,
 ) -> Result<Option<((NaiveDate, NaiveDate), RepairSummary)>> {
     let state = db.get_repair_state().await?;
-    let Some((first, last)) = repair_due(now, schedule, &state) else {
+    repair_if_due(db, schedule, now, budget, &state).await
+}
+
+/// The nightly repair for a long-running caller: it remembers the repair
+/// state between calls, so the state is read from the database only when
+/// the remembered one says a repair is due (or nothing is remembered).
+#[derive(Debug, Default)]
+pub struct NightlyRepair {
+    state: Option<RepairState>,
+}
+
+impl NightlyRepair {
+    /// [`run_nightly_repair`], skipping the database while the remembered
+    /// state says nothing is due. Another process can only move the state
+    /// on (repaired days, failed attempts), so a remembered "nothing due"
+    /// stays true until the next closing or retry time.
+    #[tracing::instrument(skip_all, fields(%now))]
+    pub async fn run(
+        &mut self,
+        db: &Database,
+        schedule: &GymSchedule,
+        now: DateTime<Utc>,
+        budget: Duration,
+    ) -> Result<Option<((NaiveDate, NaiveDate), RepairSummary)>> {
+        if let Some(state) = &self.state
+            && repair_due(now, schedule, state).is_none()
+        {
+            return Ok(None);
+        }
+        // Forgotten first: dropped mid-repair (shutdown) or failing, the
+        // next call reads the state again.
+        self.state = None;
+        let state = db.get_repair_state().await?;
+        let outcome = repair_if_due(db, schedule, now, budget, &state).await;
+        self.state = if matches!(outcome, Ok(None)) {
+            Some(state)
+        } else {
+            db.get_repair_state().await.ok()
+        };
+        outcome
+    }
+}
+
+/// Repairs the days `state` says are due, if any.
+async fn repair_if_due(
+    db: &Database,
+    schedule: &GymSchedule,
+    now: DateTime<Utc>,
+    budget: Duration,
+    state: &RepairState,
+) -> Result<Option<((NaiveDate, NaiveDate), RepairSummary)>> {
+    let Some((first, last)) = repair_due(now, schedule, state) else {
         return Ok(None);
     };
     tracing::info!(%first, %last, "running nightly data repair");
