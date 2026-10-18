@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Duration, NaiveDate, TimeZone, Utc};
-use hardy_core::{DataRepairer, GymSchedule, db::DataSource};
+use hardy_core::{DataRepairer, GymSchedule, db::DataSource, repair::NightlyRepair};
 
 /// Plenty of time for a nightly repair in tests.
 const BUDGET: std::time::Duration = std::time::Duration::from_secs(30);
@@ -111,6 +111,52 @@ async fn test_nightly_repair_runs_once_per_closed_day() -> Result<()> {
     assert_eq!(state.repaired_through, Some(monday));
     assert_eq!(state.last_error, None);
     assert_eq!(rows.len(), 5);
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_nightly_repair_reads_its_state_only_when_a_repair_is_due() -> Result<()> {
+    let tdb = common::TestDatabase::new().await?;
+    let schedule = GymSchedule::default();
+    let monday = NaiveDate::from_ymd_opt(2024, 6, 17).context("date")?;
+    let tuesday = monday.succ_opt().context("date")?;
+    let after_close = utc(21, 20)?;
+    let mut nightly = NightlyRepair::default();
+    let first = nightly.run(&tdb.db, &schedule, after_close, BUDGET).await?;
+
+    // Forgetting Monday behind the daemon's back: a remembered state that
+    // says nothing is due must not look again.
+    let pool = sqlx::PgPool::connect(&tdb.url).await?;
+    sqlx::query("UPDATE repair_state SET repaired_through = NULL WHERE id = 1")
+        .execute(&pool)
+        .await?;
+    pool.close().await;
+    let remembered = nightly
+        .run(
+            &tdb.db,
+            &schedule,
+            after_close + Duration::minutes(5),
+            BUDGET,
+        )
+        .await?;
+    let fresh = NightlyRepair::default()
+        .run(
+            &tdb.db,
+            &schedule,
+            after_close + Duration::minutes(5),
+            BUDGET,
+        )
+        .await?;
+    // Once Tuesday has closed, the remembered state says a repair is due.
+    let next_night = nightly
+        .run(&tdb.db, &schedule, after_close + Duration::days(1), BUDGET)
+        .await?;
+    tdb.cleanup().await;
+
+    assert_eq!(first.map(|(days, _)| days), Some((monday, monday)));
+    assert!(remembered.is_none(), "nothing due by the remembered state");
+    assert_eq!(fresh.map(|(days, _)| days), Some((monday, monday)));
+    assert_eq!(next_night.map(|(days, _)| days), Some((tuesday, tuesday)));
     Ok(())
 }
 
