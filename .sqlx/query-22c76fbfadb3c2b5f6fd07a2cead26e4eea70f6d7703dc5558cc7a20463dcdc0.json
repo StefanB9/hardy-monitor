@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO forecast_selection (bucket, model, run_id, selected_at)\n        SELECT bucket, model, $3, $4 FROM UNNEST($1::int2[], $2::text[]) AS s(bucket, model)\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int2Array",
+        "TextArray",
+        "Int8",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "22c76fbfadb3c2b5f6fd07a2cead26e4eea70f6d7703dc5558cc7a20463dcdc0"
+}

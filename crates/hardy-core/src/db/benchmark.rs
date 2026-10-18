@@ -57,6 +57,115 @@ fn count(value: i32, what: &str) -> Result<u32> {
     u32::try_from(value).with_context(|| format!("negative {what}"))
 }
 
+/// Stores each model's benchmark row of run `id`.
+async fn insert_models(
+    conn: &mut sqlx::PgConnection,
+    id: i64,
+    models: &[BenchmarkModel],
+) -> Result<()> {
+    let model_origins = models
+        .iter()
+        .map(|m| int(m.origins, "origins"))
+        .collect::<Result<Vec<_>>>()?;
+    let model_fitted_days = models
+        .iter()
+        .map(|m| int(m.fitted_days, "fitted days"))
+        .collect::<Result<Vec<_>>>()?;
+    sqlx::query!(
+        r#"
+        INSERT INTO benchmark_models (run_id, model, origins, fitted_days, eligible, failure)
+        SELECT $1, * FROM UNNEST($2::text[], $3::int4[], $4::int4[], $5::bool[], $6::text[])
+        "#,
+        id,
+        &models.iter().map(|m| m.model.clone()).collect::<Vec<_>>(),
+        &model_origins,
+        &model_fitted_days,
+        &models.iter().map(|m| m.eligible).collect::<Vec<_>>(),
+        &models.iter().map(|m| m.failure.clone()).collect::<Vec<_>>() as &[Option<String>]
+    )
+    .execute(&mut *conn)
+    .await
+    .context("failed to store the models' benchmark")?;
+    Ok(())
+}
+
+/// Stores each model's scores per horizon bucket of run `id`.
+async fn insert_scores(
+    conn: &mut sqlx::PgConnection,
+    id: i64,
+    scores: &[BenchmarkScore],
+) -> Result<()> {
+    let score_errors = scores
+        .iter()
+        .map(|s| int(s.errors, "errors"))
+        .collect::<Result<Vec<_>>>()?;
+    sqlx::query!(
+        r#"
+        INSERT INTO benchmark_scores
+            (run_id, model, bucket, mae, rmse, mase, coverage, pinball, errors,
+             interval_low, interval_high)
+        SELECT $1, * FROM UNNEST(
+            $2::text[], $3::int2[], $4::float8[], $5::float8[], $6::float8[], $7::float8[],
+            $8::float8[], $9::int4[], $10::float8[], $11::float8[]
+        )
+        "#,
+        id,
+        &scores.iter().map(|s| s.model.clone()).collect::<Vec<_>>(),
+        &scores.iter().map(|s| s.bucket).collect::<Vec<_>>(),
+        &scores.iter().map(|s| s.mae).collect::<Vec<_>>(),
+        &scores.iter().map(|s| s.rmse).collect::<Vec<_>>(),
+        &scores.iter().map(|s| s.mase).collect::<Vec<_>>() as &[Option<f64>],
+        &scores.iter().map(|s| s.coverage).collect::<Vec<_>>() as &[Option<f64>],
+        &scores.iter().map(|s| s.pinball).collect::<Vec<_>>() as &[Option<f64>],
+        &score_errors,
+        &scores
+            .iter()
+            .map(|s| s.interval.map(|(low, _)| low))
+            .collect::<Vec<_>>() as &[Option<f64>],
+        &scores
+            .iter()
+            .map(|s| s.interval.map(|(_, high)| high))
+            .collect::<Vec<_>>() as &[Option<f64>]
+    )
+    .execute(&mut *conn)
+    .await
+    .context("failed to store the benchmark scores")?;
+    Ok(())
+}
+
+/// Replaces the selection with `selection`, made from run `id`.
+async fn replace_selection(
+    conn: &mut sqlx::PgConnection,
+    id: i64,
+    selection: &[(i16, String)],
+    selected_at: DateTime<Utc>,
+) -> Result<()> {
+    sqlx::query!("DELETE FROM forecast_selection")
+        .execute(&mut *conn)
+        .await
+        .context("failed to clear the selection")?;
+    sqlx::query!(
+        r#"
+        INSERT INTO forecast_selection (bucket, model, run_id, selected_at)
+        SELECT bucket, model, $3, $4 FROM UNNEST($1::int2[], $2::text[]) AS s(bucket, model)
+        "#,
+        &selection
+            .iter()
+            .map(|(bucket, _)| *bucket)
+            .collect::<Vec<_>>(),
+        &selection
+            .iter()
+            .map(|(_, model)| model.clone())
+            .collect::<Vec<_>>(),
+        id,
+        selected_at
+    )
+    .execute(&mut *conn)
+    .await
+    .context("failed to store the selection")?;
+    Ok(())
+}
+
 impl Database {
     /// Stores a run and the selection made from it, then deletes all but
     /// the newest `keep` runs, in one transaction. Returns the run's id.
@@ -94,67 +203,11 @@ impl Database {
         .await
         .context("failed to store benchmark run")?;
 
-        for m in &run.models {
-            sqlx::query!(
-                r#"
-                INSERT INTO benchmark_models (run_id, model, origins, fitted_days, eligible, failure)
-                VALUES ($1, $2, $3, $4, $5, $6)
-                "#,
-                id,
-                m.model,
-                int(m.origins, "origins")?,
-                int(m.fitted_days, "fitted days")?,
-                m.eligible,
-                m.failure
-            )
-            .execute(&mut *tx)
-            .await
-            .with_context(|| format!("failed to store benchmark of {}", m.model))?;
-        }
-        for s in &run.scores {
-            sqlx::query!(
-                r#"
-                INSERT INTO benchmark_scores
-                    (run_id, model, bucket, mae, rmse, mase, coverage, pinball, errors,
-                     interval_low, interval_high)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-                "#,
-                id,
-                s.model,
-                s.bucket,
-                s.mae,
-                s.rmse,
-                s.mase,
-                s.coverage,
-                s.pinball,
-                int(s.errors, "errors")?,
-                s.interval.map(|(low, _)| low),
-                s.interval.map(|(_, high)| high)
-            )
-            .execute(&mut *tx)
-            .await
-            .with_context(|| format!("failed to store score of {}", s.model))?;
-        }
-
-        sqlx::query!("DELETE FROM forecast_selection")
-            .execute(&mut *tx)
-            .await
-            .context("failed to clear the selection")?;
-        for (bucket, model) in selection {
-            sqlx::query!(
-                r#"
-                INSERT INTO forecast_selection (bucket, model, run_id, selected_at)
-                VALUES ($1, $2, $3, $4)
-                "#,
-                bucket,
-                model,
-                id,
-                run.finished_at
-            )
-            .execute(&mut *tx)
-            .await
-            .context("failed to store the selection")?;
-        }
+        // One statement per table (UNNEST) instead of one per row: the
+        // database may be a network round trip away.
+        insert_models(&mut tx, id, &run.models).await?;
+        insert_scores(&mut tx, id, &run.scores).await?;
+        replace_selection(&mut tx, id, selection, run.finished_at).await?;
 
         sqlx::query!(
             r#"

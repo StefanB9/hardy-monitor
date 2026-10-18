@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO benchmark_scores\n            (run_id, model, bucket, mae, rmse, mase, coverage, pinball, errors,\n             interval_low, interval_high)\n        SELECT $1, * FROM UNNEST(\n            $2::text[], $3::int2[], $4::float8[], $5::float8[], $6::float8[], $7::float8[],\n            $8::float8[], $9::int4[], $10::float8[], $11::float8[]\n        )\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "TextArray",
+        "Int2Array",
+        "Float8Array",
+        "Float8Array",
+        "Float8Array",
+        "Float8Array",
+        "Float8Array",
+        "Int4Array",
+        "Float8Array",
+        "Float8Array"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "a848e5797237708907d1497eb2db4505735d993216d73585b87a71c23f40086e"
+}
