@@ -17,6 +17,7 @@ use hardy_core::{
     config::AppConfig,
     db::{Database, minute_slot},
     health::HealthMonitor,
+    repair::NightlyRepair,
     schedule::GymSchedule,
 };
 
@@ -25,8 +26,6 @@ use crate::{
     timing::{new_interval, realign_if_drifted, wait_for_minute_alignment},
 };
 
-/// Fetch cycles between schema version checks (about ten minutes).
-const SCHEMA_CHECK_ITERATIONS: u64 = 10;
 const ALIGNMENT_CHECK_ITERATIONS: u64 = 60;
 
 /// Per-tick retries: three attempts, waiting 2 s then 4 s.
@@ -158,6 +157,7 @@ async fn fetch_loop(
     let mut interval = new_interval(interval_secs);
     let mut iteration_count: u64 = 0;
     let mut schema_reported = false;
+    let mut nightly = NightlyRepair::default();
 
     loop {
         tokio::select! {
@@ -175,7 +175,7 @@ async fn fetch_loop(
             interval.tick().await;
         }
 
-        if iteration_count.is_multiple_of(SCHEMA_CHECK_ITERATIONS) {
+        if upkeep::schema_check_due(iteration_count, worker.schedule, chrono::Utc::now()) {
             upkeep::check_schema(worker.database, alerts, &mut schema_reported).await;
         }
 
@@ -200,7 +200,7 @@ async fn fetch_loop(
         // The nightly repair runs while the gym is closed, so it comes
         // before the closed check.
         tokio::select! {
-            () = upkeep::run_repair(worker) => {}
+            () = upkeep::run_repair(worker, &mut nightly) => {}
             () = &mut shutdown => {
                 tracing::info!("shutdown requested during upkeep");
                 return;
