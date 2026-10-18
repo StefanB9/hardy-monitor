@@ -4,8 +4,8 @@ use chrono::{DateTime, Utc};
 use hardy_core::{
     alert::{AlertDuration, AlertSettings},
     db::{
-        ForecastHistoryEntry, HorizonAccuracy, HourlyAverage, LiveForecast, OccupancyLog,
-        QuarterHourAverage, SchemaStatus,
+        ForecastHistoryEntry, HorizonAccuracy, HourlyAverage, LiveForecast, LiveForecastsVersion,
+        OccupancyLog, QuarterHourAverage, SchemaStatus, SuiteVersion,
     },
     error::AppError,
     repair::RepairSummary,
@@ -20,6 +20,7 @@ use crate::{
     plan_settings::VisitLength,
     planner::{RangeEnd, RangeKind},
     time_range::{AnalyticsRange, ChartRange, Step},
+    tray::TrayAction,
 };
 
 /// What the chart shows of one range.
@@ -144,7 +145,8 @@ pub enum Message {
     ExportCsv,
     ExportCompleted(Result<String, AppError>),
     ClearExportStatus,
-    TrayCheck,
+    /// A tray click or menu entry.
+    Tray(TrayAction),
     WindowCloseRequested,
 
     RepairStartDateChanged(String),
@@ -155,10 +157,12 @@ pub enum Message {
 
     /// New rows for the forecasting history.
     ForecastHistoryLoaded(Result<Vec<OccupancyLog>, AppError>),
-    /// The forecast models' states, benchmark and selection.
-    SuiteStatusLoaded(Result<SuiteStatus, AppError>),
-    /// Every forecast the daemon published.
-    PublishedForecastLoaded(Result<Vec<LiveForecast>, AppError>),
+    /// The forecast models' states, benchmark and selection with their
+    /// version; `None` if unchanged since the version held.
+    SuiteStatusLoaded(Result<Option<(SuiteVersion, SuiteStatus)>, AppError>),
+    /// Every forecast the forecaster published, with its version; `None` if
+    /// unchanged since the version held.
+    PublishedForecastLoaded(Result<Option<(LiveForecastsVersion, Vec<LiveForecast>)>, AppError>),
     ForecastRunRequested,
     /// Which forecast the chart and the quiet hour use.
     ForecastChoiceSelected(ForecastChoice),
@@ -221,7 +225,7 @@ impl Message {
             | Message::DataScrolled { .. }
             | Message::ExportCsv
             | Message::ClearExportStatus
-            | Message::TrayCheck
+            | Message::Tray(_)
             | Message::WindowCloseRequested
             | Message::RepairStartDateChanged(_)
             | Message::RepairEndDateChanged(_)

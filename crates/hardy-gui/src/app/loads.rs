@@ -63,6 +63,16 @@ impl PendingLoads {
     }
 }
 
+/// Whether a load runs regardless or only when its data changed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Reload {
+    /// Start, Refresh: always load.
+    Always,
+    /// Polling: first check the data's version, load only if it differs
+    /// from the one held.
+    IfChanged,
+}
+
 /// Where an error came from; a success from the same source clears it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ErrorSource {

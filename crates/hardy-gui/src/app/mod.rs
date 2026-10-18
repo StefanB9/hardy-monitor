@@ -22,7 +22,7 @@ use hardy_core::{
     alert::AlertRules,
     analytics::{DayAnalysis, Insight, OccupancyStats, SlotRange, TrendDirection},
     config::AppConfig,
-    db::{Database, ForecastHistoryEntry, OccupancyLog},
+    db::{Database, ForecastHistoryEntry, LiveForecastsVersion, OccupancyLog, SuiteVersion},
     error::AppError,
     repair::RepairSummary,
     schedule::GymSchedule,
@@ -31,8 +31,10 @@ use hardy_core::{
 use hardy_ml::suite::Family;
 use iced::{Subscription, Task, Theme, widget::canvas::Cache, window};
 pub use loads::RequestId;
-use loads::{Errors, LatestOnly, PendingLoads};
+use loads::{Errors, LatestOnly, PendingLoads, Reload};
 pub use message::{ChartData, Message, RepairPreset, ViewMode};
+use muda::MenuEvent;
+use tray_icon::TrayIconEvent;
 
 pub use crate::time_range::{AnalyticsRange, ChartRange};
 use crate::{
@@ -45,7 +47,7 @@ use crate::{
     planner::Planner,
     style::{self, OccupancyLevel},
     time_range::Step,
-    tray::{Tray, TrayStatus, quiet_label, rgba8, tooltip_text},
+    tray::{Tray, TrayStatus, menu_action, quiet_label, rgba8, tooltip_text, tray_action},
     views::{opening::opening_status, schema_notice::SchemaGate},
     widgets::heatmap::WeekGrid,
 };
@@ -88,6 +90,10 @@ struct MonitorState {
     data_rows: Vec<OccupancyLog>,
     /// The Plan tab's choices and days.
     plan: Planner,
+    /// Versions of the published forecasts and suite status held, so
+    /// unchanged ones are not reloaded.
+    published_version: Option<LiveForecastsVersion>,
+    suite_version: Option<SuiteVersion>,
 }
 
 struct UiState {
@@ -188,6 +194,8 @@ impl HardyMonitorApp {
                 first_reading: None,
                 data_rows: Vec::new(),
                 plan: Planner::new(plan_settings::default_path()),
+                published_version: None,
+                suite_version: None,
             },
             ui: UiState {
                 pending: PendingLoads::default(),
@@ -239,17 +247,16 @@ impl HardyMonitorApp {
         (app, Task::batch([initial, alignment]))
     }
 
-    /// UI tick, aligned data polling, tray polling and window-close events.
+    /// UI tick, aligned data polling, tray clicks and window-close events.
     pub fn subscription(&self) -> Subscription<Message> {
         let ui_interval = Duration::from_secs(self.config.refresh.ui_interval_secs);
         let data_interval = Duration::from_secs(self.config.refresh.data_fetch_interval_secs);
-        let tray_interval = Duration::from_millis(self.config.refresh.tray_poll_interval_ms);
 
         let mut subs = vec![iced::time::every(ui_interval).map(|_| Message::Tick)];
         if self.ui.is_poll_aligned {
             subs.push(iced::time::every(data_interval).map(|_| Message::FetchTick));
         }
-        subs.push(iced::time::every(tray_interval).map(|_| Message::TrayCheck));
+        subs.push(Subscription::run(tray_events));
         subs.push(iced::event::listen_with(|event, status, _window_id| {
             use iced::keyboard::{self, key::Named};
             match event {
@@ -283,8 +290,8 @@ impl HardyMonitorApp {
         Task::batch([
             self.load_alert_settings(),
             self.load_forecast_history(),
-            self.load_suite_status(),
-            self.load_published_forecast(),
+            self.load_suite_status(Reload::Always),
+            self.load_published_forecast(Reload::Always),
             self.load_chart_history(),
             self.load_analytics(),
             self.load_insights_data(),
@@ -348,4 +355,22 @@ impl HardyMonitorApp {
     fn is_updating(&self) -> bool {
         self.ui.pending.is_visible(Instant::now())
     }
+}
+
+/// Tray clicks and menu entries as messages, sent when they happen (no
+/// polling: every message rebuilds the view).
+fn tray_events() -> iced::futures::channel::mpsc::UnboundedReceiver<Message> {
+    let (tx, rx) = iced::futures::channel::mpsc::unbounded();
+    let menu_tx = tx.clone();
+    TrayIconEvent::set_event_handler(Some(move |event: TrayIconEvent| {
+        if let Some(action) = tray_action(&event) {
+            let _ = tx.unbounded_send(Message::Tray(action));
+        }
+    }));
+    MenuEvent::set_event_handler(Some(move |event: MenuEvent| {
+        if let Some(action) = menu_action(&event.id.0) {
+            let _ = menu_tx.unbounded_send(Message::Tray(action));
+        }
+    }));
+    rx
 }

@@ -215,7 +215,11 @@ impl HistoryChart<'_> {
                 ..Default::default()
             });
         }
+    }
 
+    /// The "now" line; drawn every frame, so time passing does not
+    /// invalidate the cached chart.
+    pub(super) fn draw_now(&self, frame: &mut Frame, plot: &Plot) {
         if self.now > self.range_start && self.now < self.range_end {
             let x = plot.x(self.now);
             frame.stroke(

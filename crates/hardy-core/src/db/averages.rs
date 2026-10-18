@@ -42,14 +42,18 @@ impl Database {
                     COUNT(*)::FLOAT8 as day_n
                 FROM (
                     SELECT
-                        (EXTRACT(ISODOW FROM timestamp AT TIME ZONE $3)::INTEGER - 1) as weekday,
-                        EXTRACT(HOUR FROM timestamp AT TIME ZONE $3)::INTEGER as hour,
-                        (timestamp AT TIME ZONE $3)::DATE as local_date,
+                        (EXTRACT(ISODOW FROM local)::INTEGER - 1) as weekday,
+                        EXTRACT(HOUR FROM local)::INTEGER as hour,
+                        local::DATE as local_date,
                         percentage
-                    FROM occupancy_logs
-                    WHERE timestamp >= $1 AND timestamp < $2
-                      -- Repair's 0% opening/closing entries are not observations.
-                      AND source <> 'boundary'
+                    FROM (
+                        -- Converted to gym time once per reading.
+                        SELECT timestamp AT TIME ZONE $3 as local, percentage
+                        FROM occupancy_logs
+                        WHERE timestamp >= $1 AND timestamp < $2
+                          -- Repair's 0% opening/closing entries are not observations.
+                          AND source <> 'boundary'
+                    ) AS converted
                 ) AS readings
                 GROUP BY weekday, hour, local_date
             ) AS days

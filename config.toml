@@ -29,7 +29,6 @@ sidebar_width = 250.0
 [refresh]
 ui_interval_secs = 30
 data_fetch_interval_secs = 60
-tray_poll_interval_ms = 50
 
 [notifications]
 # Low-occupancy alerts are sent by the daemon. Turn them on/off and set the

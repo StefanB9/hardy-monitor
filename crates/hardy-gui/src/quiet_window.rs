@@ -102,6 +102,22 @@ fn starts(from: DateTime<Utc>, last: DateTime<Utc>) -> Vec<DateTime<Utc>> {
     out
 }
 
+/// The forecast point nearest `t` within [`FORECAST_REACH`] (the earlier
+/// of two equally near); `forecasts` are sorted by time.
+fn nearest_forecast(
+    forecasts: &[PredictionWithConfidence],
+    t: DateTime<Utc>,
+) -> Option<&PredictionWithConfidence> {
+    let after = forecasts.partition_point(|f| f.timestamp < t);
+    let before = after.checked_sub(1).and_then(|i| forecasts.get(i));
+    let distance = |f: &PredictionWithConfidence| (f.timestamp - t).abs();
+    let nearest = match (before, forecasts.get(after)) {
+        (Some(b), Some(a)) => Some(if distance(b) <= distance(a) { b } else { a }),
+        (b, a) => b.or(a),
+    };
+    nearest.filter(|f| distance(f) <= FORECAST_REACH)
+}
+
 /// Mean expectation over the window, sampled every [`STEP`]; forecast where
 /// a forecast point is close enough, slot averages otherwise.
 fn window_expectation(
@@ -116,10 +132,7 @@ fn window_expectation(
     let mut forecast_samples = 0;
     let mut t = start;
     while t < start + WINDOW {
-        let forecast = forecasts
-            .iter()
-            .filter(|f| (f.timestamp - t).abs() <= FORECAST_REACH)
-            .min_by_key(|f| (f.timestamp - t).abs());
+        let forecast = nearest_forecast(forecasts, t);
         total += forecast.map_or_else(|| profile.mean_at(t, tz), |f| f.predicted_value);
         if forecast.is_some() {
             forecast_samples += 1;
@@ -280,8 +293,33 @@ mod tests {
         Ok(())
     }
 
+    fn point(minute: i64) -> PredictionWithConfidence {
+        PredictionWithConfidence {
+            timestamp: local(0, 0, 0) + TimeDelta::minutes(minute),
+            predicted_value: f64::from(i32::try_from(minute).unwrap_or(0)),
+            confidence_low: 0.0,
+            confidence_high: 0.0,
+            confidence_score: 0.5,
+            method: PredictionMethod::HistoricalAverage,
+        }
+    }
+
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(1000))]
+
+        #[test]
+        fn nearest_forecast_matches_a_full_scan(
+            mut minutes in prop::collection::btree_set(0i64..600, 0..40),
+            at in -60i64..660,
+        ) {
+            let points: Vec<_> = std::mem::take(&mut minutes).into_iter().map(point).collect();
+            let t = local(0, 0, 0) + TimeDelta::minutes(at);
+            let scan = points
+                .iter()
+                .filter(|f| (f.timestamp - t).abs() <= FORECAST_REACH)
+                .min_by_key(|f| (f.timestamp - t).abs());
+            prop_assert_eq!(nearest_forecast(&points, t), scan);
+        }
 
         #[test]
         fn quiet_window_is_upcoming_and_inside_opening_hours(minute in 0i64..(7 * 24 * 60)) {

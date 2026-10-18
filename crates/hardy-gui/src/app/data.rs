@@ -12,7 +12,10 @@ use hardy_core::{
 };
 use iced::Task;
 
-use super::{ChartData, HardyMonitorApp, Message, RequestId, loads::ErrorSource};
+use super::{
+    ChartData, HardyMonitorApp, Message, RequestId,
+    loads::{ErrorSource, Reload},
+};
 use crate::{freshness::Freshness, widgets::heatmap::WeekGrid};
 
 impl HardyMonitorApp {
@@ -57,8 +60,10 @@ impl HardyMonitorApp {
 
         let mut tasks = vec![
             self.load_forecast_history(),
-            self.load_suite_status(),
-            self.load_published_forecast(),
+            // Both change rarely (every quarter hour, every night): only
+            // reloaded when a cheap version check shows something new.
+            self.load_suite_status(Reload::IfChanged),
+            self.load_published_forecast(Reload::IfChanged),
             self.load_chart_history(),
         ];
 
@@ -133,8 +138,9 @@ impl HardyMonitorApp {
 
     pub(super) fn refresh_forecasts(&mut self) {
         let now = self.clock.now_utc();
-        self.data.forecasting.refresh(&self.schedule, now);
-        self.ui.chart_cache.clear();
+        if self.data.forecasting.refresh(&self.schedule, now) {
+            self.ui.chart_cache.clear();
+        }
         self.refresh_plan();
     }
 

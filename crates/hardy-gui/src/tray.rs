@@ -3,7 +3,7 @@
 use chrono::{DateTime, Utc};
 use hardy_core::Tz;
 use iced::Color;
-use tray_icon::{Icon, TrayIcon};
+use tray_icon::{Icon, MouseButtonState, TrayIcon, TrayIconEvent};
 
 /// The tray icon's original pixels, kept to draw the status dot onto.
 #[derive(Debug, Clone)]
@@ -24,6 +24,35 @@ pub(crate) struct TrayStatus<'a> {
     pub warning: Option<&'a str>,
     /// e.g. "Closed · opens 06:00".
     pub opening: &'a str,
+}
+
+/// What a tray click or menu entry asks for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TrayAction {
+    /// Show the window if hidden, hide it if shown.
+    Toggle,
+    Quit,
+}
+
+/// A click on the icon toggles the window once: on the button's release
+/// (a click also reports the press), whichever button.
+pub fn tray_action(event: &TrayIconEvent) -> Option<TrayAction> {
+    match event {
+        TrayIconEvent::Click {
+            button_state: MouseButtonState::Up,
+            ..
+        } => Some(TrayAction::Toggle),
+        _ => None,
+    }
+}
+
+/// The menu entries "show" (toggle) and "quit".
+pub fn menu_action(id: &str) -> Option<TrayAction> {
+    match id {
+        "show" => Some(TrayAction::Toggle),
+        "quit" => Some(TrayAction::Quit),
+        _ => None,
+    }
 }
 
 /// Tooltip text, most important first.
@@ -142,7 +171,41 @@ impl Tray {
 
 #[cfg(test)]
 mod tests {
+    use tray_icon::{MouseButton, Rect, TrayIconId, dpi::PhysicalPosition};
+
     use super::*;
+
+    fn click(button_state: MouseButtonState) -> TrayIconEvent {
+        TrayIconEvent::Click {
+            id: TrayIconId::new("tray"),
+            position: PhysicalPosition::new(0.0, 0.0),
+            rect: Rect::default(),
+            button: MouseButton::Left,
+            button_state,
+        }
+    }
+
+    #[test]
+    fn test_a_click_toggles_once_on_release() {
+        assert_eq!(tray_action(&click(MouseButtonState::Down)), None);
+        assert_eq!(
+            tray_action(&click(MouseButtonState::Up)),
+            Some(TrayAction::Toggle)
+        );
+        let enter = TrayIconEvent::Enter {
+            id: TrayIconId::new("tray"),
+            position: PhysicalPosition::new(0.0, 0.0),
+            rect: Rect::default(),
+        };
+        assert_eq!(tray_action(&enter), None);
+    }
+
+    #[test]
+    fn test_menu_entries() {
+        assert_eq!(menu_action("show"), Some(TrayAction::Toggle));
+        assert_eq!(menu_action("quit"), Some(TrayAction::Quit));
+        assert_eq!(menu_action("other"), None);
+    }
 
     fn status<'a>() -> TrayStatus<'a> {
         TrayStatus {

@@ -66,7 +66,6 @@ impl AppConfig {
             .set_default("window.sidebar_width", 250.0)?
             .set_default("refresh.ui_interval_secs", 30)?
             .set_default("refresh.data_fetch_interval_secs", 60)?
-            .set_default("refresh.tray_poll_interval_ms", 50)?
             .set_default("notifications.ntfy_topic", None::<String>)?
             .set_default("notifications.ntfy_server", "https://ntfy.sh")?
             .set_default("notifications.cooldown_secs", 300)?
@@ -271,7 +270,6 @@ mod tests {
 
         assert!(config.refresh.ui_interval_secs > 0);
         assert!(config.refresh.data_fetch_interval_secs > 0);
-        assert!(config.refresh.tray_poll_interval_ms > 0);
 
         Ok(())
     }

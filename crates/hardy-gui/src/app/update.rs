@@ -2,13 +2,15 @@
 
 use hardy_core::{accuracy::summarize, db::SchemaStatus, error::AppError};
 use iced::{Task, window};
-use muda::MenuEvent;
-use tray_icon::TrayIconEvent;
 
-use super::{HardyMonitorApp, Message, ViewMode, loads::ErrorSource};
+use super::{
+    HardyMonitorApp, Message, ViewMode,
+    loads::{ErrorSource, Reload},
+};
 use crate::{
     forecasting::ModelOption,
     time_range::{ChartRange, Step, can_step_back, shift_custom},
+    tray::TrayAction,
     views::schema_notice::SchemaGate,
 };
 
@@ -23,9 +25,9 @@ impl HardyMonitorApp {
         }
         match message {
             Message::Tick => {
+                // The chart's "now" marker is drawn per frame, so the cached
+                // chart is only redrawn if its lines changed.
                 self.refresh_forecasts();
-                // The "now" marker moves.
-                self.ui.chart_cache.clear();
                 self.update_tray();
                 Task::none()
             }
@@ -69,7 +71,7 @@ impl HardyMonitorApp {
                 self.ui.is_window_visible = false;
                 window::latest().and_then(|id| window::minimize(id, true))
             }
-            Message::TrayCheck => self.handle_tray(),
+            Message::Tray(action) => self.handle_tray(action),
             Message::NotificationThresholdChanged(_)
             | Message::NotificationThresholdReleased
             | Message::NotificationToggled(_)
@@ -144,8 +146,8 @@ impl HardyMonitorApp {
             self.load_analytics(),
             self.load_insights_data(),
             self.load_plan_averages(),
-            self.load_suite_status(),
-            self.load_published_forecast(),
+            self.load_suite_status(Reload::Always),
+            self.load_published_forecast(Reload::Always),
             self.load_forecast_history(),
             self.load_first_reading(),
             data,
@@ -327,13 +329,19 @@ impl HardyMonitorApp {
                 Task::none()
             }
             Message::SuiteStatusLoaded(result) => {
-                if let Some(status) = self.errors.record(ErrorSource::SuiteStatus, result) {
+                if let Some(Some((version, status))) =
+                    self.errors.record(ErrorSource::SuiteStatus, result)
+                {
+                    self.data.suite_version = Some(version);
                     self.data.forecasting.set_status(status);
                 }
                 Task::none()
             }
             Message::PublishedForecastLoaded(result) => {
-                if let Some(forecast) = self.errors.record(ErrorSource::PublishedForecast, result) {
+                if let Some(Some((version, forecast))) =
+                    self.errors.record(ErrorSource::PublishedForecast, result)
+                {
+                    self.data.published_version = Some(version);
                     self.data.forecasting.set_published(forecast);
                     self.refresh_forecasts();
                 }
@@ -384,7 +392,7 @@ impl HardyMonitorApp {
                 self.ui.is_poll_aligned = true;
                 Task::none()
             }
-            Message::TrayCheck => self.handle_tray(),
+            Message::Tray(action) => self.handle_tray(action),
             Message::WindowCloseRequested => {
                 self.ui.is_window_visible = false;
                 window::latest().and_then(|id| window::minimize(id, true))
@@ -393,22 +401,9 @@ impl HardyMonitorApp {
         }
     }
 
-    fn handle_tray(&mut self) -> Task<Message> {
-        let mut should_toggle = false;
-        while let Ok(event) = TrayIconEvent::receiver().try_recv() {
-            if let TrayIconEvent::Click { .. } = event {
-                should_toggle = true;
-            }
-        }
-        while let Ok(event) = MenuEvent::receiver().try_recv() {
-            if event.id.0 == "quit" {
-                std::process::exit(0);
-            } else if event.id.0 == "show" {
-                should_toggle = true;
-            }
-        }
-        if !should_toggle {
-            return Task::none();
+    fn handle_tray(&mut self, action: TrayAction) -> Task<Message> {
+        if action == TrayAction::Quit {
+            std::process::exit(0);
         }
         self.ui.is_window_visible = !self.ui.is_window_visible;
         let target = self.ui.is_window_visible;

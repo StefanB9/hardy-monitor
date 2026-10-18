@@ -5,12 +5,18 @@ use std::{path::PathBuf, time::Instant};
 
 use hardy_core::{
     alert::AlertSettings,
-    db::{HorizonAccuracy, HourlyAverage, LiveForecast, OccupancyLog},
+    db::{
+        HorizonAccuracy, HourlyAverage, LiveForecast, LiveForecastsVersion, OccupancyLog,
+        SuiteVersion,
+    },
     error::AppError,
 };
 use iced::Task;
 
-use super::{ChartData, HardyMonitorApp, Message, loads::ErrorSource};
+use super::{
+    ChartData, HardyMonitorApp, Message,
+    loads::{ErrorSource, Reload},
+};
 use crate::{forecasting::SuiteStatus, time_range::insights_periods};
 
 /// Wraps a database error with the failing operation.
@@ -151,9 +157,11 @@ impl HardyMonitorApp {
         let db = self.db.clone();
         self.load(
             async move {
-                let current = db.get_averages_range(current.0, current.1, tz).await;
-                let baseline = db.get_averages_range(baseline.0, baseline.1, tz).await;
-                (current, baseline)
+                // Independent queries: run side by side.
+                tokio::join!(
+                    db.get_averages_range(current.0, current.1, tz),
+                    db.get_averages_range(baseline.0, baseline.1, tz)
+                )
             },
             |(current, baseline)| Message::InsightsDataLoaded {
                 current: current.map_err(db_err("get_insights_current")),
@@ -205,11 +213,21 @@ impl HardyMonitorApp {
     }
 
     /// The forecast models' states, the newest benchmark and the selection.
-    pub(super) fn load_suite_status(&mut self) -> Task<Message> {
+    pub(super) fn load_suite_status(&mut self, reload: Reload) -> Task<Message> {
         let db = self.db.clone();
+        let held = match reload {
+            Reload::Always => None,
+            Reload::IfChanged => self.data.suite_version.clone(),
+        };
         self.load(
-            async move { suite_status(&db).await },
-            |r: anyhow::Result<SuiteStatus>| {
+            async move {
+                let version = db.suite_version().await?;
+                if held.as_ref() == Some(&version) {
+                    return Ok(None);
+                }
+                Ok(Some((version, suite_status(&db).await?)))
+            },
+            |r: anyhow::Result<Option<(SuiteVersion, SuiteStatus)>>| {
                 Message::SuiteStatusLoaded(r.map_err(db_err("load_suite_status")))
             },
         )
@@ -217,15 +235,25 @@ impl HardyMonitorApp {
 
     /// Every forecast the daemon published last (all models and the
     /// default), so switching models needs no reload.
-    pub(super) fn load_published_forecast(&mut self) -> Task<Message> {
+    pub(super) fn load_published_forecast(&mut self, reload: Reload) -> Task<Message> {
         let db = self.db.clone();
         let keys: Vec<String> = std::iter::once(hardy_ml::live::SELECTED)
             .chain(hardy_ml::suite::ModelId::ALL.iter().map(|id| id.key()))
             .map(ToString::to_string)
             .collect();
+        let held = match reload {
+            Reload::Always => None,
+            Reload::IfChanged => self.data.published_version.clone(),
+        };
         self.load(
-            async move { db.live_forecasts(&keys).await },
-            |r: anyhow::Result<Vec<LiveForecast>>| {
+            async move {
+                let version = db.live_forecasts_version(&keys).await?;
+                if held.as_ref() == Some(&version) {
+                    return Ok(None);
+                }
+                Ok(Some((version, db.live_forecasts(&keys).await?)))
+            },
+            |r: anyhow::Result<Option<(LiveForecastsVersion, Vec<LiveForecast>)>>| {
                 Message::PublishedForecastLoaded(r.map_err(db_err("live_forecasts")))
             },
         )
@@ -238,9 +266,10 @@ impl HardyMonitorApp {
         self.load(
             async move {
                 db.request_retrain(now).await?;
-                suite_status(&db).await
+                let version = db.suite_version().await?;
+                Ok(Some((version, suite_status(&db).await?)))
             },
-            |r: anyhow::Result<SuiteStatus>| {
+            |r: anyhow::Result<Option<(SuiteVersion, SuiteStatus)>>| {
                 Message::SuiteStatusLoaded(r.map_err(db_err("request_forecast_run")))
             },
         )
