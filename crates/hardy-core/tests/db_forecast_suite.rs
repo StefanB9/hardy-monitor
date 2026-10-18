@@ -46,7 +46,7 @@ fn run(at: DateTime<Utc>, models: &[(&str, u32, [f64; 2])]) -> BenchmarkRun {
                 origins: *origins,
                 fitted_days: 20,
                 eligible: *origins >= 24,
-                failure: None,
+                failure: (*origins < 24).then(|| "too few origins".to_string()),
             })
             .collect(),
         scores: models

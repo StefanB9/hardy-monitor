@@ -1,10 +1,5 @@
 //! Bavarian public holidays (the gym keeps weekend hours on them).
 
-use std::{
-    collections::HashMap,
-    sync::{LazyLock, Mutex},
-};
-
 use chrono::{Datelike, NaiveDate};
 
 /// Whether `date` is a public holiday in Bavaria (fixed dates and
@@ -18,7 +13,9 @@ pub fn is_bavarian_holiday(date: NaiveDate) -> bool {
         _ => {}
     }
 
-    if let Some(easter) = easter_date_cached(year) {
+    // A few integer operations: cheaper than any cache (a shared one would
+    // need a lock on every opening-hours check, from every thread).
+    if let Some(easter) = easter_date(year) {
         let ordinal = date.ordinal();
         let easter_ordinal = easter.ordinal();
 
@@ -40,20 +37,6 @@ pub fn is_bavarian_holiday(date: NaiveDate) -> bool {
     }
 
     false
-}
-
-/// Thread-safe memoized wrapper around `easter_date`.
-///
-/// Easter computation is pure and deterministic for a given year. During ML
-/// training (~1000 calls with the same year), this avoids redundant
-/// recomputation.
-fn easter_date_cached(year: i32) -> Option<NaiveDate> {
-    static CACHE: LazyLock<Mutex<HashMap<i32, Option<NaiveDate>>>> =
-        LazyLock::new(|| Mutex::new(HashMap::new()));
-    let mut guard = CACHE
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    *guard.entry(year).or_insert_with(|| easter_date(year))
 }
 
 #[allow(clippy::many_single_char_names)]

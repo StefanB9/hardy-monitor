@@ -12,6 +12,7 @@ use hardy_core::{
     GymSchedule,
     db::{ForecastLogEntry, LiveForecast},
 };
+use rayon::prelude::*;
 
 use crate::{
     benchmark::{Bucket, Ensemble, Interval, Selection},
@@ -77,7 +78,7 @@ pub struct LiveForecasts {
 
 /// Forecasts of every model in `fitted` from the newest slot boundary at or
 /// before `now`.
-pub fn forecast_all<S1: BuildHasher, S2: BuildHasher, S3: BuildHasher>(
+pub fn forecast_all<S1: BuildHasher + Sync, S2: BuildHasher, S3: BuildHasher>(
     fitted: &HashMap<ModelId, AnyModel, S1>,
     ensembles: &HashMap<ModelId, Ensemble<ModelId>, S2>,
     intervals: &HashMap<ModelId, HorizonIntervals, S3>,
@@ -93,15 +94,21 @@ pub fn forecast_all<S1: BuildHasher, S2: BuildHasher, S3: BuildHasher>(
     });
     let data = Observed::new(&grid, &seen, schedule, origin);
 
-    let mut models = Vec::with_capacity(fitted.len());
+    // Each model's forecast is independent: computed in parallel, kept in
+    // the order of `ModelId::ALL`.
+    let results: Vec<(ModelId, Result<Vec<f64>, MlError>)> = ModelId::ALL
+        .par_iter()
+        .filter_map(|id| {
+            let model = fitted.get(id)?;
+            Some((*id, guarded(|| suite::forecast(model, &data))))
+        })
+        .collect();
+    let mut models = Vec::with_capacity(results.len());
     let mut failures = Vec::new();
-    for id in ModelId::ALL {
-        let Some(model) = fitted.get(id) else {
-            continue;
-        };
-        match guarded(|| suite::forecast(model, &data)) {
+    for (id, result) in results {
+        match result {
             Ok(values) => {
-                let model_intervals = intervals.get(id).copied().unwrap_or_default();
+                let model_intervals = intervals.get(&id).copied().unwrap_or_default();
                 let points = (1..=HORIZON_STEPS)
                     .zip(values)
                     .map(|(step, value)| (step, data.grid().step_end(step), value))
@@ -113,9 +120,9 @@ pub fn forecast_all<S1: BuildHasher, S2: BuildHasher, S3: BuildHasher>(
                         bounds: model_intervals.for_step(step).map(|i| i.around(value)),
                     })
                     .collect();
-                models.push((*id, points));
+                models.push((id, points));
             }
-            Err(e) => failures.push((*id, e)),
+            Err(e) => failures.push((id, e)),
         }
     }
     let combined = combine_ensembles(&models, ensembles, intervals);
