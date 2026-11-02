@@ -28,11 +28,11 @@ missing_panics_doc = "allow"
 
 [workspace.dependencies]
 # --- Shared across multiple crates ---
-anofox-forecast = { version = "0.16.2", default-features = false }
+anofox-forecast = { version = "0.19.0", default-features = false }
 anyhow = { version = "1.0.104", default-features = false, features = ["std"] }
 argmin = { version = "0.11.0", default-features = false }
 argmin-math = { version = "0.5.1", default-features = false, features = ["vec"] }
-burn = { version = "0.22.0", default-features = false, features = ["std", "autodiff", "optim", "flex", "store"] }
+burn = { version = "0.22.1", default-features = false, features = ["std", "autodiff", "optim", "flex", "store"] }
 chrono-tz = { version = "0.10.4", default-features = false, features = ["serde"] }
 
 # --- GUI-only ---
@@ -67,14 +67,14 @@ stlrs = { version = "0.4.0", default-features = false, features = ["alloc"] }
 temp-env = { version = "0.3.6" }
 tempfile = { version = "3.27.0" }
 thiserror = { version = "2.0.21", default-features = false }
-tokio = { version = "1.53.3", default-features = false, features = ["macros", "rt-multi-thread"] }
+tokio = { version = "1.54.1", default-features = false, features = ["macros", "rt-multi-thread"] }
 toml = { version = "1.1.8", default-features = false, features = ["parse", "serde"] }
 tracing = { version = "0.1.44", default-features = false, features = ["attributes", "std"] }
 tracing-appender = { version = "0.2.5", default-features = false }
 tracing-subscriber = { version = "0.3.23", default-features = false, features = ["env-filter", "fmt", "std"] }
 tray-icon = { version = "0.26.1", default-features = false }
 wiremock = { version = "0.6.5" }
-zstd = { version = "0.14.2", default-features = false }
+zstd = { version = "0.14.3", default-features = false }
 
 [profile.release]
 codegen-units = 1
