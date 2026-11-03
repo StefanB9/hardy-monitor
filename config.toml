@@ -14,7 +14,7 @@ acquire_timeout_secs = 10
 statement_timeout_secs = 60
 
 [gym]
-api_url = "cc"
+api_url = "https://portal.aidoo-online.de/workload?mandant=202300180_fuerstenfeldbruck&stud_nr=3&jsonResponse=1"
 
 [network]
 request_timeout_secs = 30
