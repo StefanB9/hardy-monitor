@@ -81,6 +81,8 @@ pub(crate) enum ErrorSource {
     Week,
     Insights,
     Accuracy,
+    /// The Forecasts tab's period.
+    Performance,
     ForecastHistory,
     SuiteStatus,
     PublishedForecast,

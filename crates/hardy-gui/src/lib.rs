@@ -5,6 +5,7 @@ pub mod forecasting;
 pub(crate) mod freshness;
 pub mod leaderboard;
 pub mod notifier;
+pub mod performance;
 pub mod plan_settings;
 pub mod planner;
 pub mod quiet_window;

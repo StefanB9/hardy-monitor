@@ -2,6 +2,7 @@
 
 mod data;
 mod data_tab;
+mod forecasts;
 mod loads;
 mod maintenance;
 mod message;
@@ -142,6 +143,7 @@ pub struct HardyMonitorApp {
     alerts: AlertControls,
     export_status: Option<String>,
     repair: RepairState,
+    forecasts: forecasts::ForecastsPage,
     /// No queries run until the schema matches this build.
     schema: SchemaGate,
 }
@@ -223,6 +225,7 @@ impl HardyMonitorApp {
             },
             alerts: AlertControls::new(alert_rules),
             export_status: None,
+            forecasts: forecasts::ForecastsPage::default(),
             repair: RepairState {
                 start_date: week_ago_str,
                 end_date: today_str,

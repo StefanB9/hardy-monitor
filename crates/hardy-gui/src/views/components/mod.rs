@@ -7,5 +7,5 @@ pub use controls::{
     date_input, ghost_button, primary_button, secondary_button, segmented, small_button, switch,
 };
 pub use surfaces::{
-    badge, card, card_with_actions, empty_state, legend_item, scroll, scroll_area, stat,
+    badge, caption, card, card_with_actions, empty_state, legend_item, scroll, scroll_area, stat,
 };

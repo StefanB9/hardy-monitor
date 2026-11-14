@@ -188,7 +188,7 @@ impl HardyMonitorApp {
         let now = self.clock.now_utc();
         let tz = self.schedule.timezone();
         let first_day = now.with_timezone(&tz).date_naive()
-            - chrono::TimeDelta::days(crate::views::model_data::ACCURACY_DAYS - 1);
+            - chrono::TimeDelta::days(crate::views::forecasts::ACCURACY_DAYS - 1);
         let since = hardy_core::analytics::midnight_local_as_utc(first_day, tz);
         let db = self.db.clone();
         self.load(

@@ -105,6 +105,11 @@ impl HardyMonitorApp {
             | Message::ForecastChoiceSelected(_)
             | Message::OverlayAdded(_)
             | Message::OverlayRemoved(_) => self.update_model(message),
+            Message::ForecastsTabSelected(_)
+            | Message::ForecastsPeriodSelected(_)
+            | Message::LeaderboardSourceSelected(_)
+            | Message::ModelPicked(_)
+            | Message::PerformanceLoaded(..) => self.update_forecasts(message),
             Message::PlanAveragesLoaded(_)
             | Message::PlanDaySelected(_)
             | Message::PlanLengthSelected(_)
@@ -200,8 +205,10 @@ impl HardyMonitorApp {
                     ViewMode::Data => self.load_data_table(),
                     ViewMode::Insights => self.load_insights_data(),
                     ViewMode::Plan => self.load_plan_averages(),
-                    ViewMode::ModelData => self.load_accuracy(),
-                    ViewMode::Now => Task::none(),
+                    ViewMode::Forecasts => {
+                        Task::batch([self.load_performance(), self.load_accuracy()])
+                    }
+                    ViewMode::Maintenance | ViewMode::Now => Task::none(),
                 }
             }
             Message::SwitchAnalyticsRange(range) => {
@@ -270,7 +277,9 @@ impl HardyMonitorApp {
                 self.ui.plan_cache.clear();
                 return Task::none();
             }
-            ViewMode::Week | ViewMode::Insights | ViewMode::ModelData => return Task::none(),
+            ViewMode::Week | ViewMode::Insights | ViewMode::Forecasts | ViewMode::Maintenance => {
+                return Task::none();
+            }
         }
         let now = self.clock.now_utc();
         let range = self.ui.chart_range;

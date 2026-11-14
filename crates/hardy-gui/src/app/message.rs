@@ -10,13 +10,14 @@ use hardy_core::{
     error::AppError,
     repair::RepairSummary,
 };
-use hardy_ml::suite::Family;
+use hardy_ml::suite::{Family, ModelId};
 
 use super::loads::RequestId;
 use crate::{
     data_table::DataPeriod,
     forecasting::{ForecastChoice, ModelOption, SuiteStatus},
     leaderboard::SortKey,
+    performance::{Performance, Period, Source, Tab},
     plan_settings::VisitLength,
     planner::{RangeEnd, RangeKind},
     time_range::{AnalyticsRange, ChartRange, Step},
@@ -42,18 +43,22 @@ pub enum ViewMode {
     Insights,
     /// When to go on one of the next seven days.
     Plan,
-    ModelData,
+    /// How good the forecasts are.
+    Forecasts,
+    /// Data repair and export.
+    Maintenance,
 }
 
 impl ViewMode {
     /// All views in sidebar order.
-    pub const ALL: [ViewMode; 6] = [
+    pub const ALL: [ViewMode; 7] = [
         ViewMode::Now,
         ViewMode::Week,
         ViewMode::Data,
         ViewMode::Insights,
         ViewMode::Plan,
-        ViewMode::ModelData,
+        ViewMode::Forecasts,
+        ViewMode::Maintenance,
     ];
 
     /// Page title shown in the header and sidebar.
@@ -64,7 +69,8 @@ impl ViewMode {
             ViewMode::Data => "Data",
             ViewMode::Insights => "Insights",
             ViewMode::Plan => "Plan",
-            ViewMode::ModelData => "Model & Data",
+            ViewMode::Forecasts => "Forecasts",
+            ViewMode::Maintenance => "Maintenance",
         }
     }
 
@@ -76,7 +82,8 @@ impl ViewMode {
             ViewMode::Data => "≡",
             ViewMode::Insights => "✦",
             ViewMode::Plan => "◷",
-            ViewMode::ModelData => "⚙",
+            ViewMode::Forecasts => "◈",
+            ViewMode::Maintenance => "⚙",
         }
     }
 }
@@ -171,6 +178,16 @@ pub enum Message {
     OverlayRemoved(ModelOption),
     AccuracyLoaded(Result<Vec<HorizonAccuracy>, AppError>),
 
+    ForecastsTabSelected(Tab),
+    ForecastsPeriodSelected(Period),
+    /// The leaderboard shows the backtest's or the live forecasts' numbers.
+    LeaderboardSourceSelected(Source),
+    /// A model's name clicked: open its detail (again: close it).
+    ModelPicked(ModelId),
+    /// The Forecasts tab's figures; applied only if `RequestId` is the
+    /// newest load.
+    PerformanceLoaded(RequestId, Result<Box<Performance>, AppError>),
+
     /// Quarter-hour averages of the last 28 days, for the Plan tab.
     PlanAveragesLoaded(Result<Vec<QuarterHourAverage>, AppError>),
     /// A day chip clicked (0: today).
@@ -200,6 +217,7 @@ impl Message {
             | Message::SuiteStatusLoaded(_)
             | Message::PublishedForecastLoaded(_)
             | Message::AccuracyLoaded(_)
+            | Message::PerformanceLoaded(..)
             | Message::FirstReadingLoaded(_)
             | Message::PlanAveragesLoaded(_)
             | Message::DataLoaded(..) => true,
@@ -235,6 +253,10 @@ impl Message {
             | Message::ForecastChoiceSelected(_)
             | Message::OverlayAdded(_)
             | Message::OverlayRemoved(_)
+            | Message::ForecastsTabSelected(_)
+            | Message::ForecastsPeriodSelected(_)
+            | Message::LeaderboardSourceSelected(_)
+            | Message::ModelPicked(_)
             | Message::PlanDaySelected(_)
             | Message::PlanLengthSelected(_)
             | Message::PlanRangeChanged(..)
@@ -271,6 +293,7 @@ mod tests {
             Message::SuiteStatusLoaded(failed()),
             Message::PublishedForecastLoaded(failed()),
             Message::AccuracyLoaded(failed()),
+            Message::PerformanceLoaded(RequestId::default(), failed()),
             Message::FirstReadingLoaded(failed()),
             Message::PlanAveragesLoaded(failed()),
             Message::DataLoaded(RequestId::default(), failed()),
@@ -292,6 +315,10 @@ mod tests {
                 height: 0.0,
             },
             Message::PlanDaySelected(1),
+            Message::ForecastsTabSelected(Tab::Models),
+            Message::ForecastsPeriodSelected(Period::All),
+            Message::LeaderboardSourceSelected(Source::Live),
+            Message::ModelPicked(ModelId::Naive),
             Message::PlanLengthSelected(VisitLength::OneHour),
             Message::PlanRangeChanged(RangeKind::Workday, RangeEnd::Earliest, 17),
         ];
@@ -299,12 +326,21 @@ mod tests {
     }
 
     #[test]
-    fn test_plan_sits_between_insights_and_model_data() {
+    fn test_views_in_sidebar_order() {
         let titles: Vec<_> = ViewMode::ALL.iter().map(|m| m.title()).collect();
         assert_eq!(
             titles,
-            vec!["Now", "Week", "Data", "Insights", "Plan", "Model & Data"]
+            vec![
+                "Now",
+                "Week",
+                "Data",
+                "Insights",
+                "Plan",
+                "Forecasts",
+                "Maintenance"
+            ]
         );
+        assert_eq!(ViewMode::Forecasts.icon(), "◈");
         assert_eq!(ViewMode::Plan.icon(), "◷");
     }
 }

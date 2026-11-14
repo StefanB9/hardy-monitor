@@ -1,20 +1,24 @@
-//! The forecast models card: every model's benchmark error per horizon and
-//! where it stands.
+//! The forecast models card: every model's backtest or live error per
+//! horizon and where it stands; a model's name opens its detail.
 
 use chrono::{DateTime, Utc};
 use hardy_core::Tz;
-use hardy_ml::{benchmark::Bucket, suite::Family};
+use hardy_ml::{
+    benchmark::Bucket,
+    suite::{Family, ModelId},
+};
 use iced::{
     Alignment, Element, Length,
     widget::{button, column, row, text},
 };
 
-use super::{ModelDataProps, caption};
+use super::ForecastsProps;
 use crate::{
     app::Message,
     leaderboard::{Row, Sort, SortKey, Standing, family_label},
+    performance::{Source, live_board},
     style,
-    views::components::{badge, card_with_actions, empty_state, segmented, small_button},
+    views::components::{badge, caption, card_with_actions, empty_state, segmented, small_button},
 };
 
 /// Width of a number column.
@@ -68,7 +72,15 @@ fn sort_header(
     .into()
 }
 
-fn header(sort: Sort) -> Element<'static, Message> {
+/// A bucket's column title; live forecasts reach only 6 h ahead.
+fn bucket_label(bucket: Bucket, source: Source) -> &'static str {
+    match (bucket, source) {
+        (Bucket::ThreeToDay, Source::Live) => "3–6 h",
+        _ => bucket.label(),
+    }
+}
+
+fn header(sort: Sort, source: Source) -> Element<'static, Message> {
     let mut line = row![sort_header(
         "Model",
         SortKey::Name,
@@ -85,7 +97,7 @@ fn header(sort: Sort) -> Element<'static, Message> {
         Bucket::Overall,
     ] {
         line = line.push(sort_header(
-            bucket.label(),
+            bucket_label(bucket, source),
             SortKey::Error(bucket),
             sort,
             Length::Fixed(NUMBER),
@@ -143,20 +155,39 @@ fn standing(
     }
 }
 
-fn line(r: &Row, timezone: Tz) -> Element<'static, Message> {
-    let is_selected = |bucket: Bucket| r.selected.contains(&bucket);
-    let (status, status_color) = standing(&r.standing, r.fitted_at, timezone);
-    row![
+/// A model's name: a link that opens (or closes) its detail.
+fn name(r: &Row, picked: bool) -> Element<'static, Message> {
+    let id: ModelId = r.id;
+    button(
         row![
-            text(r.name)
-                .size(style::TEXT_CAPTION)
-                .color(style::TEXT_PRIMARY),
+            text(r.name).size(style::TEXT_CAPTION),
             text(family_label(r.family))
                 .size(style::TEXT_CAPTION)
                 .color(style::TEXT_TERTIARY),
         ]
-        .spacing(style::SPACE_S)
-        .width(Length::FillPortion(NAME)),
+        .spacing(style::SPACE_S),
+    )
+    .on_press(Message::ModelPicked(id))
+    .padding(0)
+    .width(Length::FillPortion(NAME))
+    .style(move |_, status| button::Style {
+        text_color: if picked {
+            style::ACCENT
+        } else if status == button::Status::Hovered {
+            style::TEXT_PRIMARY
+        } else {
+            style::TEXT_SECONDARY
+        },
+        ..Default::default()
+    })
+    .into()
+}
+
+fn line(r: &Row, timezone: Tz, picked: bool) -> Element<'static, Message> {
+    let is_selected = |bucket: Bucket| r.selected.contains(&bucket);
+    let (status, status_color) = standing(&r.standing, r.fitted_at, timezone);
+    row![
+        name(r, picked),
         number(r.mae[1], is_selected(Bucket::NextHour)),
         number(r.mae[2], is_selected(Bucket::OneToThreeHours)),
         number(r.mae[3], is_selected(Bucket::ThreeToDay)),
@@ -179,40 +210,68 @@ fn line(r: &Row, timezone: Tz) -> Element<'static, Message> {
     .into()
 }
 
-pub(super) fn card<'a>(props: &ModelDataProps<'a>) -> Element<'a, Message> {
-    let actions: Element<'a, Message> = if props.run_pending {
+pub(super) fn card<'a>(props: &ForecastsProps<'a>) -> Element<'a, Message> {
+    let run: Element<'a, Message> = if props.run_pending {
         badge("Run requested…".to_string(), style::WARNING)
     } else {
         small_button("Run now", Message::ForecastRunRequested).into()
     };
-    let board = props.leaderboard;
+    let sources: Vec<(&str, Source)> = Source::ALL.iter().map(|s| (s.label(), *s)).collect();
+    let actions = row![
+        segmented(&sources, props.source, Message::LeaderboardSourceSelected),
+        run
+    ]
+    .spacing(style::SPACE_M)
+    .align_y(Alignment::Center);
+
+    let live;
+    let board = match (props.source, props.performance) {
+        (Source::Live, Some(performance)) => {
+            live = live_board(props.leaderboard, &performance.live);
+            &live
+        }
+        _ => props.leaderboard,
+    };
     let mut body = column![].spacing(style::SPACE_M);
-    match (&board.period, board.finished_at) {
-        (Some(period), Some(finished)) => {
+    match (props.source, &board.period, board.finished_at) {
+        (Source::Live, _, _) => {
+            body = body.push(caption(format!(
+                "Live forecasts logged every full hour, {}",
+                props.period_label
+            )));
+        }
+        (Source::Backtest, Some(period), Some(finished)) => {
             body = body.push(caption(format!(
                 "Backtest {period} · run {}",
                 finished.with_timezone(&props.timezone).format("%a %H:%M")
             )));
         }
-        _ => {
+        (Source::Backtest, _, _) => {
             body = body.push(empty_state(
                 "No benchmark yet. The forecaster fits and tests every model each night, and \
                  right away when a model is new; the table fills in after its first run.",
             ));
         }
     }
-    let mut table = column![header(props.leaderboard_sort)].spacing(style::SPACE_XS);
+    let mut table = column![header(props.leaderboard_sort, props.source)].spacing(style::SPACE_XS);
     for r in board.view(props.leaderboard_sort, props.leaderboard_family) {
-        table = table.push(line(r, props.timezone));
+        table = table.push(line(r, props.timezone, props.picked == Some(r.id)));
     }
+    let note = match props.source {
+        Source::Backtest => {
+            "Average error in percentage points over the backtest; click a column to sort, a name \
+             for the model's detail. ★ marks the model shown for that horizon. In band: share of \
+             actual values inside the 80 % band."
+        }
+        Source::Live => {
+            "Average error in percentage points of the forecasts the models made live; – where a \
+             model has none in the period yet. Click a name for the model's detail."
+        }
+    };
     body = body
         .push(family_filter(props.leaderboard_family))
         .push(table)
-        .push(caption(
-            "Average error in percentage points over the backtest; click a column to sort. ★ \
-             marks the model shown for that horizon. In band: share of actual values inside the \
-             80 % band.",
-        ));
+        .push(caption(note));
     if let Some(error) = props.last_run_error {
         body = body.push(
             text(format!("Last run failed: {error}"))
@@ -230,6 +289,13 @@ mod tests {
     use chrono::TimeZone;
 
     use super::*;
+
+    #[test]
+    fn test_live_columns_reach_six_hours() {
+        assert_eq!(bucket_label(Bucket::ThreeToDay, Source::Live), "3–6 h");
+        assert_eq!(bucket_label(Bucket::ThreeToDay, Source::Backtest), "3–24 h");
+        assert_eq!(bucket_label(Bucket::NextHour, Source::Live), "Next hour");
+    }
 
     #[test]
     fn test_status_shows_data_and_last_fit_in_gym_time() {
