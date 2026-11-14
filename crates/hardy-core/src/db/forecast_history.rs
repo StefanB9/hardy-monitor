@@ -3,8 +3,10 @@
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
+use chrono_tz::Tz;
 
 use super::Database;
+use crate::accuracy::Pair;
 
 /// The default forecast of one past slot.
 #[derive(Debug, Clone, PartialEq)]
@@ -18,6 +20,16 @@ pub struct ForecastHistoryEntry {
     pub value: f64,
     pub low: Option<f64>,
     pub high: Option<f64>,
+}
+
+/// A past default forecast scored against the slot's reading.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ScoredForecast {
+    pub target: DateTime<Utc>,
+    pub made_at: DateTime<Utc>,
+    /// Key of the model the value came from.
+    pub model: String,
+    pub pair: Pair,
 }
 
 impl Database {
@@ -92,5 +104,59 @@ impl Database {
             .fetch_one(&self.pool)
             .await
             .context("failed to look up the forecast history")
+    }
+
+    /// Past default forecasts for slots in `[since, until)` that have a
+    /// measured or smoothed reading, with plain averages and last week's
+    /// reading for the same gym-local slot; oldest first.
+    #[tracing::instrument(skip(self), fields(db.operation = "scored_forecast_history"))]
+    pub async fn scored_forecast_history(
+        &self,
+        since: DateTime<Utc>,
+        until: DateTime<Utc>,
+        tz: Tz,
+    ) -> Result<Vec<ScoredForecast>> {
+        let rows = sqlx::query!(
+            r#"
+            SELECT h.target, h.made_at, h.model, h.value, h.low, h.high,
+                   o.percentage AS actual,
+                   (SELECT AVG(p.percentage) FROM occupancy_logs p
+                    WHERE p.source IN ('measured', 'smoothed')
+                      AND p.timestamp IN (
+                          SELECT ((h.target AT TIME ZONE $3) - w * INTERVAL '7 days')
+                                 AT TIME ZONE $3
+                          FROM generate_series(1, 4) AS w)) AS baseline,
+                   (SELECT p.percentage FROM occupancy_logs p
+                    WHERE p.source IN ('measured', 'smoothed')
+                      AND p.timestamp = ((h.target AT TIME ZONE $3) - INTERVAL '7 days')
+                                        AT TIME ZONE $3) AS last_week
+            FROM forecast_history h
+            JOIN occupancy_logs o
+              ON o.timestamp = h.target AND o.source IN ('measured', 'smoothed')
+            WHERE h.target >= $1 AND h.target < $2
+            ORDER BY h.target
+            "#,
+            since,
+            until,
+            tz.name()
+        )
+        .fetch_all(&self.pool)
+        .await
+        .context("failed to score the forecast history")?;
+        Ok(rows
+            .into_iter()
+            .map(|r| ScoredForecast {
+                target: r.target,
+                made_at: r.made_at,
+                model: r.model,
+                pair: Pair {
+                    actual: r.actual,
+                    forecast: r.value,
+                    band: r.low.zip(r.high),
+                    baseline: r.baseline,
+                    last_week: r.last_week,
+                },
+            })
+            .collect())
     }
 }

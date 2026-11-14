@@ -1,0 +1,19 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO model_forecast_log (made_at, model, forecast, low, high)\n            SELECT $1, m.model,\n                   ($3::real[])[(m.i::int4 - 1) * $6 + 1 : m.i::int4 * $6],\n                   ($4::real[])[(m.i::int4 - 1) * $6 + 1 : m.i::int4 * $6],\n                   ($5::real[])[(m.i::int4 - 1) * $6 + 1 : m.i::int4 * $6]\n            FROM UNNEST($2::text[]) WITH ORDINALITY AS m(model, i)\n            ON CONFLICT (made_at, model) DO NOTHING\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Timestamptz",
+        "TextArray",
+        "Float4Array",
+        "Float4Array",
+        "Float4Array",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "c06faf450c076d0e55e63e1d97d2800c194e0c65501a7d76542e994daa55f9cb"
+}

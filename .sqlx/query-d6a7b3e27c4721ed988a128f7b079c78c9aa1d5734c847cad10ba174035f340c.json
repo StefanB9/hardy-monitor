@@ -1,0 +1,170 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            WITH f AS (\n                SELECT l.model, s.step::int4 AS step,\n                       l.made_at + s.step * INTERVAL '15 minutes' AS target,\n                       s.value::float8 AS forecast, s.low::float8 AS low, s.high::float8 AS high\n                FROM model_forecast_log l\n                CROSS JOIN LATERAL UNNEST(l.forecast, l.low, l.high)\n                    WITH ORDINALITY AS s(value, low, high, step)\n                WHERE l.made_at >= $1::timestamptz - INTERVAL '1 day' AND l.made_at < $2\n                  AND s.value IS NOT NULL\n            ),\n            refs AS (\n                SELECT t.target, o.percentage AS actual,\n                       (SELECT AVG(p.percentage) FROM occupancy_logs p\n                        WHERE p.source IN ('measured', 'smoothed')\n                          AND p.timestamp IN (\n                              SELECT ((t.target AT TIME ZONE $3) - w * INTERVAL '7 days')\n                                     AT TIME ZONE $3\n                              FROM generate_series(1, 4) AS w)) AS baseline,\n                       (SELECT p.percentage FROM occupancy_logs p\n                        WHERE p.source IN ('measured', 'smoothed')\n                          AND p.timestamp = ((t.target AT TIME ZONE $3) - INTERVAL '7 days')\n                                            AT TIME ZONE $3) AS last_week\n                FROM (SELECT DISTINCT target FROM f WHERE target >= $1 AND target < $2) t\n                JOIN occupancy_logs o\n                  ON o.timestamp = t.target AND o.source IN ('measured', 'smoothed')\n            ),\n            scored AS (\n                SELECT f.model, f.step, (f.target AT TIME ZONE $3)::date AS day,\n                       f.forecast - r.actual AS e, r.actual, r.baseline, r.last_week,\n                       f.low, f.high\n                FROM f JOIN refs r ON r.target = f.target\n            )\n            SELECT model AS \"model!\", step, day,\n                   COUNT(*) AS \"count!\",\n                   COALESCE(SUM(ABS(e)), 0) AS \"abs!\",\n                   COALESCE(SUM(e * e), 0) AS \"squared!\",\n                   COALESCE(SUM(e), 0) AS \"signed!\",\n                   COALESCE(SUM(actual), 0) AS \"actual!\",\n                   COUNT(*) FILTER (WHERE e > 0) AS \"over!\",\n                   COUNT(*) FILTER (WHERE ABS(e) <= 5) AS \"within_5!\",\n                   COUNT(*) FILTER (WHERE ABS(e) <= 10) AS \"within_10!\",\n                   COUNT(baseline) AS \"baseline_count!\",\n                   COALESCE(SUM(ABS(e)) FILTER (WHERE baseline IS NOT NULL), 0)\n                       AS \"abs_on_baseline!\",\n                   COALESCE(SUM(ABS(baseline - actual)), 0) AS \"baseline_abs!\",\n                   COUNT(last_week) AS \"last_week_count!\",\n                   COALESCE(SUM(ABS(e)) FILTER (WHERE last_week IS NOT NULL), 0)\n                       AS \"abs_on_last_week!\",\n                   COALESCE(SUM(ABS(last_week - actual)), 0) AS \"last_week_abs!\",\n                   COUNT(*) FILTER (WHERE low IS NOT NULL AND high IS NOT NULL) AS \"banded!\",\n                   COUNT(*) FILTER (WHERE actual BETWEEN low AND high) AS \"covered!\",\n                   COALESCE(SUM(high - low), 0) AS \"width!\",\n                   COALESCE(SUM((high - low)\n                       + 10 * (GREATEST(low - actual, 0) + GREATEST(actual - high, 0))), 0)\n                       AS \"interval_score!\"\n            FROM scored\n            GROUP BY GROUPING SETS ((model, step), (model, day))\n            ORDER BY model, step, day\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "model!",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "model_forecast_log",
+            "name": "model"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "step",
+        "type_info": "Int4",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 2,
+        "name": "day",
+        "type_info": "Date",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 3,
+        "name": "count!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 4,
+        "name": "abs!",
+        "type_info": "Float8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 5,
+        "name": "squared!",
+        "type_info": "Float8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 6,
+        "name": "signed!",
+        "type_info": "Float8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 7,
+        "name": "actual!",
+        "type_info": "Float8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 8,
+        "name": "over!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 9,
+        "name": "within_5!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 10,
+        "name": "within_10!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 11,
+        "name": "baseline_count!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 12,
+        "name": "abs_on_baseline!",
+        "type_info": "Float8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 13,
+        "name": "baseline_abs!",
+        "type_info": "Float8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 14,
+        "name": "last_week_count!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 15,
+        "name": "abs_on_last_week!",
+        "type_info": "Float8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 16,
+        "name": "last_week_abs!",
+        "type_info": "Float8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 17,
+        "name": "banded!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 18,
+        "name": "covered!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 19,
+        "name": "width!",
+        "type_info": "Float8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 20,
+        "name": "interval_score!",
+        "type_info": "Float8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Timestamptz",
+        "Timestamptz",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "d6a7b3e27c4721ed988a128f7b079c78c9aa1d5734c847cad10ba174035f340c"
+}

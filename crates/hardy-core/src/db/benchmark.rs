@@ -53,7 +53,7 @@ fn int(value: u32, what: &str) -> Result<i32> {
     i32::try_from(value).with_context(|| format!("{what} out of range"))
 }
 
-fn count(value: i32, what: &str) -> Result<u32> {
+pub(super) fn count(value: i32, what: &str) -> Result<u32> {
     u32::try_from(value).with_context(|| format!("negative {what}"))
 }
 
@@ -133,13 +133,16 @@ async fn insert_scores(
     Ok(())
 }
 
-/// Replaces the selection with `selection`, made from run `id`.
+/// Replaces the selection with `selection`, made from run `id`, and keeps
+/// it with the run.
 async fn replace_selection(
     conn: &mut sqlx::PgConnection,
     id: i64,
     selection: &[(i16, String)],
     selected_at: DateTime<Utc>,
 ) -> Result<()> {
+    let buckets: Vec<i16> = selection.iter().map(|(bucket, _)| *bucket).collect();
+    let models: Vec<String> = selection.iter().map(|(_, model)| model.clone()).collect();
     sqlx::query!("DELETE FROM forecast_selection")
         .execute(&mut *conn)
         .await
@@ -149,26 +152,32 @@ async fn replace_selection(
         INSERT INTO forecast_selection (bucket, model, run_id, selected_at)
         SELECT bucket, model, $3, $4 FROM UNNEST($1::int2[], $2::text[]) AS s(bucket, model)
         "#,
-        &selection
-            .iter()
-            .map(|(bucket, _)| *bucket)
-            .collect::<Vec<_>>(),
-        &selection
-            .iter()
-            .map(|(_, model)| model.clone())
-            .collect::<Vec<_>>(),
+        &buckets,
+        &models,
         id,
         selected_at
     )
     .execute(&mut *conn)
     .await
     .context("failed to store the selection")?;
+    sqlx::query!(
+        r#"
+        INSERT INTO benchmark_selection (run_id, bucket, model)
+        SELECT $3, bucket, model FROM UNNEST($1::int2[], $2::text[]) AS s(bucket, model)
+        "#,
+        &buckets,
+        &models,
+        id
+    )
+    .execute(&mut *conn)
+    .await
+    .context("failed to keep the selection with its run")?;
     Ok(())
 }
 
 impl Database {
-    /// Stores a run and the selection made from it, then deletes all but
-    /// the newest `keep` runs, in one transaction. Returns the run's id.
+    /// Stores a run and the selection made from it, in one transaction.
+    /// Every run is kept, for the benchmark history. Returns the run's id.
     #[tracing::instrument(skip_all, fields(
         db.operation = "save_benchmark",
         models = run.models.len(),
@@ -178,9 +187,7 @@ impl Database {
         &self,
         run: &BenchmarkRun,
         selection: &[(i16, String)],
-        keep: usize,
     ) -> Result<i64> {
-        let keep = i64::try_from(keep).context("keep count out of range")?;
         let mut tx = self
             .pool
             .begin()
@@ -209,16 +216,6 @@ impl Database {
         insert_scores(&mut tx, id, &run.scores).await?;
         replace_selection(&mut tx, id, selection, run.finished_at).await?;
 
-        sqlx::query!(
-            r#"
-            DELETE FROM benchmark_runs
-            WHERE id NOT IN (SELECT id FROM benchmark_runs ORDER BY id DESC LIMIT $1)
-            "#,
-            keep
-        )
-        .execute(&mut *tx)
-        .await
-        .context("failed to prune old benchmark runs")?;
         tx.commit().await.context("failed to commit benchmark")?;
         Ok(id)
     }

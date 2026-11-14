@@ -1,0 +1,148 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT s.run_id, s.model, s.bucket, s.mae, s.rmse, s.mase, s.coverage, s.pinball,\n                   s.errors, s.interval_low, s.interval_high\n            FROM benchmark_scores s\n            JOIN benchmark_runs r ON r.id = s.run_id\n            WHERE r.finished_at >= $1\n            ORDER BY s.run_id, s.model, s.bucket\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "run_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "benchmark_scores",
+            "name": "run_id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "model",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "benchmark_scores",
+            "name": "model"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "bucket",
+        "type_info": "Int2",
+        "origin": {
+          "Table": {
+            "table": "benchmark_scores",
+            "name": "bucket"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "mae",
+        "type_info": "Float8",
+        "origin": {
+          "Table": {
+            "table": "benchmark_scores",
+            "name": "mae"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "rmse",
+        "type_info": "Float8",
+        "origin": {
+          "Table": {
+            "table": "benchmark_scores",
+            "name": "rmse"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "mase",
+        "type_info": "Float8",
+        "origin": {
+          "Table": {
+            "table": "benchmark_scores",
+            "name": "mase"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "coverage",
+        "type_info": "Float8",
+        "origin": {
+          "Table": {
+            "table": "benchmark_scores",
+            "name": "coverage"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "pinball",
+        "type_info": "Float8",
+        "origin": {
+          "Table": {
+            "table": "benchmark_scores",
+            "name": "pinball"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "errors",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "benchmark_scores",
+            "name": "errors"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "interval_low",
+        "type_info": "Float8",
+        "origin": {
+          "Table": {
+            "table": "benchmark_scores",
+            "name": "interval_low"
+          }
+        }
+      },
+      {
+        "ordinal": 10,
+        "name": "interval_high",
+        "type_info": "Float8",
+        "origin": {
+          "Table": {
+            "table": "benchmark_scores",
+            "name": "interval_high"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "980d7f281c6e6ea35dba53d13db094e8575a9e009ac1b671d1143298854de19c"
+}

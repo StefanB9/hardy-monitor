@@ -100,7 +100,7 @@ async fn test_suite_version_changes_with_a_run_request_and_attempt() -> Result<(
         scores: Vec::new(),
     };
     tdb.db
-        .save_benchmark(&run, &[(1, "naive".to_string())], 5)
+        .save_benchmark(&run, &[(1, "naive".to_string())])
         .await?;
     assert_ne!(tdb.db.suite_version().await?, fitted);
 
