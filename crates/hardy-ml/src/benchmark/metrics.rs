@@ -120,8 +120,8 @@ impl Accumulator {
             rmse: (self.squared / n).sqrt(),
             mase: scale.filter(|s| *s > 0.0).map(|s| mae / s),
             #[allow(clippy::cast_precision_loss)]
-            coverage: with_interval.then(|| self.covered as f64 / m),
-            pinball: with_interval.then(|| self.pinball / m),
+            coverage: with_interval.then_some(self.covered as f64 / m),
+            pinball: with_interval.then_some(self.pinball / m),
             errors: self.count,
         })
     }
