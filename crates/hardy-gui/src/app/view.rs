@@ -67,6 +67,7 @@ impl HardyMonitorApp {
             }),
             ViewMode::Forecasts => views::forecasts::view(ForecastsProps {
                 timezone: self.schedule.timezone(),
+                error_grid: &self.forecasts.error_grid,
                 tab: self.forecasts.tab,
                 period: self.forecasts.period,
                 period_label: views::forecasts::period_label(self.forecasts.period),

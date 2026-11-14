@@ -4,9 +4,11 @@
 mod accuracy;
 mod charts;
 mod detail;
+mod intervals;
 mod leaderboard;
 mod models;
 mod overview;
+mod when;
 
 pub(crate) use accuracy::DAYS as ACCURACY_DAYS;
 use hardy_core::{Tz, accuracy::AccuracySummary};
@@ -15,6 +17,7 @@ use iced::{
     Alignment, Element, Length,
     widget::{Space, canvas::Cache, column, row},
 };
+pub(crate) use when::error_grid;
 
 use crate::{
     app::Message,
@@ -22,6 +25,7 @@ use crate::{
     performance::{ModelDetail, Performance, Period, Source, Tab},
     style,
     views::components::{empty_state, scroll, segmented},
+    widgets::heatmap::WeekGrid,
 };
 
 /// The charts of the Forecasts tab, redrawn when their data changes.
@@ -32,20 +36,45 @@ pub struct Caches {
     pub backtest: Cache,
     pub live_daily: Cache,
     pub lead_time: Cache,
+    pub heatmap: Cache,
+    pub heatmap_tooltip: Cache,
+    /// When & where's lead-time curves, which include the picked model.
+    pub lead_compare: Cache,
+    pub forecast_vs_actual: Cache,
+    pub histogram: Cache,
+    pub bias_hour: Cache,
+    pub bias_weekday: Cache,
+    pub coverage_daily: Cache,
+    pub coverage_lead: Cache,
+    pub width_daily: Cache,
 }
 
 impl Caches {
-    /// Clears the open model's charts.
+    /// Clears the charts that show the picked model.
     pub fn clear_detail(&self) {
         self.backtest.clear();
         self.live_daily.clear();
         self.lead_time.clear();
+        self.lead_compare.clear();
     }
 
     /// Clears every chart.
     pub fn clear_all(&self) {
-        self.daily.clear();
-        self.scatter.clear();
+        for cache in [
+            &self.daily,
+            &self.scatter,
+            &self.heatmap,
+            &self.heatmap_tooltip,
+            &self.forecast_vs_actual,
+            &self.histogram,
+            &self.bias_hour,
+            &self.bias_weekday,
+            &self.coverage_daily,
+            &self.coverage_lead,
+            &self.width_daily,
+        ] {
+            cache.clear();
+        }
         self.clear_detail();
     }
 }
@@ -54,6 +83,8 @@ impl Caches {
 #[derive(Clone, Copy)]
 pub struct ForecastsProps<'a> {
     pub timezone: Tz,
+    /// The default forecast's error per weekday and hour.
+    pub error_grid: &'a WeekGrid,
     pub tab: Tab,
     pub period: Period,
     /// E.g. "last 28 days".
@@ -125,6 +156,14 @@ pub fn view(props: ForecastsProps<'_>) -> Element<'_, Message> {
             None => empty_state("Loading the forecasts' performance…"),
         },
         Tab::Models => models::view(&props),
+        Tab::WhenWhere => match props.performance {
+            Some(performance) => when::view(&props, performance),
+            None => empty_state("Loading the forecasts' performance…"),
+        },
+        Tab::IntervalsBias => match props.performance {
+            Some(performance) => intervals::view(&props, performance),
+            None => empty_state("Loading the forecasts' performance…"),
+        },
     };
     column![controls, scroll(page)]
         .spacing(style::SPACE_L)
