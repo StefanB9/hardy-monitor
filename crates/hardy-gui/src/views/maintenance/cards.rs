@@ -6,11 +6,13 @@ use iced::{
     widget::{column, row, text},
 };
 
-use super::{ModelDataProps, caption};
+use super::MaintenanceProps;
 use crate::{
     app::{Message, RepairPreset},
     style,
-    views::components::{badge, card, date_input, primary_button, secondary_button, small_button},
+    views::components::{
+        badge, caption, card, date_input, primary_button, secondary_button, small_button,
+    },
 };
 
 fn repair_result(result: &Result<RepairSummary, AppError>) -> Element<'_, Message> {
@@ -54,7 +56,7 @@ fn repair_result(result: &Result<RepairSummary, AppError>) -> Element<'_, Messag
     }
 }
 
-pub(super) fn repair_card<'a>(props: &ModelDataProps<'a>) -> Element<'a, Message> {
+pub(super) fn repair_card<'a>(props: &MaintenanceProps<'a>) -> Element<'a, Message> {
     let dates = row![
         date_input(props.repair_start, Message::RepairStartDateChanged),
         caption("to"),
@@ -100,7 +102,7 @@ pub(super) fn repair_card<'a>(props: &ModelDataProps<'a>) -> Element<'a, Message
     card("Data repair", body).width(Length::Fill).into()
 }
 
-pub(super) fn export_card<'a>(props: &ModelDataProps<'a>) -> Element<'a, Message> {
+pub(super) fn export_card<'a>(props: &MaintenanceProps<'a>) -> Element<'a, Message> {
     let mut body = column![
         text("Every reading as CSV, saved to your Downloads folder.")
             .size(style::TEXT_CAPTION)

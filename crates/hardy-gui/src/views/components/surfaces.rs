@@ -78,6 +78,13 @@ pub fn stat(
     col.into()
 }
 
+/// Small muted text, for notes under tables and charts.
+pub fn caption(s: impl text::IntoFragment<'static>) -> text::Text<'static> {
+    text(s)
+        .size(style::TEXT_CAPTION)
+        .color(style::TEXT_TERTIARY)
+}
+
 /// A small pill with tinted background, e.g. "42%" or "Forecast".
 pub fn badge<'a>(label: String, color: Color) -> Element<'a, Message> {
     container(text(label).size(style::TEXT_CAPTION).color(color))

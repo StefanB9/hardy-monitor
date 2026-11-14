@@ -10,8 +10,8 @@ use crate::{
     style::{self},
     time_range::can_step_back,
     views::{
-        self, DataProps, InsightsProps, ModelDataProps, NowProps, PlanProps, WeekProps,
-        components::secondary_button, schema_notice::SchemaGate,
+        self, DataProps, ForecastsProps, InsightsProps, MaintenanceProps, NowProps, PlanProps,
+        WeekProps, components::secondary_button, schema_notice::SchemaGate,
     },
 };
 
@@ -65,14 +65,24 @@ impl HardyMonitorApp {
                 high_threshold: self.config.thresholds.high_occupancy_percent,
                 curve_cache: &self.ui.plan_cache,
             }),
-            ViewMode::ModelData => views::model_data::view(ModelDataProps {
+            ViewMode::Forecasts => views::forecasts::view(ForecastsProps {
                 timezone: self.schedule.timezone(),
+                tab: self.forecasts.tab,
+                period: self.forecasts.period,
+                period_label: views::forecasts::period_label(self.forecasts.period),
+                source: self.forecasts.source,
+                picked: self.forecasts.picked,
+                performance: self.forecasts.performance.as_ref(),
+                detail: self.forecasts.detail.as_ref(),
+                caches: &self.forecasts.caches,
                 leaderboard: self.data.forecasting.leaderboard(),
                 leaderboard_sort: self.ui.leaderboard_sort,
                 leaderboard_family: self.ui.leaderboard_family,
-                accuracy: self.data.accuracy.as_ref(),
                 run_pending: self.data.forecasting.run_pending(),
                 last_run_error: self.data.forecasting.last_error(),
+                accuracy: self.data.accuracy.as_ref(),
+            }),
+            ViewMode::Maintenance => views::maintenance::view(MaintenanceProps {
                 repair_start: &self.repair.start_date,
                 repair_end: &self.repair.end_date,
                 repair_running: self.repair.is_running,

@@ -21,7 +21,8 @@ hardy-monitor/                         (workspace root)
 │   ├── hardy-core/                    (library — shared by daemon, forecaster, ML and GUI)
 │   │   ├── src/
 │   │   │   ├── lib.rs                 Module declarations + re-exports
-│   │   │   ├── accuracy.rs            Summaries of logged forecast accuracy
+│   │   │   ├── accuracy/              Accuracy measures (error sums → MAE, bias, skill, coverage, …),
+│   │   │   │                          breakdowns per day, summaries of the hourly log
 │   │   │   ├── alert/                 Low-occupancy alerts: settings, engine, windows, phone commands, service
 │   │   │   ├── analytics/             Stats, day analysis, peak/quiet slots, insights, period comparison,
 │   │   │   │                          trend; time.rs: gym-local time helpers
@@ -94,11 +95,14 @@ hardy-monitor/                         (workspace root)
 │           ├── lib.rs                 Module declarations
 │           ├── app/                   HardyMonitorApp (mod), message (Message, ViewMode), update, data
 │           │                          (applying loaded data), data_tab (Data tab loads, period, scroll),
+│           │                          forecasts (Forecasts tab loads, sub-page, period, model picked),
 │           │                          maintenance (export/repair), view (shell), sidebar, tasks (DB loads)
 │           ├── style.rs               Design tokens: colours, occupancy scale, type/spacing scales
 │           ├── forecasting.rs         Forecast state: published forecast, model states, quiet window
 │           ├── leaderboard/           Forecast models table: benchmark error per horizon, standing;
 │           │                          order.rs: column sort, family filter, picker order
+│           ├── performance/           Forecasts tab figures: period, measures over time, live scores per
+│           │                          model (live.rs), a model's detail (model.rs)
 │           ├── quiet_window.rs        Next quiet hour (forecast, else slot averages)
 │           ├── time_range.rs          ChartRange / AnalyticsRange and the instants they cover
 │           ├── data_table.rs          Data tab: day/week periods, rows in view, reading counts by source
@@ -107,9 +111,11 @@ hardy-monitor/                         (workspace root)
 │           ├── alerts.rs              Alert controls (shared settings, desktop popups)
 │           ├── notifier.rs            SystemNotifier (desktop popups)
 │           ├── widgets/               Canvas widgets: gauge, heatmap/ (grid.rs: WeekGrid), history_chart/
-│           │                          (plot, layers, past forecast layer, axis)
-│           └── views/                 now/, week, data (readings table), insights, model_data/,
-│                                      schema_notice, opening;
+│           │                          (plot, layers, past forecast layer, axis), plot/ (line chart,
+│           │                          scatter plot)
+│           └── views/                 now/, week, data (readings table), insights, plan/, forecasts/
+│                                      (overview, models, model detail, leaderboard, hourly log),
+│                                      maintenance/ (repair, export), schema_notice, opening;
 │                                      components/ (cards, buttons, …)
 ```
 

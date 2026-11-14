@@ -1,5 +1,5 @@
-//! "Live accuracy": how the daemon's logged forecasts compared with what
-//! actually happened, next to the baseline.
+//! "Hourly log": how the default forecast logged every full hour compared
+//! with what actually happened, next to the baseline.
 
 use hardy_core::accuracy::{AccuracySummary, ErrorPair};
 use iced::{
@@ -62,7 +62,7 @@ pub(super) fn card(summary: Option<&AccuracySummary>) -> Element<'_, Message> {
     let header = badge(format!("Last {DAYS} days"), style::TEXT_SECONDARY);
     let Some(summary) = summary else {
         return card_with_actions(
-            "Live accuracy",
+            "Hourly log",
             header,
             empty_state(
                 "Nothing scored yet. The forecaster logs a forecast every hour while the gym is \
@@ -149,7 +149,7 @@ pub(super) fn card(summary: Option<&AccuracySummary>) -> Element<'_, Message> {
     }
 
     card_with_actions(
-        "Live accuracy",
+        "Hourly log",
         header,
         column![stats, days].spacing(style::SPACE_XL),
     )
