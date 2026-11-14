@@ -1,10 +1,12 @@
 //! Forecast accuracy: the measures of scored forecasts, and summaries of
 //! the logged forecasts for display.
 
+mod breakdown;
 mod measures;
 
 use std::collections::BTreeMap;
 
+pub use breakdown::{by_day, total, trailing};
 use chrono::NaiveDate;
 pub use measures::{ErrorSums, Measures, Pair, interval_score};
 
