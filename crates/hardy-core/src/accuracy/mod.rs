@@ -6,7 +6,7 @@ mod measures;
 
 use std::collections::BTreeMap;
 
-pub use breakdown::{by_day, total, trailing};
+pub use breakdown::{by_day, by_level, by_weekday_hour, error_histogram, total, trailing};
 use chrono::NaiveDate;
 pub use measures::{ErrorSums, Measures, Pair, interval_score};
 
