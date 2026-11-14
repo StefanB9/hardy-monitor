@@ -41,7 +41,7 @@ impl WeekGrid {
     /// Places hourly averages on the grid; hours outside opening times are
     /// closed.
     pub fn new(data: &[HourlyAverage], schedule: &GymSchedule) -> Self {
-        let mut values = [[None; 24]; 7];
+        let mut values: [[Option<CellValue>; 24]; 7] = [[None; 24]; 7];
         for avg in data {
             if let (Ok(day), Ok(hour)) = (usize::try_from(avg.weekday), usize::try_from(avg.hour))
                 && day < 7
@@ -55,6 +55,12 @@ impl WeekGrid {
                 });
             }
         }
+        Self::from_values(values, schedule)
+    }
+
+    /// A grid of any per-hour values (e.g. forecast errors), with the
+    /// regular opening hours of each weekday.
+    pub fn from_values(values: [[Option<CellValue>; 24]; 7], schedule: &GymSchedule) -> Self {
         // SAFETY: 2024-07-01 is a Monday and that week has no Bavarian
         // holiday, so each date shows the regular hours of its weekday.
         let open = std::array::from_fn(|day| {
@@ -114,6 +120,21 @@ impl WeekGrid {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_from_values_keeps_the_cells_and_opening_hours() {
+        let mut values = [[None; 24]; 7];
+        let cell = CellValue {
+            value: 3.5,
+            days: 12,
+            spread: -0.4,
+        };
+        values[2][10] = Some(cell);
+        let grid = WeekGrid::from_values(values, &GymSchedule::default());
+        assert_eq!(grid.cell(2, 10), Cell::Value(cell));
+        assert_eq!(grid.cell(2, 11), Cell::NoData);
+        assert_eq!(grid.hour_span(), WeekGrid::default().hour_span());
+    }
 
     fn avg(weekday: i32, hour: i32, value: f64) -> HourlyAverage {
         HourlyAverage {
