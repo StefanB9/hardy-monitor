@@ -6,6 +6,9 @@ use chrono::{DateTime, Timelike, Utc};
 use hardy_core::{Database, schedule::GymSchedule};
 use hardy_ml::service::ForecastService;
 
+/// Quarter-hour steps per hour of the per-model log.
+const STEPS_PER_HOUR: usize = 4;
+
 /// Whether forecasts are published for this fetch slot: every quarter hour.
 pub(crate) fn is_publishing_slot(slot: DateTime<Utc>) -> bool {
     slot.minute().is_multiple_of(15)
@@ -23,8 +26,9 @@ pub(crate) fn is_logging_slot(slot: DateTime<Utc>) -> bool {
 }
 
 /// Publishes every model's forecast made at `slot`; on full hours also logs
-/// the default forecast (kept for good, so accuracy covers all history).
-/// Returns how many log entries were stored.
+/// the default forecast and every model's forecast `log_hours` ahead (kept
+/// for good, so accuracy covers all history). Returns how many default
+/// forecast log entries were stored.
 pub(crate) async fn publish(
     database: &Database,
     service: &mut ForecastService,
@@ -38,7 +42,14 @@ pub(crate) async fn publish(
     if !is_logging_slot(slot) {
         return Ok(0);
     }
-    database.save_forecasts(&live.log_entries(log_hours)).await
+    let logged = database
+        .save_forecasts(&live.log_entries(log_hours))
+        .await?;
+    let steps = usize::try_from(log_hours).context("log hours out of range")? * STEPS_PER_HOUR;
+    database
+        .save_model_forecasts(live.origin, &live.model_log(steps))
+        .await?;
+    Ok(logged)
 }
 
 #[cfg(test)]
