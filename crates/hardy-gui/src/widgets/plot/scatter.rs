@@ -10,7 +10,7 @@ use iced::{
 
 use super::{
     PAD_LEFT, PAD_TOP, Scale, caption, draw_tooltip, draw_value_grid, draw_x_ticks, nice_scale,
-    tick_label,
+    tick_label, ticks,
 };
 use crate::{app::Message, style};
 
@@ -54,7 +54,7 @@ impl ScatterPlot<'_> {
             .flat_map(|d| [d.x, d.y])
             .fold(0.0, f64::max);
         let (top, step) = nice_scale(max);
-        (Scale::new(size, (0.0, top), top), step)
+        (Scale::new(size, (0.0, top), (0.0, top)), step)
     }
 }
 
@@ -86,13 +86,11 @@ impl canvas::Program<Message> for ScatterPlot<'_> {
         let (scale, step) = self.scale(bounds.size());
         let base = self.cache.draw(renderer, bounds.size(), |frame| {
             draw_value_grid(frame, &scale, step, "");
-            let mut ticks = Vec::new();
-            let mut value = 0.0;
-            while value <= scale.x_max + step * 1e-6 {
-                ticks.push((value, tick_label(value, step, "")));
-                value += step;
-            }
-            draw_x_ticks(frame, &scale, &ticks);
+            let x_ticks: Vec<(f64, String)> = ticks(0.0, scale.x_max, step)
+                .into_iter()
+                .map(|v| (v, tick_label(v, step, "")))
+                .collect();
+            draw_x_ticks(frame, &scale, &x_ticks);
             frame.stroke(
                 &Path::line(scale.point(0.0, 0.0), scale.point(scale.x_max, scale.y_max)),
                 Stroke::default().with_color(style::BORDER).with_width(1.0),
@@ -152,7 +150,7 @@ mod tests {
 
     #[test]
     fn test_nearest_dot_only_within_reach() {
-        let scale = Scale::new(Size::new(162.0, 138.0), (0.0, 10.0), 10.0);
+        let scale = Scale::new(Size::new(162.0, 138.0), (0.0, 10.0), (0.0, 10.0));
         let dots = [dot(2.0, 2.0, "a"), dot(3.0, 3.0, "b")];
         let near_b = scale.point(3.0, 3.0) + iced::Vector::new(2.0, 1.0);
         assert_eq!(

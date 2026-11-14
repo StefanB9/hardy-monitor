@@ -41,6 +41,38 @@ pub fn nice_scale(max: f64) -> (f64, f64) {
     ((max / step).ceil() * step, step)
 }
 
+/// The value axis for values from `min` to `max`: from zero up, or
+/// symmetric around zero when any value is negative; with its tick step.
+pub fn value_range(min: f64, max: f64) -> (f64, f64, f64) {
+    if min < 0.0 {
+        let reach = max.max(-min);
+        let (_, step) = nice_scale(2.0 * reach);
+        let top = (reach / step).ceil() * step;
+        (-top, top, step)
+    } else {
+        let (top, step) = nice_scale(max);
+        (0.0, top, step)
+    }
+}
+
+/// Tick values from `from` to `to` in `step`s, computed by count so that
+/// zero is exactly zero.
+pub fn ticks(from: f64, to: f64, step: f64) -> Vec<f64> {
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let count = ((to - from) / step + 1e-6).floor().max(0.0) as usize;
+    (0..=count)
+        .map(|i| {
+            #[allow(clippy::cast_precision_loss)]
+            let value = from + i as f64 * step;
+            if value.abs() < step * 1e-6 {
+                0.0
+            } else {
+                value
+            }
+        })
+        .collect()
+}
+
 /// A tick label: whole numbers without decimals.
 pub fn tick_label(value: f64, step: f64, suffix: &str) -> String {
     if step >= 1.0 {
@@ -55,17 +87,19 @@ pub fn tick_label(value: f64, step: f64, suffix: &str) -> String {
 pub(super) struct Scale {
     pub x_min: f64,
     pub x_max: f64,
+    pub y_min: f64,
     pub y_max: f64,
     pub width: f32,
     pub height: f32,
 }
 
 impl Scale {
-    pub fn new(size: Size, x: (f64, f64), y_max: f64) -> Self {
+    pub fn new(size: Size, x: (f64, f64), y: (f64, f64)) -> Self {
         Self {
             x_min: x.0,
             x_max: if x.1 > x.0 { x.1 } else { x.0 + 1.0 },
-            y_max: y_max.max(f64::EPSILON),
+            y_min: y.0,
+            y_max: if y.1 > y.0 { y.1 } else { y.0 + f64::EPSILON },
             width: (size.width - PAD_LEFT - PAD_RIGHT).max(1.0),
             height: (size.height - PAD_TOP - PAD_BOTTOM).max(1.0),
         }
@@ -78,7 +112,8 @@ impl Scale {
 
     #[allow(clippy::cast_possible_truncation)]
     pub fn y(&self, y: f64) -> f32 {
-        PAD_TOP + self.height - (y.clamp(0.0, self.y_max) / self.y_max) as f32 * self.height
+        let ratio = (y.clamp(self.y_min, self.y_max) - self.y_min) / (self.y_max - self.y_min);
+        PAD_TOP + self.height - ratio as f32 * self.height
     }
 
     pub fn point(&self, x: f64, y: f64) -> Point {
@@ -104,15 +139,20 @@ fn caption(content: String, position: Point, align_x: Horizontal, align_y: Verti
 
 /// Horizontal grid lines with value labels on the left.
 pub(super) fn draw_value_grid(frame: &mut Frame, scale: &Scale, step: f64, suffix: &str) {
-    let mut value = 0.0;
-    while value <= scale.y_max + step * 1e-6 {
+    for value in ticks(scale.y_min, scale.y_max, step) {
         let y = scale.y(value);
+        // Zero stands out on an axis with negative values.
+        let color = if value == 0.0 && scale.y_min < 0.0 {
+            style::BORDER
+        } else {
+            style::GRID
+        };
         frame.stroke(
             &Path::line(
                 Point::new(PAD_LEFT, y),
                 Point::new(PAD_LEFT + scale.width, y),
             ),
-            Stroke::default().with_color(style::GRID).with_width(1.0),
+            Stroke::default().with_color(color).with_width(1.0),
         );
         frame.fill_text(caption(
             tick_label(value, step, suffix),
@@ -120,7 +160,6 @@ pub(super) fn draw_value_grid(frame: &mut Frame, scale: &Scale, step: f64, suffi
             Horizontal::Right,
             Vertical::Center,
         ));
-        value += step;
     }
 }
 
@@ -194,8 +233,24 @@ mod tests {
     }
 
     #[test]
+    fn test_value_range_is_symmetric_around_zero_for_negative_values() {
+        assert_eq!(value_range(0.0, 7.3), (0.0, 8.0, 2.0));
+        // Half as many steps each side of zero.
+        assert_eq!(value_range(-3.0, 1.0), (-4.0, 4.0, 2.0));
+        assert_eq!(value_range(-1.0, 7.3), (-10.0, 10.0, 5.0));
+        let labels: Vec<String> = ticks(-0.8, 0.8, 0.4)
+            .into_iter()
+            .map(|v| tick_label(v, 0.4, ""))
+            .collect();
+        assert_eq!(labels, ["-0.8", "-0.4", "0.0", "0.4", "0.8"]);
+        let signed = Scale::new(Size::new(200.0, 100.0), (0.0, 10.0), (-4.0, 4.0));
+        assert_relative_eq!(signed.y(0.0), PAD_TOP + signed.height / 2.0);
+        assert_relative_eq!(signed.y(-4.0), signed.bottom());
+    }
+
+    #[test]
     fn test_scale_maps_corners() {
-        let scale = Scale::new(Size::new(200.0, 100.0), (0.0, 10.0), 20.0);
+        let scale = Scale::new(Size::new(200.0, 100.0), (0.0, 10.0), (0.0, 20.0));
         assert_relative_eq!(scale.x(0.0), PAD_LEFT);
         assert_relative_eq!(scale.x(10.0), 200.0 - PAD_RIGHT);
         assert_relative_eq!(scale.y(0.0), scale.bottom());
@@ -203,7 +258,7 @@ mod tests {
         // Out-of-range values stay on the plot.
         assert_relative_eq!(scale.y(50.0), PAD_TOP);
         // A single x value still maps.
-        let flat = Scale::new(Size::new(200.0, 100.0), (3.0, 3.0), 1.0);
+        let flat = Scale::new(Size::new(200.0, 100.0), (3.0, 3.0), (0.0, 1.0));
         assert_relative_eq!(flat.x(3.0), PAD_LEFT);
     }
 

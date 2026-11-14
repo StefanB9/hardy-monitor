@@ -16,11 +16,29 @@ use iced::{
 
 use crate::style;
 
-/// Heatmap of a [`WeekGrid`], coloured on the occupancy scale.
+/// What a grid's values are and how they are coloured.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum CellScale {
+    /// Average occupancy in percent, on the occupancy scale between the
+    /// thresholds; `spread` is how much the days differ.
+    Occupancy { low: f64, high: f64 },
+    /// Forecast error in points, green up to `good` and red from `bad`;
+    /// `days` counts forecasts and `spread` holds the bias.
+    Error { good: f64, bad: f64 },
+}
+
+/// A cell's value as written on it.
+fn cell_label(value: f64, scale: CellScale) -> String {
+    match scale {
+        CellScale::Occupancy { .. } => format!("{value:.0}"),
+        CellScale::Error { .. } => format!("{value:.1}"),
+    }
+}
+
+/// Heatmap of a [`WeekGrid`].
 pub struct HeatmapWidget<'a> {
     pub grid: &'a WeekGrid,
-    pub low_threshold: f64,
-    pub high_threshold: f64,
+    pub scale: CellScale,
     pub cache: &'a canvas::Cache,
     pub tooltip_cache: &'a canvas::Cache,
     /// Outlined in [`BUSY_OUTLINE`].
@@ -104,7 +122,7 @@ impl HeatmapWidget<'_> {
         day: usize,
         hour: u32,
     ) {
-        let detail = cell_detail(self.grid.cell(day, hour));
+        let detail = cell_detail(self.grid.cell(day, hour), self.scale);
         let label = format!(
             "{} {hour:02}:00–{:02}:00\n{detail}",
             day_label(day),
@@ -154,7 +172,7 @@ impl HeatmapWidget<'_> {
 }
 
 /// The tooltip's second line, e.g. "28% · seen on 3 days · varies ±19 pts".
-fn cell_detail(cell: Cell) -> String {
+fn cell_detail(cell: Cell, scale: CellScale) -> String {
     let CellValue {
         value,
         days,
@@ -164,6 +182,9 @@ fn cell_detail(cell: Cell) -> String {
         Cell::NoData => return "No data yet".to_string(),
         Cell::Value(cell) => cell,
     };
+    if let CellScale::Error { .. } = scale {
+        return format!("Off by {value:.1} pts · {days} forecasts · bias {spread:+.1}");
+    }
     let seen = if days == 1 {
         "seen on 1 day".to_string()
     } else {
@@ -275,17 +296,18 @@ impl<Message> canvas::Program<Message> for HeatmapWidget<'_> {
                             );
                         }
                         Cell::Value(CellValue { value, spread, .. }) => {
-                            frame.fill(
-                                &rect,
-                                style::occupancy_color(
-                                    value,
-                                    self.low_threshold,
-                                    self.high_threshold,
-                                ),
-                            );
+                            let color = match self.scale {
+                                CellScale::Occupancy { low, high } => {
+                                    style::occupancy_color(value, low, high)
+                                }
+                                CellScale::Error { good, bad } => {
+                                    style::error_color(value, good, bad)
+                                }
+                            };
+                            frame.fill(&rect, color);
                             if show_values {
                                 frame.fill_text(Text {
-                                    content: format!("{value:.0}"),
+                                    content: cell_label(value, self.scale),
                                     position: center,
                                     color: style::tint(style::BG_APP, 0.85),
                                     size: style::TEXT_CAPTION.into(),
@@ -294,7 +316,9 @@ impl<Message> canvas::Program<Message> for HeatmapWidget<'_> {
                                     ..Default::default()
                                 });
                             }
-                            if is_unpredictable(spread) {
+                            if matches!(self.scale, CellScale::Occupancy { .. })
+                                && is_unpredictable(spread)
+                            {
                                 frame.fill(
                                     &Path::circle(
                                         Point::new(
@@ -370,14 +394,32 @@ mod tests {
                 spread,
             })
         };
-        assert_eq!(cell_detail(Cell::Closed), "Closed");
-        assert_eq!(cell_detail(Cell::NoData), "No data yet");
-        assert_eq!(cell_detail(value(1, 0.0)), "28% · seen on 1 day");
-        assert_eq!(cell_detail(value(3, 4.2)), "28% · seen on 3 days · ±4 pts");
+        let occupancy = CellScale::Occupancy {
+            low: 30.0,
+            high: 60.0,
+        };
+        assert_eq!(cell_detail(Cell::Closed, occupancy), "Closed");
+        assert_eq!(cell_detail(Cell::NoData, occupancy), "No data yet");
+        assert_eq!(cell_detail(value(1, 0.0), occupancy), "28% · seen on 1 day");
         assert_eq!(
-            cell_detail(value(3, 19.3)),
+            cell_detail(value(3, 4.2), occupancy),
+            "28% · seen on 3 days · ±4 pts"
+        );
+        assert_eq!(
+            cell_detail(value(3, 19.3), occupancy),
             "28% · seen on 3 days · varies ±19 pts"
         );
+        // An error cell: the error, how many forecasts, and the bias.
+        let error = CellScale::Error {
+            good: 2.0,
+            bad: 6.0,
+        };
+        assert_eq!(
+            cell_detail(value(3, 1.24), error),
+            "Off by 28.4 pts · 3 forecasts · bias +1.2"
+        );
+        assert_eq!(cell_label(28.4, occupancy), "28");
+        assert_eq!(cell_label(2.44, error), "2.4");
     }
 
     #[test]

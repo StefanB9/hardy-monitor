@@ -110,11 +110,13 @@ hardy-monitor/                         (workspace root)
 │           ├── tray.rs                Tray tooltip and status dot
 │           ├── alerts.rs              Alert controls (shared settings, desktop popups)
 │           ├── notifier.rs            SystemNotifier (desktop popups)
-│           ├── widgets/               Canvas widgets: gauge, heatmap/ (grid.rs: WeekGrid), history_chart/
+│           ├── widgets/               Canvas widgets: gauge, heatmap/ (grid.rs: WeekGrid; occupancy or error
+│           │                          scale), history_chart/
 │           │                          (plot, layers, past forecast layer, axis), plot/ (line chart,
 │           │                          scatter plot)
 │           └── views/                 now/, week, data (readings table), insights, plan/, forecasts/
-│                                      (overview, models, model detail, leaderboard, hourly log),
+│                                      (overview, models, model detail, leaderboard, hourly log, when &
+│                                      where, intervals & bias),
 │                                      maintenance/ (repair, export), schema_notice, opening;
 │                                      components/ (cards, buttons, …)
 ```

@@ -27,7 +27,7 @@ fn improvement(pair: &ErrorPair) -> f64 {
 }
 
 /// Bar length in percent of the longest bar, at least 1 so it stays visible.
-fn bar_portion(value: f64, max: f64) -> u16 {
+pub(super) fn bar_portion(value: f64, max: f64) -> u16 {
     if max <= 0.0 {
         return 1;
     }
@@ -36,7 +36,7 @@ fn bar_portion(value: f64, max: f64) -> u16 {
     portion
 }
 
-fn bar<'a>(value: f64, max: f64, color: Color) -> Element<'a, Message> {
+pub(super) fn bar<'a>(value: f64, max: f64, color: Color) -> Element<'a, Message> {
     let filled = bar_portion(value, max);
     container(
         row![

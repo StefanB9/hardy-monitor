@@ -6,7 +6,7 @@ use iced::{
     widget::canvas::{self, Action, Frame, Path, Stroke, path::Builder},
 };
 
-use super::{PAD_LEFT, PAD_TOP, Scale, draw_tooltip, draw_value_grid, draw_x_ticks, nice_scale};
+use super::{PAD_LEFT, PAD_TOP, Scale, draw_tooltip, draw_value_grid, draw_x_ticks, value_range};
 use crate::{app::Message, style};
 
 /// Points are marked with dots while a line has at most this many.
@@ -25,7 +25,8 @@ pub struct Series {
     pub points: Vec<(f64, f64)>,
 }
 
-/// A line chart; values start at zero.
+/// A line chart; the value axis starts at zero, or is centred on zero when
+/// a value is negative.
 pub struct LineChart<'a, F> {
     pub series: Vec<Series>,
     pub x_ticks: Vec<(f64, String)>,
@@ -62,19 +63,19 @@ impl<F: Fn(f64) -> String> LineChart<'_, F> {
         let (x_min, x_max) = self
             .xs()
             .fold((f64::MAX, f64::MIN), |(lo, hi), x| (lo.min(x), hi.max(x)));
-        let y_max = self
+        let (y_min, y_max) = self
             .series
             .iter()
             .flat_map(|s| s.points.iter().map(|p| p.1))
             .chain(self.target)
-            .fold(0.0, f64::max);
-        let (top, step) = nice_scale(y_max);
+            .fold((0.0, 0.0), |(lo, hi): (f64, f64), y| (lo.min(y), hi.max(y)));
+        let (bottom, top, step) = value_range(y_min, y_max);
         let x = if x_min <= x_max {
             (x_min, x_max)
         } else {
             (0.0, 1.0)
         };
-        (Scale::new(size, x, top), step)
+        (Scale::new(size, x, (bottom, top)), step)
     }
 
     fn draw_lines(&self, frame: &mut Frame, scale: &Scale) {
@@ -192,7 +193,7 @@ mod tests {
 
     #[test]
     fn test_nearest_x_picks_the_closest_on_screen() {
-        let scale = Scale::new(Size::new(162.0, 100.0), (0.0, 10.0), 1.0);
+        let scale = Scale::new(Size::new(162.0, 100.0), (0.0, 10.0), (0.0, 1.0));
         // 100 px wide plot from x = 48: 10 px per unit.
         let xs = [0.0, 4.0, 10.0];
         assert_eq!(nearest_x(xs.into_iter(), &scale, 48.0 + 31.0), Some(4.0));

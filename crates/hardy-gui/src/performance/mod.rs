@@ -20,6 +20,11 @@ pub use self::{
 
 /// Days in the error-over-time chart's smoothed line.
 const WEEK: i64 = 7;
+/// Occupancy bands of the error-by-level chart, in points.
+const LEVEL_WIDTH: f64 = 10.0;
+/// Bins of the error histogram and the errors it spans, in points.
+const HISTOGRAM_BIN: f64 = 2.0;
+const HISTOGRAM_LIMIT: f64 = 20.0;
 
 /// The period the page covers, ending today.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -105,16 +110,27 @@ pub enum Tab {
     #[default]
     Overview,
     Models,
+    /// When and at what occupancy the forecast is off.
+    WhenWhere,
+    /// Bias and how well the band works.
+    IntervalsBias,
 }
 
 impl Tab {
     /// Every sub-page, in order.
-    pub const ALL: [Tab; 2] = [Tab::Overview, Tab::Models];
+    pub const ALL: [Tab; 4] = [
+        Tab::Overview,
+        Tab::Models,
+        Tab::WhenWhere,
+        Tab::IntervalsBias,
+    ];
 
     pub fn label(self) -> &'static str {
         match self {
             Tab::Overview => "Overview",
             Tab::Models => "Models",
+            Tab::WhenWhere => "When & where",
+            Tab::IntervalsBias => "Intervals & bias",
         }
     }
 }
@@ -162,6 +178,11 @@ pub struct DayPoint {
     pub baseline: Option<f64>,
     /// The forecast's error over the week ending this day.
     pub weekly: f64,
+    /// Mean of forecast − reading: positive when it ran high.
+    pub bias: f64,
+    /// Share of readings inside the band, and its mean width.
+    pub coverage: Option<f64>,
+    pub width: Option<f64>,
 }
 
 /// The page's figures for one period.
@@ -174,6 +195,14 @@ pub struct Performance {
     /// The default forecast's logged live forecasts, every lead time.
     pub live_default: Option<Measures>,
     pub daily: Vec<DayPoint>,
+    /// The period's scored forecasts, oldest first.
+    pub scored: Vec<ScoredForecast>,
+    /// Error sums per weekday (0 = Monday) and hour.
+    pub grid: Vec<[ErrorSums; 24]>,
+    /// Error sums per occupancy band of the reading, by lower edge.
+    pub levels: Vec<(f64, ErrorSums)>,
+    /// Forecasts per error bin (forecast − reading), by lower edge.
+    pub histogram: Vec<(f64, i64)>,
     pub live: std::collections::HashMap<String, LiveScore>,
     pub nights: Vec<BenchmarkNight>,
     pub model_errors: ModelErrors,
@@ -197,11 +226,15 @@ impl Performance {
             .iter()
             .zip(&weeks)
             .filter_map(|((day, sums), (_, week))| {
+                let measures = sums.measures()?;
                 Some(DayPoint {
                     day: *day,
-                    mae: sums.measures()?.mae,
+                    mae: measures.mae,
                     baseline: baseline_mae(sums),
                     weekly: week.measures()?.mae,
+                    bias: measures.bias,
+                    coverage: measures.coverage,
+                    width: measures.width,
                 })
             })
             .collect();
@@ -223,11 +256,49 @@ impl Performance {
                 .and_then(|_| accuracy::total(before).measures()),
             live_default: live_default.measures(),
             daily,
+            grid: accuracy::by_weekday_hour(during, tz),
+            levels: accuracy::by_level(during, LEVEL_WIDTH),
+            histogram: accuracy::error_histogram(during, HISTOGRAM_BIN, HISTOGRAM_LIMIT),
+            scored: during.to_vec(),
             live: live_scores(&data.model_errors),
             nights: data.nights,
             model_errors: data.model_errors,
         }
     }
+}
+
+/// Error sums per hour of the day, every weekday together.
+pub fn by_hour(grid: &[[ErrorSums; 24]]) -> [ErrorSums; 24] {
+    let mut hours = [ErrorSums::default(); 24];
+    for day in grid {
+        for (hour, sums) in hours.iter_mut().zip(day) {
+            hour.merge(sums);
+        }
+    }
+    hours
+}
+
+/// Error sums per weekday (0 = Monday), every hour together.
+pub fn by_weekday(grid: &[[ErrorSums; 24]]) -> Vec<ErrorSums> {
+    grid.iter()
+        .map(|day| {
+            let mut total = ErrorSums::default();
+            for sums in day {
+                total.merge(sums);
+            }
+            total
+        })
+        .collect()
+}
+
+/// One model's live measures per step (1 = 15 min ahead).
+pub fn lead_curve(errors: &ModelErrors, model: &str) -> Vec<(u32, Measures)> {
+    errors
+        .by_step
+        .iter()
+        .filter(|(m, _, _)| m == model)
+        .filter_map(|(_, step, sums)| Some((*step, sums.measures()?)))
+        .collect()
 }
 
 #[cfg(test)]
@@ -303,7 +374,44 @@ mod tests {
         // The week ending the 17th holds all three forecasts.
         assert_relative_eq!(page.daily[1].weekly, 4.0);
         assert_eq!(page.live_default, None);
+        // The period's forecasts only: by hour, by level, and their errors.
+        assert_eq!(page.scored.len(), 3);
+        assert_relative_eq!(page.daily[1].bias, -6.0);
+        assert_eq!(page.daily[1].coverage, None);
+        assert_eq!(by_hour(&page.grid).iter().map(|s| s.count).sum::<i64>(), 3);
+        // 10:00 and 12:00 UTC on Sunday are 12:00 and 14:00 in Berlin.
+        assert_eq!(by_weekday(&page.grid)[6].count, 2);
+        assert_eq!(page.levels.len(), 1);
+        assert_eq!(page.histogram.iter().map(|(_, n)| n).sum::<i64>(), 3);
         Ok(())
+    }
+
+    #[test]
+    fn test_lead_curve_follows_one_model_by_step() {
+        let sums = |error: f64| {
+            let mut s = ErrorSums::default();
+            s.add(&Pair {
+                actual: 30.0,
+                forecast: 30.0 + error,
+                band: None,
+                baseline: None,
+                last_week: None,
+            });
+            s
+        };
+        let errors = ModelErrors {
+            by_step: vec![
+                ("naive".to_string(), 1, sums(1.0)),
+                ("naive".to_string(), 2, sums(3.0)),
+                ("theta".to_string(), 1, sums(9.0)),
+            ],
+            by_day: Vec::new(),
+        };
+        let curve = lead_curve(&errors, "naive");
+        assert_eq!(curve.len(), 2);
+        assert_eq!(curve[1].0, 2);
+        assert_relative_eq!(curve[1].1.mae, 3.0);
+        assert_eq!(lead_curve(&errors, "ridge"), Vec::new());
     }
 
     #[test]
@@ -312,7 +420,10 @@ mod tests {
             Period::ALL.map(Period::label),
             ["7 d", "28 d", "90 d", "All"]
         );
-        assert_eq!(Tab::ALL.map(Tab::label), ["Overview", "Models"]);
+        assert_eq!(
+            Tab::ALL.map(Tab::label),
+            ["Overview", "Models", "When & where", "Intervals & bias"]
+        );
         assert_eq!(Source::ALL.map(Source::label), ["Backtest", "Live"]);
     }
 }

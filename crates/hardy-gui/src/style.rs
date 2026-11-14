@@ -130,6 +130,19 @@ pub fn occupancy_color(percentage: f64, low: f64, high: f64) -> Color {
     OCC_PACKED
 }
 
+/// Continuous colour for a forecast error in points: good up to `good`,
+/// amber halfway, bad from `bad`.
+pub fn error_color(error: f64, good: f64, bad: f64) -> Color {
+    let mid = f64::midpoint(good, bad);
+    #[allow(clippy::cast_possible_truncation)]
+    let t = |from: f64, to: f64| ((error - from) / (to - from)).clamp(0.0, 1.0) as f32;
+    if error <= mid {
+        mix(SUCCESS, WARNING, t(good, mid))
+    } else {
+        mix(WARNING, DANGER, t(mid, bad))
+    }
+}
+
 /// Linear blend from `a` (t = 0) to `b` (t = 1).
 pub fn mix(a: Color, b: Color, t: f32) -> Color {
     Color {
@@ -185,6 +198,13 @@ pub const CARD_PADDING: f32 = 20.0;
 #[cfg(test)]
 mod tests {
     use proptest::prelude::*;
+
+    #[test]
+    fn test_error_color_runs_from_good_to_bad() {
+        assert_eq!(super::error_color(1.0, 2.0, 6.0), super::SUCCESS);
+        assert_eq!(super::error_color(4.0, 2.0, 6.0), super::WARNING);
+        assert_eq!(super::error_color(9.0, 2.0, 6.0), super::DANGER);
+    }
 
     use super::*;
 

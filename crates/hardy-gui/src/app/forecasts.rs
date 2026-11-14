@@ -2,7 +2,7 @@
 //! which numbers the leaderboard shows, the model picked for its detail,
 //! and the charts' caches.
 
-use hardy_core::error::AppError;
+use hardy_core::{error::AppError, schedule::GymSchedule};
 use hardy_ml::suite::ModelId;
 use iced::Task;
 
@@ -13,7 +13,8 @@ use super::{
 };
 use crate::{
     performance::{ModelDetail, Performance, PerformanceData, Period, Source, Tab, detail},
-    views::forecasts::Caches,
+    views::forecasts::{Caches, error_grid},
+    widgets::heatmap::WeekGrid,
 };
 
 /// The Forecasts tab's state (this session only).
@@ -27,6 +28,9 @@ pub(crate) struct ForecastsPage {
     requests: LatestOnly,
     pub performance: Option<Performance>,
     pub detail: Option<ModelDetail>,
+    /// The default forecast's error per weekday and hour, with the opening
+    /// hours, for the heatmap.
+    pub error_grid: WeekGrid,
     pub caches: Caches,
 }
 
@@ -45,7 +49,8 @@ impl ForecastsPage {
         self.refresh_detail();
     }
 
-    fn apply(&mut self, performance: Performance) {
+    fn apply(&mut self, performance: Performance, schedule: &GymSchedule) {
+        self.error_grid = WeekGrid::from_values(error_grid(&performance.grid), schedule);
         self.performance = Some(performance);
         self.caches.clear_all();
         self.refresh_detail();
@@ -104,7 +109,7 @@ impl HardyMonitorApp {
         if self.forecasts.requests.is_current(id)
             && let Some(performance) = self.errors.record(ErrorSource::Performance, result)
         {
-            self.forecasts.apply(*performance);
+            self.forecasts.apply(*performance, &self.schedule);
         }
     }
 }

@@ -11,7 +11,9 @@ use crate::{
     style,
     time_range::AnalyticsRange,
     views::components::{card, card_with_actions, empty_state, legend_item, segmented},
-    widgets::heatmap::{BUSY_OUTLINE, HeatmapWidget, QUIET_OUTLINE, UNPREDICTABLE_DOT, WeekGrid},
+    widgets::heatmap::{
+        BUSY_OUTLINE, CellScale, HeatmapWidget, QUIET_OUTLINE, UNPREDICTABLE_DOT, WeekGrid,
+    },
 };
 
 const RANGES: [(&str, AnalyticsRange); 4] = [
@@ -204,8 +206,7 @@ pub fn view(props: WeekProps<'_>) -> Element<'_, Message> {
     let (low, high) = (props.low_threshold, props.high_threshold);
     let heatmap = Canvas::new(HeatmapWidget {
         grid: props.grid,
-        low_threshold: low,
-        high_threshold: high,
+        scale: CellScale::Occupancy { low, high },
         cache: props.heatmap_cache,
         tooltip_cache: props.heatmap_tooltip_cache,
         busy_ranges: props.busy_ranges,
