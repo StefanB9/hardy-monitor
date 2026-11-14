@@ -1,0 +1,116 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT h.target, h.made_at, h.model, h.value, h.low, h.high,\n                   o.percentage AS actual,\n                   (SELECT AVG(p.percentage) FROM occupancy_logs p\n                    WHERE p.source IN ('measured', 'smoothed')\n                      AND p.timestamp IN (\n                          SELECT ((h.target AT TIME ZONE $3) - w * INTERVAL '7 days')\n                                 AT TIME ZONE $3\n                          FROM generate_series(1, 4) AS w)) AS baseline,\n                   (SELECT p.percentage FROM occupancy_logs p\n                    WHERE p.source IN ('measured', 'smoothed')\n                      AND p.timestamp = ((h.target AT TIME ZONE $3) - INTERVAL '7 days')\n                                        AT TIME ZONE $3) AS last_week\n            FROM forecast_history h\n            JOIN occupancy_logs o\n              ON o.timestamp = h.target AND o.source IN ('measured', 'smoothed')\n            WHERE h.target >= $1 AND h.target < $2\n            ORDER BY h.target\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "target",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "forecast_history",
+            "name": "target"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "made_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "forecast_history",
+            "name": "made_at"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "model",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "forecast_history",
+            "name": "model"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "value",
+        "type_info": "Float8",
+        "origin": {
+          "Table": {
+            "table": "forecast_history",
+            "name": "value"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "low",
+        "type_info": "Float8",
+        "origin": {
+          "Table": {
+            "table": "forecast_history",
+            "name": "low"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "high",
+        "type_info": "Float8",
+        "origin": {
+          "Table": {
+            "table": "forecast_history",
+            "name": "high"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "actual",
+        "type_info": "Float8",
+        "origin": {
+          "Table": {
+            "table": "occupancy_logs",
+            "name": "percentage"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "baseline",
+        "type_info": "Float8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 8,
+        "name": "last_week",
+        "type_info": "Float8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Timestamptz",
+        "Timestamptz",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      false,
+      null,
+      null
+    ]
+  },
+  "hash": "ad9e02d05cdd1ced0d45593e943193af0fcd3f329ba77d7789237bdc55606fee"
+}

@@ -10,7 +10,7 @@ use std::{
 use chrono::{DateTime, TimeDelta, Utc};
 use hardy_core::{
     GymSchedule,
-    db::{ForecastLogEntry, LiveForecast},
+    db::{ForecastLogEntry, LiveForecast, ModelForecast},
 };
 use rayon::prelude::*;
 
@@ -235,6 +235,32 @@ impl LiveForecasts {
         rows
     }
 
+    /// Rows for the per-model forecast log: every model's forecast and the
+    /// default one, `steps` slots ahead (`None` where the gym is closed).
+    pub fn model_log(&self, steps: usize) -> Vec<ModelForecast> {
+        let row = |model: &str, points: &mut dyn Iterator<Item = &Point>| {
+            let mut entry = ModelForecast {
+                model: model.to_string(),
+                forecast: vec![None; steps],
+                low: vec![None; steps],
+                high: vec![None; steps],
+            };
+            for point in points.filter(|p| (1..=steps).contains(&p.step)) {
+                let i = point.step - 1;
+                entry.forecast[i] = Some(point.value);
+                entry.low[i] = point.bounds.map(|(low, _)| low);
+                entry.high[i] = point.bounds.map(|(_, high)| high);
+            }
+            entry
+        };
+        let mut rows = Vec::with_capacity(self.models.len() + 1);
+        for (id, points) in &self.models {
+            rows.push(row(id.key(), &mut points.iter()));
+        }
+        rows.push(row(SELECTED, &mut self.selected.iter().map(|(p, _)| p)));
+        rows
+    }
+
     /// Forecast log entries for each whole hour `1..=hours` ahead whose slot
     /// is open: the default forecast, with the profile baseline for
     /// comparison.
@@ -387,6 +413,45 @@ mod tests {
         assert_eq!(log[0].model.as_deref(), Some("naive"));
         assert_relative_eq!(log[0].predicted, 40.0);
         assert_relative_eq!(log[0].low, 40.0);
+    }
+
+    #[test]
+    fn test_model_log_has_one_row_per_model_and_the_default() {
+        let origin = local(2, 10, 0);
+        let point = |step: usize, value: f64, bounds: Option<(f64, f64)>| Point {
+            step,
+            target: origin + SLOT * i32::try_from(step).unwrap_or_default(),
+            value,
+            bounds,
+        };
+        let live = LiveForecasts {
+            origin,
+            models: vec![(
+                ModelId::Naive,
+                // Step 3 is closed; step 30 lies beyond what is logged.
+                vec![
+                    point(1, 30.0, Some((25.0, 36.0))),
+                    point(2, 31.0, None),
+                    point(4, 33.0, None),
+                    point(30, 50.0, None),
+                ],
+            )],
+            selected: vec![(point(1, 30.0, Some((25.0, 36.0))), ModelId::Naive)],
+            failures: Vec::new(),
+        };
+
+        let log = live.model_log(4);
+
+        assert_eq!(log.len(), 2);
+        assert_eq!(log[0].model, "naive");
+        assert_eq!(
+            log[0].forecast,
+            vec![Some(30.0), Some(31.0), None, Some(33.0)]
+        );
+        assert_eq!(log[0].low, vec![Some(25.0), None, None, None]);
+        assert_eq!(log[0].high, vec![Some(36.0), None, None, None]);
+        assert_eq!(log[1].model, SELECTED);
+        assert_eq!(log[1].forecast, vec![Some(30.0), None, None, None]);
     }
 
     #[test]

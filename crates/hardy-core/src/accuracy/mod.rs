@@ -1,8 +1,12 @@
-//! Summaries of logged forecast accuracy for display.
+//! Forecast accuracy: the measures of scored forecasts, and summaries of
+//! the logged forecasts for display.
+
+mod measures;
 
 use std::collections::BTreeMap;
 
 use chrono::NaiveDate;
+pub use measures::{ErrorSums, Measures, Pair, interval_score};
 
 use crate::db::HorizonAccuracy;
 

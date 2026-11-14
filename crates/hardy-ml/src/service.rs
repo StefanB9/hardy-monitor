@@ -27,8 +27,6 @@ use crate::{
     suite::{ARTIFACT_VERSION, AnyModel, ModelId},
 };
 
-/// Benchmark runs kept in the database.
-pub const RUNS_KEPT: usize = 14;
 /// Readings kept for live forecasts: the longest look-back of any model
 /// (eight weeks for the recency-weighted mean) plus a day.
 const LIVE_HISTORY: TimeDelta = TimeDelta::days(57);
@@ -361,7 +359,7 @@ impl ForecastService {
             .iter()
             .map(|(bucket, id)| (bucket.code(), id.key().to_string()))
             .collect();
-        db.save_benchmark(&run, &selection, RUNS_KEPT).await?;
+        db.save_benchmark(&run, &selection).await?;
         if let Some(&newest) = outcome.benchmark.days.last() {
             let since = midnight_local_as_utc(newest, self.schedule.timezone());
             let (logged, slots) =

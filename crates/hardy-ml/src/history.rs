@@ -215,7 +215,7 @@ impl<'a> HistoryView<'a> {
             sxy += x * y;
         }
         let denominator = n * sxx - sx * sx;
-        (denominator.abs() > f64::EPSILON).then(|| (n * sxy - sx * sy) / denominator)
+        (denominator.abs() > f64::EPSILON).then_some((n * sxy - sx * sy) / denominator)
     }
 
     /// Readings in `[start, end]`.

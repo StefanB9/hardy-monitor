@@ -106,7 +106,7 @@ impl<L: Copy> Ensemble<L> {
             .iter()
             .filter_map(|&(m, w)| value(m).map(|v| (v * w, w)))
             .fold((0.0, 0.0), |(s, t), (v, w)| (s + v, t + w));
-        (total > 0.0).then(|| sum / total)
+        (total > 0.0).then_some(sum / total)
     }
 
     /// Members and weights in `bucket` (none for [`Bucket::Overall`]).

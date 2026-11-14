@@ -132,7 +132,6 @@ async fn test_benchmark_round_trips_with_its_selection() -> Result<()> {
                 &[("naive", 400, [6.0, 2.0]), ("weekly", 10, [5.0, 3.0])],
             ),
             &[(1, "naive".to_string())],
-            5,
         )
         .await?;
     let latest = tdb.db.latest_benchmark().await?.context("run stored")?;
@@ -163,7 +162,7 @@ async fn test_benchmark_round_trips_with_its_selection() -> Result<()> {
 }
 
 #[tokio::test]
-async fn test_benchmark_keeps_only_the_newest_runs_and_replaces_the_selection() -> Result<()> {
+async fn test_benchmark_keeps_every_run_with_its_selection() -> Result<()> {
     let tdb = common::TestDatabase::new().await?;
     let mut ids = Vec::new();
     for day in 1..=4 {
@@ -173,26 +172,33 @@ async fn test_benchmark_keeps_only_the_newest_runs_and_replaces_the_selection() 
                 .save_benchmark(
                     &run(utc(day, 23, 30)?, &[("naive", 400, [6.0, 2.0])]),
                     &[(1, selected.to_string()), (2, "naive".to_string())],
-                    2,
                 )
                 .await?,
         );
     }
-    let pool = sqlx::PgPool::connect(&tdb.url).await?;
-    let runs: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM benchmark_runs")
-        .fetch_one(&pool)
-        .await?;
-    pool.close().await;
     let latest = tdb.db.latest_benchmark().await?.context("run stored")?;
     let selection = tdb.db.forecast_selection().await?;
+    let history = tdb.db.benchmark_history(utc(2, 0, 0)?).await?;
     tdb.cleanup().await;
 
-    assert_eq!(runs, 2);
     assert_eq!(Some(&latest.id), ids.last());
     assert_eq!(
         selection,
         vec![(1, "naive".to_string()), (2, "naive".to_string())]
     );
+    // Runs finished since the 2nd, oldest first, each with its own
+    // selection and scores.
+    assert_eq!(
+        history.iter().map(|n| n.run_id).collect::<Vec<_>>(),
+        ids[1..].to_vec()
+    );
+    assert_eq!(history[0].finished_at, utc(2, 23, 35)?);
+    assert_eq!(
+        history[1].selection,
+        vec![(1, "weekly".to_string()), (2, "naive".to_string())]
+    );
+    assert_eq!(history[0].scores.len(), 2);
+    assert!(history[0].scores.iter().all(|s| s.model == "naive"));
     Ok(())
 }
 
