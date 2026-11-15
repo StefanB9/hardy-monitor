@@ -1,0 +1,44 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT l.made_at,\n                   l.forecast::float8[] AS \"forecast!: Vec<Option<f64>>\",\n                   ARRAY(\n                       SELECT o.percentage\n                       FROM generate_series(1, cardinality(l.forecast)) AS g(i)\n                       LEFT JOIN occupancy_logs o\n                         ON o.timestamp = l.made_at + g.i * INTERVAL '15 minutes'\n                        AND o.source IN ('measured', 'smoothed')\n                       ORDER BY g.i\n                   ) AS \"actual!: Vec<Option<f64>>\"\n            FROM model_forecast_log l\n            WHERE l.model = $1 AND l.made_at >= $2 AND l.made_at < $3\n            ORDER BY l.made_at\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "made_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "model_forecast_log",
+            "name": "made_at"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "forecast!: Vec<Option<f64>>",
+        "type_info": "Float8Array",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 2,
+        "name": "actual!: Vec<Option<f64>>",
+        "type_info": "Float8Array",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Timestamptz",
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      false,
+      null,
+      null
+    ]
+  },
+  "hash": "86924f2cb35235800bd85044fd78c766a8ff511ff84e9dd182f155f4e1958e36"
+}

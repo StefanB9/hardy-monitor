@@ -28,6 +28,16 @@ pub struct ModelErrors {
     pub by_day: Vec<(String, NaiveDate, ErrorSums)>,
 }
 
+/// One model's logged forecast next to what happened: element `i` of
+/// both is for 15 min × (i + 1) after `made_at`; `actual` is the measured
+/// or smoothed reading, `None` where there is none.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LoggedOutcome {
+    pub made_at: DateTime<Utc>,
+    pub forecast: Vec<Option<f64>>,
+    pub actual: Vec<Option<f64>>,
+}
+
 /// One grouped row of [`Database::model_forecast_errors`]: a model and
 /// either a step or a day, with the error sums.
 struct SumsRow {
@@ -238,5 +248,47 @@ impl Database {
             }
         }
         Ok(errors)
+    }
+
+    /// `model`'s forecasts logged in `[since, until)` with the readings at
+    /// their targets, oldest first.
+    #[tracing::instrument(skip(self), fields(db.operation = "logged_outcomes"))]
+    pub async fn logged_outcomes(
+        &self,
+        model: &str,
+        since: DateTime<Utc>,
+        until: DateTime<Utc>,
+    ) -> Result<Vec<LoggedOutcome>> {
+        let rows = sqlx::query!(
+            r#"
+            SELECT l.made_at,
+                   l.forecast::float8[] AS "forecast!: Vec<Option<f64>>",
+                   ARRAY(
+                       SELECT o.percentage
+                       FROM generate_series(1, cardinality(l.forecast)) AS g(i)
+                       LEFT JOIN occupancy_logs o
+                         ON o.timestamp = l.made_at + g.i * INTERVAL '15 minutes'
+                        AND o.source IN ('measured', 'smoothed')
+                       ORDER BY g.i
+                   ) AS "actual!: Vec<Option<f64>>"
+            FROM model_forecast_log l
+            WHERE l.model = $1 AND l.made_at >= $2 AND l.made_at < $3
+            ORDER BY l.made_at
+            "#,
+            model,
+            since,
+            until
+        )
+        .fetch_all(&self.pool)
+        .await
+        .context("failed to load the logged forecasts with their readings")?;
+        Ok(rows
+            .into_iter()
+            .map(|r| LoggedOutcome {
+                made_at: r.made_at,
+                forecast: r.forecast,
+                actual: r.actual,
+            })
+            .collect())
     }
 }

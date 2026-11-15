@@ -2,12 +2,16 @@
 //! the logged forecasts for display.
 
 mod breakdown;
+mod decisions;
 mod measures;
 
 use std::collections::BTreeMap;
 
 pub use breakdown::{by_day, by_level, by_weekday_hour, error_histogram, total, trailing};
 use chrono::NaiveDate;
+pub use decisions::{
+    Decision, DecisionSums, HOUR_SLOTS, QUIET_TOLERANCE, average_picks, judge, quietest_window,
+};
 pub use measures::{ErrorSums, Measures, Pair, interval_score};
 
 use crate::db::HorizonAccuracy;

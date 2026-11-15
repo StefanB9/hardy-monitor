@@ -174,3 +174,40 @@ async fn test_scored_forecast_history_pairs_with_readings() -> Result<()> {
     );
     Ok(())
 }
+
+#[tokio::test]
+async fn test_logged_outcomes_line_up_forecasts_with_readings() -> Result<()> {
+    let tdb = common::TestDatabase::new().await?;
+    // Made 09:45: element 0 is 10:00 (measured 40), element 2 is 10:30
+    // (interpolated: no reading), element 3 is 10:45 (none at all).
+    let made_at = utc(9, 45)?;
+    readings(&tdb).await?;
+    let mut selected = logged("selected", 0, 38.0, None);
+    selected.forecast[2] = Some(12.0);
+    selected.forecast[3] = Some(15.0);
+    tdb.db
+        .save_model_forecasts(made_at, &[selected, logged("naive", 0, 1.0, None)])
+        .await?;
+    // Another hour, outside the period.
+    tdb.db
+        .save_model_forecasts(utc(12, 0)?, &[logged("selected", 0, 5.0, None)])
+        .await?;
+
+    let outcomes = tdb
+        .db
+        .logged_outcomes("selected", utc(0, 0)?, utc(11, 0)?)
+        .await?;
+    tdb.cleanup().await;
+
+    assert_eq!(outcomes.len(), 1, "{outcomes:?}");
+    let first = &outcomes[0];
+    assert_eq!(first.made_at, made_at);
+    assert_eq!(first.forecast.len(), STEPS);
+    assert_eq!(
+        first.forecast[..4],
+        [Some(38.0), None, Some(12.0), Some(15.0)]
+    );
+    assert_eq!(first.actual.len(), STEPS);
+    assert_eq!(first.actual[..4], [Some(40.0), None, None, None]);
+    Ok(())
+}
