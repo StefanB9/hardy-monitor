@@ -6,11 +6,13 @@ mod charts;
 mod detail;
 mod intervals;
 mod leaderboard;
+mod misses;
 mod models;
 mod overview;
 mod when;
 
 pub(crate) use accuracy::DAYS as ACCURACY_DAYS;
+use chrono::NaiveDate;
 use hardy_core::{Tz, accuracy::AccuracySummary};
 use hardy_ml::suite::{Family, ModelId};
 use iced::{
@@ -47,6 +49,9 @@ pub struct Caches {
     pub coverage_daily: Cache,
     pub coverage_lead: Cache,
     pub width_daily: Cache,
+    /// Misses & days: the day picked, and points lost per day.
+    pub day: Cache,
+    pub decisions_daily: Cache,
 }
 
 impl Caches {
@@ -72,6 +77,8 @@ impl Caches {
             &self.coverage_daily,
             &self.coverage_lead,
             &self.width_daily,
+            &self.day,
+            &self.decisions_daily,
         ] {
             cache.clear();
         }
@@ -91,6 +98,8 @@ pub struct ForecastsProps<'a> {
     pub period_label: &'a str,
     pub source: Source,
     pub picked: Option<ModelId>,
+    /// The day charted on Misses & days.
+    pub day: Option<NaiveDate>,
     /// `None` until the period's data has loaded.
     pub performance: Option<&'a Performance>,
     pub detail: Option<&'a ModelDetail>,
@@ -162,6 +171,10 @@ pub fn view(props: ForecastsProps<'_>) -> Element<'_, Message> {
         },
         Tab::IntervalsBias => match props.performance {
             Some(performance) => intervals::view(&props, performance),
+            None => empty_state("Loading the forecasts' performance…"),
+        },
+        Tab::MissesDays => match props.performance {
+            Some(performance) => misses::view(&props, performance),
             None => empty_state("Loading the forecasts' performance…"),
         },
     };

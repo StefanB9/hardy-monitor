@@ -73,6 +73,7 @@ impl HardyMonitorApp {
                 period_label: views::forecasts::period_label(self.forecasts.period),
                 source: self.forecasts.source,
                 picked: self.forecasts.picked,
+                day: self.forecasts.day,
                 performance: self.forecasts.performance.as_ref(),
                 detail: self.forecasts.detail.as_ref(),
                 caches: &self.forecasts.caches,

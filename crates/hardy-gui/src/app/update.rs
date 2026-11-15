@@ -109,6 +109,7 @@ impl HardyMonitorApp {
             | Message::ForecastsPeriodSelected(_)
             | Message::LeaderboardSourceSelected(_)
             | Message::ModelPicked(_)
+            | Message::PerformanceDayPicked(_)
             | Message::PerformanceLoaded(..) => self.update_forecasts(message),
             Message::PlanAveragesLoaded(_)
             | Message::PlanDaySelected(_)

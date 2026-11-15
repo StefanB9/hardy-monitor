@@ -2,8 +2,9 @@
 //! which numbers the leaderboard shows, the model picked for its detail,
 //! and the charts' caches.
 
+use chrono::NaiveDate;
 use hardy_core::{error::AppError, schedule::GymSchedule};
-use hardy_ml::suite::ModelId;
+use hardy_ml::{live::SELECTED, suite::ModelId};
 use iced::Task;
 
 use super::{
@@ -25,6 +26,8 @@ pub(crate) struct ForecastsPage {
     pub source: Source,
     /// The model whose detail is open.
     pub picked: Option<ModelId>,
+    /// The day charted on Misses & days.
+    pub day: Option<NaiveDate>,
     requests: LatestOnly,
     pub performance: Option<Performance>,
     pub detail: Option<ModelDetail>,
@@ -49,7 +52,20 @@ impl ForecastsPage {
         self.refresh_detail();
     }
 
+    /// Charts `day`, or closes its chart if it is open.
+    fn pick_day(&mut self, day: NaiveDate) {
+        self.day = (self.day != Some(day)).then_some(day);
+        self.caches.day.clear();
+    }
+
     fn apply(&mut self, performance: Performance, schedule: &GymSchedule) {
+        // A day outside the new period has nothing to chart.
+        if self
+            .day
+            .is_some_and(|day| !performance.daily.iter().any(|d| d.day == day))
+        {
+            self.day = None;
+        }
         self.error_grid = WeekGrid::from_values(error_grid(&performance.grid), schedule);
         self.performance = Some(performance);
         self.caches.clear_all();
@@ -70,16 +86,18 @@ impl HardyMonitorApp {
         let db = self.db.clone();
         self.load(
             async move {
-                let (history, model_errors, nights) = tokio::join!(
+                let (history, model_errors, nights, outcomes) = tokio::join!(
                     db.scored_forecast_history(window.load_from(), now, tz),
                     db.model_forecast_errors(window.since, now, tz),
                     db.benchmark_history(window.since),
+                    db.logged_outcomes(SELECTED, window.since, now),
                 );
                 let data = PerformanceData {
                     window,
                     history: history?,
                     model_errors: model_errors?,
                     nights: nights?,
+                    outcomes: outcomes?,
                 };
                 // Off the UI thread: "All" can be a year of forecasts.
                 anyhow::Ok(Box::new(Performance::build(data, tz)))
@@ -98,6 +116,7 @@ impl HardyMonitorApp {
             }
             Message::LeaderboardSourceSelected(source) => self.forecasts.source = source,
             Message::ModelPicked(id) => self.forecasts.pick(id),
+            Message::PerformanceDayPicked(day) => self.forecasts.pick_day(day),
             Message::PerformanceLoaded(id, result) => self.apply_performance(id, result),
             _ => {}
         }
@@ -129,5 +148,15 @@ mod tests {
         assert_eq!(page.picked, Some(ModelId::Theta));
         page.pick(ModelId::Theta);
         assert_eq!(page.picked, None);
+    }
+
+    #[test]
+    fn test_picking_a_day_again_closes_its_chart() {
+        let mut page = ForecastsPage::default();
+        let day = NaiveDate::MIN;
+        page.pick_day(day);
+        assert_eq!(page.day, Some(day));
+        page.pick_day(day);
+        assert_eq!(page.day, None);
     }
 }

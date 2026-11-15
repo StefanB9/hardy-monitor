@@ -2,6 +2,7 @@
 //! everything it shows, computed once when its data arrives.
 
 mod live;
+mod misses;
 mod model;
 
 use chrono::{DateTime, NaiveDate, TimeDelta, TimeZone, Utc};
@@ -9,12 +10,16 @@ use hardy_core::{
     Tz,
     accuracy::{self, ErrorSums, Measures},
     analytics::midnight_local_as_utc,
-    db::{BenchmarkNight, ModelErrors, ScoredForecast},
+    db::{BenchmarkNight, LoggedOutcome, ModelErrors, ScoredForecast},
 };
 use hardy_ml::live::SELECTED;
 
 pub use self::{
     live::{LiveScore, ScatterPoint, backtest_vs_live, live_board, live_scores},
+    misses::{
+        DaySlot, DecisionDay, DecisionQuality, biggest_misses, day_slots, decision_quality,
+        forecast_picks, worst_days,
+    },
     model::{ModelDetail, detail},
 };
 
@@ -25,6 +30,8 @@ const LEVEL_WIDTH: f64 = 10.0;
 /// Bins of the error histogram and the errors it spans, in points.
 const HISTOGRAM_BIN: f64 = 2.0;
 const HISTOGRAM_LIMIT: f64 = 20.0;
+/// Rows in the biggest-misses and worst-days lists.
+const LISTED: usize = 10;
 
 /// The period the page covers, ending today.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -114,15 +121,18 @@ pub enum Tab {
     WhenWhere,
     /// Bias and how well the band works.
     IntervalsBias,
+    /// The biggest misses and worst days, and whether quiet picks held.
+    MissesDays,
 }
 
 impl Tab {
     /// Every sub-page, in order.
-    pub const ALL: [Tab; 4] = [
+    pub const ALL: [Tab; 5] = [
         Tab::Overview,
         Tab::Models,
         Tab::WhenWhere,
         Tab::IntervalsBias,
+        Tab::MissesDays,
     ];
 
     pub fn label(self) -> &'static str {
@@ -131,6 +141,7 @@ impl Tab {
             Tab::Models => "Models",
             Tab::WhenWhere => "When & where",
             Tab::IntervalsBias => "Intervals & bias",
+            Tab::MissesDays => "Misses & days",
         }
     }
 }
@@ -166,6 +177,9 @@ pub struct PerformanceData {
     pub model_errors: ModelErrors,
     /// The nightly benchmarks in the period.
     pub nights: Vec<BenchmarkNight>,
+    /// The default forecast's logged live forecasts in the period, with
+    /// the readings.
+    pub outcomes: Vec<LoggedOutcome>,
 }
 
 /// One day of the error-over-time chart.
@@ -203,6 +217,12 @@ pub struct Performance {
     pub levels: Vec<(f64, ErrorSums)>,
     /// Forecasts per error bin (forecast − reading), by lower edge.
     pub histogram: Vec<(f64, i64)>,
+    /// The forecasts furthest off, furthest first.
+    pub misses: Vec<ScoredForecast>,
+    /// The days with the largest error, worst first.
+    pub worst_days: Vec<DayPoint>,
+    /// Whether the quiet hours picked turned out quiet.
+    pub decisions: DecisionQuality,
     pub live: std::collections::HashMap<String, LiveScore>,
     pub nights: Vec<BenchmarkNight>,
     pub model_errors: ModelErrors,
@@ -237,7 +257,7 @@ impl Performance {
                     width: measures.width,
                 })
             })
-            .collect();
+            .collect::<Vec<_>>();
         let mut live_default = ErrorSums::default();
         for (_, _, sums) in data
             .model_errors
@@ -255,10 +275,13 @@ impl Performance {
                 .previous
                 .and_then(|_| accuracy::total(before).measures()),
             live_default: live_default.measures(),
-            daily,
             grid: accuracy::by_weekday_hour(during, tz),
             levels: accuracy::by_level(during, LEVEL_WIDTH),
             histogram: accuracy::error_histogram(during, HISTOGRAM_BIN, HISTOGRAM_LIMIT),
+            misses: biggest_misses(during, LISTED),
+            worst_days: worst_days(&daily, LISTED),
+            decisions: decision_quality(&data.outcomes, during, tz),
+            daily,
             scored: during.to_vec(),
             live: live_scores(&data.model_errors),
             nights: data.nights,
@@ -361,6 +384,7 @@ mod tests {
             ],
             model_errors: ModelErrors::default(),
             nights: Vec::new(),
+            outcomes: Vec::new(),
         };
         let page = Performance::build(data, tz());
 
@@ -383,6 +407,10 @@ mod tests {
         assert_eq!(by_weekday(&page.grid)[6].count, 2);
         assert_eq!(page.levels.len(), 1);
         assert_eq!(page.histogram.iter().map(|(_, n)| n).sum::<i64>(), 3);
+        // The biggest miss is the 6-point one; the worst day the 17th.
+        assert_eq!(page.misses.first().map(|s| s.target), Some(utc(17, 9)?));
+        assert_eq!(page.worst_days.first().map(|d| d.mae), Some(6.0));
+        assert_eq!(page.decisions.forecast.count, 0);
         Ok(())
     }
 
@@ -422,7 +450,13 @@ mod tests {
         );
         assert_eq!(
             Tab::ALL.map(Tab::label),
-            ["Overview", "Models", "When & where", "Intervals & bias"]
+            [
+                "Overview",
+                "Models",
+                "When & where",
+                "Intervals & bias",
+                "Misses & days"
+            ]
         );
         assert_eq!(Source::ALL.map(Source::label), ["Backtest", "Live"]);
     }
