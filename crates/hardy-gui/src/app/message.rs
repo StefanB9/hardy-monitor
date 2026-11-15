@@ -1,6 +1,6 @@
 //! What the app reacts to, and the views it can show.
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
 use hardy_core::{
     alert::{AlertDuration, AlertSettings},
     db::{
@@ -184,6 +184,8 @@ pub enum Message {
     LeaderboardSourceSelected(Source),
     /// A model's name clicked: open its detail (again: close it).
     ModelPicked(ModelId),
+    /// A day clicked on Misses & days: chart it (again: close it).
+    PerformanceDayPicked(NaiveDate),
     /// The Forecasts tab's figures; applied only if `RequestId` is the
     /// newest load.
     PerformanceLoaded(RequestId, Result<Box<Performance>, AppError>),
@@ -257,6 +259,7 @@ impl Message {
             | Message::ForecastsPeriodSelected(_)
             | Message::LeaderboardSourceSelected(_)
             | Message::ModelPicked(_)
+            | Message::PerformanceDayPicked(_)
             | Message::PlanDaySelected(_)
             | Message::PlanLengthSelected(_)
             | Message::PlanRangeChanged(..)
@@ -319,6 +322,7 @@ mod tests {
             Message::ForecastsPeriodSelected(Period::All),
             Message::LeaderboardSourceSelected(Source::Live),
             Message::ModelPicked(ModelId::Naive),
+            Message::PerformanceDayPicked(NaiveDate::MIN),
             Message::PlanLengthSelected(VisitLength::OneHour),
             Message::PlanRangeChanged(RangeKind::Workday, RangeEnd::Earliest, 17),
         ];

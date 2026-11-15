@@ -22,7 +22,8 @@ hardy-monitor/                         (workspace root)
 │   │   ├── src/
 │   │   │   ├── lib.rs                 Module declarations + re-exports
 │   │   │   ├── accuracy/              Accuracy measures (error sums → MAE, bias, skill, coverage, …),
-│   │   │   │                          breakdowns per day, summaries of the hourly log
+│   │   │   │                          breakdowns per day, summaries of the hourly log; decisions.rs:
+│   │   │   │                          whether picked quiet hours turned out quiet
 │   │   │   ├── alert/                 Low-occupancy alerts: settings, engine, windows, phone commands, service
 │   │   │   ├── analytics/             Stats, day analysis, peak/quiet slots, insights, period comparison,
 │   │   │   │                          trend; time.rs: gym-local time helpers
@@ -102,7 +103,8 @@ hardy-monitor/                         (workspace root)
 │           ├── leaderboard/           Forecast models table: benchmark error per horizon, standing;
 │           │                          order.rs: column sort, family filter, picker order
 │           ├── performance/           Forecasts tab figures: period, measures over time, live scores per
-│           │                          model (live.rs), a model's detail (model.rs)
+│           │                          model (live.rs), a model's detail (model.rs), misses, worst days
+│           │                          and decision quality (misses.rs)
 │           ├── quiet_window.rs        Next quiet hour (forecast, else slot averages)
 │           ├── time_range.rs          ChartRange / AnalyticsRange and the instants they cover
 │           ├── data_table.rs          Data tab: day/week periods, rows in view, reading counts by source
@@ -116,7 +118,7 @@ hardy-monitor/                         (workspace root)
 │           │                          scatter plot)
 │           └── views/                 now/, week, data (readings table), insights, plan/, forecasts/
 │                                      (overview, models, model detail, leaderboard, hourly log, when &
-│                                      where, intervals & bias),
+│                                      where, intervals & bias, misses & days),
 │                                      maintenance/ (repair, export), schema_notice, opening;
 │                                      components/ (cards, buttons, …)
 ```
