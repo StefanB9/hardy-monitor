@@ -370,10 +370,10 @@ fn tray_events() -> iced::futures::channel::mpsc::UnboundedReceiver<Message> {
             let _ = tx.unbounded_send(Message::Tray(action));
         }
     }));
-    MenuEvent::set_event_handler(Some(move |event: MenuEvent| {
+    MenuEvent::set_event_handler(Some(std::sync::Arc::new(move |event: MenuEvent| {
         if let Some(action) = menu_action(&event.id.0) {
             let _ = menu_tx.unbounded_send(Message::Tray(action));
         }
-    }));
+    })));
     rx
 }
