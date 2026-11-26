@@ -401,15 +401,18 @@ mod tests {
     }
 
     /// Forecasts at steps 1, 8 and 40 from Tuesday noon after 15 days of
-    /// the weekly curve, as anofox-forecast 0.16.2 and stlrs 0.4.0 produce
+    /// the weekly curve, as anofox-forecast 0.23.0 and stlrs 0.4.0 produce
     /// them. A dependency update that changes any of them must be checked
     /// against the benchmark before the values here are updated (0.16.0 to
-    /// 0.16.2: the ARIMA models' 28-day error fell 6–24%).
+    /// 0.16.2: the ARIMA models' 28-day error fell 6–24%; 0.19 to 0.23:
+    /// `AutoETS` takes the weekly season from two weeks of history instead of
+    /// three, and its next-day error on the weekly curve after 15–20 days
+    /// fell from 5–6 points to 0–0.8).
     #[allow(clippy::unreadable_literal)]
     const GOLDEN: [(Kind, [f64; 3]); 11] = [
         (
             Kind::AutoEts,
-            [20.00061252751475, 20.00061252751475, 20.00061252751475],
+            [20.001361862606124, 20.15240807987595, 21.2037877537554],
         ),
         (
             Kind::AutoArima,
