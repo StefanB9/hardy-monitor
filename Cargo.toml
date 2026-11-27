@@ -28,7 +28,7 @@ missing_panics_doc = "allow"
 
 [workspace.dependencies]
 # --- Shared across multiple crates ---
-anofox-forecast = { version = "0.21.0", default-features = false }
+anofox-forecast = { version = "0.23.0", default-features = false }
 anyhow = { version = "1.0.105", default-features = false, features = ["std"] }
 argmin = { version = "0.11.0", default-features = false }
 argmin-math = { version = "0.5.1", default-features = false, features = ["vec"] }
@@ -51,7 +51,7 @@ iced = { version = "0.14.0", default-features = false, features = ["advanced", "
 indicatif = { version = "0.18.6", default-features = false }
 image = { version = "0.25.10", default-features = false, features = ["jpeg", "png"] }
 mimalloc = { version = "0.1.52", default-features = false }
-muda = { version = "0.21.2", default-features = false }
+muda = { version = "0.22.0", default-features = false }
 notify-rust = { version = "4.19.0", default-features = false }
 postcard = { version = "1.2.0", default-features = false, features = ["alloc"] }
 
@@ -61,20 +61,20 @@ rayon = { version = "1.12.0", default-features = false }
 reqwest = { version = "0.13.5", default-features = false, features = ["json", "native-tls"] }
 serde = { version = "1.0.229", default-features = false, features = ["derive", "rc"] }
 serde_json = { version = "1.0.154", default-features = false, features = ["std"] }
-smartcore = { version = "0.6.16", default-features = false, features = ["serde"] }
+smartcore = { version = "0.7.0", default-features = false, features = ["serde"] }
 sqlx = { version = "0.9.1", default-features = false, features = ["chrono", "macros", "migrate", "postgres", "runtime-tokio", "tls-rustls"] }
 stlrs = { version = "0.4.0", default-features = false, features = ["alloc"] }
 temp-env = { version = "0.3.6" }
 tempfile = { version = "3.27.0" }
 thiserror = { version = "2.0.21", default-features = false }
 tokio = { version = "1.54.1", default-features = false, features = ["macros", "rt-multi-thread"] }
-toml = { version = "1.2.2", default-features = false, features = ["parse", "serde"] }
+toml = { version = "1.2.3", default-features = false, features = ["parse", "serde"] }
 tracing = { version = "0.1.44", default-features = false, features = ["attributes", "std"] }
 tracing-appender = { version = "0.2.5", default-features = false }
 tracing-subscriber = { version = "0.3.23", default-features = false, features = ["env-filter", "fmt", "std"] }
-tray-icon = { version = "0.26.1", default-features = false }
+tray-icon = { version = "0.27.0", default-features = false }
 wiremock = { version = "0.6.5" }
-zstd = { version = "0.14.4", default-features = false }
+zstd = { version = "0.14.5", default-features = false }
 
 [profile.release]
 codegen-units = 1
